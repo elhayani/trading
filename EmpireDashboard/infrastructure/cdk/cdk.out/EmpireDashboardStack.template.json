@@ -1,0 +1,319 @@
+{
+ "Description": "Empire Dashboard Shared Infrastructure",
+ "Resources": {
+  "EmpireTradesHistory78712FC2": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "TradeId",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "Timestamp",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+     {
+      "AttributeName": "TradeId",
+      "KeyType": "HASH"
+     },
+     {
+      "AttributeName": "Timestamp",
+      "KeyType": "RANGE"
+     }
+    ],
+    "TableName": "EmpireTradesHistory"
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/EmpireTradesHistory/Resource"
+   }
+  },
+  "DashboardApiLambdaServiceRoleA916FA9C": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/DashboardApiLambda/ServiceRole/Resource"
+   }
+  },
+  "DashboardApiLambdaServiceRoleDefaultPolicy8283F99A": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "EmpireTradesHistory78712FC2",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "EmpireTradesHistory78712FC2",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "DashboardApiLambdaServiceRoleDefaultPolicy8283F99A",
+    "Roles": [
+     {
+      "Ref": "DashboardApiLambdaServiceRoleA916FA9C"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/DashboardApiLambda/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "DashboardApiLambda9BAC01D6": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-946179054632-us-east-1",
+     "S3Key": "b4c52b9cf1fe203fafe1851e0cca4683ba4bd980a068f2a7328719f46b4f0d40.zip"
+    },
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "EmpireTradesHistory78712FC2"
+      }
+     }
+    },
+    "FunctionName": "EmpireDashboardApi",
+    "Handler": "lambda_function.lambda_handler",
+    "Role": {
+     "Fn::GetAtt": [
+      "DashboardApiLambdaServiceRoleA916FA9C",
+      "Arn"
+     ]
+    },
+    "Runtime": "python3.12"
+   },
+   "DependsOn": [
+    "DashboardApiLambdaServiceRoleDefaultPolicy8283F99A",
+    "DashboardApiLambdaServiceRoleA916FA9C"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/DashboardApiLambda/Resource",
+    "aws:asset:path": "asset.b4c52b9cf1fe203fafe1851e0cca4683ba4bd980a068f2a7328719f46b4f0d40",
+    "aws:asset:is-bundled": false,
+    "aws:asset:property": "Code"
+   }
+  },
+  "EmpireDashboardGatewayF75E7F02": {
+   "Type": "AWS::ApiGatewayV2::Api",
+   "Properties": {
+    "CorsConfiguration": {
+     "AllowHeaders": [
+      "*"
+     ],
+     "AllowMethods": [
+      "GET",
+      "OPTIONS"
+     ],
+     "AllowOrigins": [
+      "*"
+     ]
+    },
+    "Name": "EmpireDashboardApi",
+    "ProtocolType": "HTTP"
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/EmpireDashboardGateway/Resource"
+   }
+  },
+  "EmpireDashboardGatewayDefaultStage3966DF6A": {
+   "Type": "AWS::ApiGatewayV2::Stage",
+   "Properties": {
+    "ApiId": {
+     "Ref": "EmpireDashboardGatewayF75E7F02"
+    },
+    "AutoDeploy": true,
+    "StageName": "$default"
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/EmpireDashboardGateway/DefaultStage/Resource"
+   }
+  },
+  "EmpireDashboardGatewayGETstatsDashboardApiIntegrationD53E3C92": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "EmpireDashboardGatewayF75E7F02"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "DashboardApiLambda9BAC01D6",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/EmpireDashboardGateway/GET--stats/DashboardApiIntegration/Resource"
+   }
+  },
+  "EmpireDashboardGatewayGETstatsDashboardApiIntegrationPermissionE4DCB8B8": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DashboardApiLambda9BAC01D6",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:946179054632:",
+       {
+        "Ref": "EmpireDashboardGatewayF75E7F02"
+       },
+       "/*/*/stats"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/EmpireDashboardGateway/GET--stats/DashboardApiIntegration-Permission"
+   }
+  },
+  "EmpireDashboardGatewayGETstats572F1F2B": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "EmpireDashboardGatewayF75E7F02"
+    },
+    "AuthorizationType": "NONE",
+    "RouteKey": "GET /stats",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "EmpireDashboardGatewayGETstatsDashboardApiIntegrationD53E3C92"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/EmpireDashboardGateway/GET--stats/Resource"
+   }
+  },
+  "CDKMetadata": {
+   "Type": "AWS::CDK::Metadata",
+   "Properties": {
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/12OQWvDMAyFf0vvjkaTHXptB2M7LaS9F8XxMjWJHSJ5IRj/92GHwdjpfU96T6iEsnqG4wFXLnQ3FCO1EK6CelC48j10m8XJdS2EG7ajUS+fNkNUI05thxBevdVCzqbVX67NMhEzORsV4QShcXs/a+1G0lvOZYqKqzsyG2E4J1FcwcXrwcgF2SicqUcxK27fJYQ3kfk8U6onSfYq2OfzO6RR47zs9G7F9Av+vvbP5lyMqjHs/KKNyg+kO2T7FPjwMnuJqt7ky9mnCo4lnA4PJioWb4UmA82uP6RulZdPAQAA"
+   },
+   "Metadata": {
+    "aws:cdk:path": "EmpireDashboardStack/CDKMetadata/Default"
+   }
+  }
+ },
+ "Outputs": {
+  "ApiEndpoint": {
+   "Description": "Dashboard API Endpoint URL",
+   "Value": {
+    "Fn::GetAtt": [
+     "EmpireDashboardGatewayF75E7F02",
+     "ApiEndpoint"
+    ]
+   }
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

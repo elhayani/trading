@@ -1,0 +1,66 @@
+{
+  "version": "48.0.0",
+  "files": {
+    "973e86d17174552fbea92c92c4e2ad4f59cd897a8f1c5fdad7942b34473c1c90": {
+      "displayName": "ForexTrader/Code",
+      "source": {
+        "path": "asset.973e86d17174552fbea92c92c4e2ad4f59cd897a8f1c5fdad7942b34473c1c90",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "946179054632-us-east-1-7dd4ec5d": {
+          "bucketName": "cdk-hnb659fds-assets-946179054632-us-east-1",
+          "objectKey": "973e86d17174552fbea92c92c4e2ad4f59cd897a8f1c5fdad7942b34473c1c90.zip",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-file-publishing-role-946179054632-us-east-1"
+        }
+      }
+    },
+    "2819175352ad1ce0dae768e83fc328fb70fb5f10b4a8ff0ccbcb791f02b0716d": {
+      "displayName": "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a/Code",
+      "source": {
+        "path": "asset.2819175352ad1ce0dae768e83fc328fb70fb5f10b4a8ff0ccbcb791f02b0716d",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "946179054632-us-east-1-d35e3624": {
+          "bucketName": "cdk-hnb659fds-assets-946179054632-us-east-1",
+          "objectKey": "2819175352ad1ce0dae768e83fc328fb70fb5f10b4a8ff0ccbcb791f02b0716d.zip",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-file-publishing-role-946179054632-us-east-1"
+        }
+      }
+    },
+    "73f131737fe97e45f41a0b5743f0cca1e1ca609826dbaf2b0aef7979733fab23": {
+      "displayName": "ForexDependencyLayer/Code",
+      "source": {
+        "path": "asset.73f131737fe97e45f41a0b5743f0cca1e1ca609826dbaf2b0aef7979733fab23",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "946179054632-us-east-1-1fb0726d": {
+          "bucketName": "cdk-hnb659fds-assets-946179054632-us-east-1",
+          "objectKey": "73f131737fe97e45f41a0b5743f0cca1e1ca609826dbaf2b0aef7979733fab23.zip",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-file-publishing-role-946179054632-us-east-1"
+        }
+      }
+    },
+    "eba4e777b9d6e2f47c4edca028aff032ebd246d5116fa074aa8c9a4d239ada65": {
+      "displayName": "ForexTradingStack Template",
+      "source": {
+        "path": "ForexTradingStack.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "946179054632-us-east-1-71c9ddbc": {
+          "bucketName": "cdk-hnb659fds-assets-946179054632-us-east-1",
+          "objectKey": "eba4e777b9d6e2f47c4edca028aff032ebd246d5116fa074aa8c9a4d239ada65.json",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-file-publishing-role-946179054632-us-east-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

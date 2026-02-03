@@ -1,0 +1,36 @@
+{
+  "version": "48.0.0",
+  "files": {
+    "b4c52b9cf1fe203fafe1851e0cca4683ba4bd980a068f2a7328719f46b4f0d40": {
+      "displayName": "DashboardApiLambda/Code",
+      "source": {
+        "path": "asset.b4c52b9cf1fe203fafe1851e0cca4683ba4bd980a068f2a7328719f46b4f0d40",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "946179054632-us-east-1-27eff0a8": {
+          "bucketName": "cdk-hnb659fds-assets-946179054632-us-east-1",
+          "objectKey": "b4c52b9cf1fe203fafe1851e0cca4683ba4bd980a068f2a7328719f46b4f0d40.zip",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-file-publishing-role-946179054632-us-east-1"
+        }
+      }
+    },
+    "ddb0173ec233739c46f840654553cdba0e75b6ead6b2492e8d39d1cb7b316015": {
+      "displayName": "EmpireDashboardStack Template",
+      "source": {
+        "path": "EmpireDashboardStack.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "946179054632-us-east-1-35525992": {
+          "bucketName": "cdk-hnb659fds-assets-946179054632-us-east-1",
+          "objectKey": "ddb0173ec233739c46f840654553cdba0e75b6ead6b2492e8d39d1cb7b316015.json",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-file-publishing-role-946179054632-us-east-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

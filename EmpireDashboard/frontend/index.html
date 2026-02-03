@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Empire Trading Dashboard</title>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script
+        src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Tailwind CSS (via CDN for speed) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0F172A;
+            color: #E2E8F0;
+        }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+        }
+
+        .status-dot {
+            height: 10px;
+            width: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .dot-green {
+            background-color: #10B981;
+            box-shadow: 0 0 10px #10B981;
+        }
+
+        .dot-red {
+            background-color: #EF4444;
+        }
+
+        .dot-blue {
+            background-color: #3B82F6;
+            box-shadow: 0 0 10px #3B82F6;
+        }
+    </style>
+</head>
+
+<body class="p-6 md:p-12">
+
+    <!-- HEADER -->
+    <div class="max-w-7xl mx-auto mb-10 flex justify-between items-end">
+        <div>
+            <h1
+                class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">
+                EMPIRE TRADING
+            </h1>
+            <p class="text-slate-400 mt-1 text-sm tracking-wide uppercase">AI-Powered Multi-Asset System</p>
+        </div>
+        <div class="text-right">
+            <div class="mb-2">
+                <select id="yearSelect" onchange="fetchData()"
+                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1 focus:outline-none focus:border-blue-500">
+                    <option value="ALL">All Time</option>
+                    <option value="2030">2030</option>
+                    <option value="2029">2029</option>
+                    <option value="2028">2028</option>
+                    <option value="2027">2027</option>
+                    <option value="2026" selected>2026</option>
+                    <option value="2025">2025</option>
+                </select>
+            </div>
+            <p class="text-slate-400 text-sm">Total Equity</p>
+            <h2 id="totalEquity" class="text-5xl font-bold text-white">$Loading...</h2>
+            <p id="pnlTag" class="text-sm font-semibold mt-1">--</p>
+        </div>
+    </div>
+
+    <!-- MAIN GRID -->
+    <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+        <!-- CHART SECTION (2/3 width) -->
+        <div class="lg:col-span-2 glass-panel p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-bold text-white">Performance Curve</h3>
+                <span class="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded">Live Data</span>
+            </div>
+            <div class="relative h-80 w-full">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- STATS & ALERTS (1/3 width) -->
+        <div class="flex flex-col gap-6">
+            <!-- KPIS -->
+            <div class="glass-panel p-6 flex-1">
+                <h3 class="text-lg font-semibold text-slate-300 mb-4">Key Metrics</h3>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+                        <p class="text-xs text-slate-400 uppercase">Win Rate</p>
+                        <p id="winRate" class="text-2xl font-bold text-blue-400">--%</p>
+                    </div>
+                    <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+                        <p class="text-xs text-slate-400 uppercase">Total Trades</p>
+                        <p id="totalTrades" class="text-2xl font-bold text-white">--</p>
+                    </div>
+                </div>
+
+                <div class="mt-8">
+                    <h4 class="text-sm font-semibold text-slate-400 mb-2">Systems Status</h4>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="flex items-center gap-2"><span class="status-dot dot-green"></span> Crypto (V4
+                                Hybrid)</span>
+                            <span class="text-green-400 text-xs">ACTIVE</span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="flex items-center gap-2"><span class="status-dot dot-green"></span> Forex
+                                (Trend)</span>
+                            <span class="text-green-400 text-xs">ACTIVE</span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="flex items-center gap-2"><span class="status-dot dot-green"></span> Indices
+                                (Momentum)</span>
+                            <span class="text-green-400 text-xs">ACTIVE</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RECENT ACTIVITY TABLE -->
+    <div class="max-w-7xl mx-auto mt-10">
+        <div class="glass-panel p-6">
+            <h3 class="text-lg font-bold text-white mb-6">Recent AI Trades</h3>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                            <th class="p-4">Time</th>
+                            <th class="p-4">Asset</th>
+                            <th class="p-4">Type</th>
+                            <th class="p-4">Price</th>
+                            <th class="p-4">Reason (AI)</th>
+                            <th class="p-4 text-right">PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesTableBody" class="text-sm text-slate-300">
+                        <tr>
+                            <td colspan="6" class="p-8 text-center text-slate-500">Waiting for data...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CONFIGURATION
+        const API_URL = "https://c1029mw9x4.execute-api.us-east-1.amazonaws.com/stats";
+        const REFRESH_INTERVAL = 300000; // 5 min
+
+        let chartInstance = null;
+
+        async function fetchData() {
+            const year = document.getElementById('yearSelect').value;
+            console.log("Fetching for year:", year);
+
+            try {
+                // Determine API URL based on selection
+                let url = API_URL;
+                if (year !== 'ALL') {
+                    url += `?year=${year}`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+                renderDashboard(data);
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                document.getElementById('totalEquity').innerText = "Offline";
+            }
+        }
+
+        function renderDashboard(data) {
+            // 1. Header Stats
+            const stats = data.stats || {};
+            const equity = stats.current_equity || 1000.0;
+            const pnl = stats.total_pnl || 0;
+
+            document.getElementById('totalEquity').innerText = `$${equity.toFixed(2)}`;
+
+            const pnlTag = document.getElementById('pnlTag');
+            pnlTag.innerText = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} All Time`;
+            pnlTag.className = `text-sm font-bold mt-1 ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+            document.getElementById('winRate').innerText = `${stats.win_rate}%`;
+            document.getElementById('totalTrades').innerText = stats.total_trades;
+
+            // 2. Chart
+            updateChart(data.equity_curve || []);
+
+            // 3. Table
+            updateTable(data.recent_trades || []);
+        }
+
+        function updateChart(dataPoints) {
+            const ctx = document.getElementById('equityChart').getContext('2d');
+
+            // Format Data for Chart.js
+            const chartData = dataPoints.map(pt => ({
+                x: pt.x,
+                y: pt.y
+            }));
+
+            if (chartInstance) {
+                chartInstance.data.datasets[0].data = chartData;
+                chartInstance.update();
+            } else {
+                chartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Empire Equity ($)',
+                            data: chartData,
+                            borderColor: '#3B82F6', // Blue-500
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4, // Smooth curve
+                            pointRadius: 0,
+                            pointHoverRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                titleColor: '#94A3B8',
+                                bodyColor: '#E2E8F0',
+                                borderColor: 'rgba(255,255,255,0.1)',
+                                borderWidth: 1
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: { unit: 'day' },
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                ticks: { color: '#64748B' }
+                            },
+                            y: {
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                ticks: { color: '#64748B' }
+                            }
+                        },
+                        interaction: {
+                            mode: 'nearest',
+                            axis: 'x',
+                            intersect: false
+                        }
+                    }
+                });
+            }
+        }
+
+        function updateTable(trades) {
+            const tbody = document.getElementById('tradesTableBody');
+            tbody.innerHTML = '';
+
+            if (trades.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>';
+                return;
+            }
+
+            trades.forEach(trade => {
+                const tr = document.createElement('tr');
+                tr.className = "border-b border-slate-800 hover:bg-slate-800/30 transition-colors";
+
+                // Colorize Side
+                const sideColor = trade.Type === 'LONG' || trade.Type === 'BUY' ? 'text-green-400' : 'text-red-400';
+
+                // Format Status/PnL
+                let pnlDisplay = '<span class="text-blue-400">OPEN</span>';
+                if (trade.Status === 'CLOSED' || trade.PnL) {
+                    const pnlVal = parseFloat(trade.PnL || 0);
+                    const pnlColor = pnlVal >= 0 ? 'text-green-400' : 'text-red-400';
+                    pnlDisplay = `<span class="${pnlColor}">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</span>`;
+                }
+
+                // Icons
+                let icon = '📊';
+                if (trade.AssetClass === 'Crypto') icon = '₿';
+                if (trade.AssetClass === 'Forex') icon = '💱';
+
+                tr.innerHTML = `
+                    <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
+                    <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
+                    <td class="p-4 ${sideColor} font-bold text-xs uppercase bg-slate-800/40 rounded w-max px-2 py-1">${trade.Type}</td>
+                    <td class="p-4 font-mono">${trade.EntryPrice}</td>
+                    <td class="p-4 text-slate-300 italic text-xs max-w-xs truncate" title="${trade.AI_Reason}">${trade.AI_Reason || '-'}</td>
+                    <td class="p-4 text-right font-bold">${pnlDisplay}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // INIT
+        fetchData();
+        setInterval(fetchData, REFRESH_INTERVAL);
+
+    </script>
+</body>
+
+</html>
