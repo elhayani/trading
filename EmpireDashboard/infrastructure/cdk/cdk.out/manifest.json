@@ -18,7 +18,7 @@
         "validateOnSynth": false,
         "assumeRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-deploy-role-946179054632-us-east-1",
         "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::946179054632:role/cdk-hnb659fds-cfn-exec-role-946179054632-us-east-1",
-        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-946179054632-us-east-1/382de2a800527c57b15f88f8be1922cf7effa3384e90ee6f114087a1de11e842.json",
+        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-946179054632-us-east-1/0d15e06f3280643bbc7de2a81b4bae1a4be71ae68f9ca709d9b3be408885a486.json",
         "requiresBootstrapStackVersion": 6,
         "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version",
         "additionalDependencies": [
@@ -46,6 +46,20 @@
           {
             "type": "aws:cdk:logicalId",
             "data": "EmpireTradesHistory78712FC2"
+          }
+        ],
+        "/EmpireDashboardStack/EmpireConfig": [
+          {
+            "type": "aws:cdk:hasPhysicalName",
+            "data": {
+              "Ref": "EmpireConfig4004C7FD"
+            }
+          }
+        ],
+        "/EmpireDashboardStack/EmpireConfig/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "EmpireConfig4004C7FD"
           }
         ],
         "/EmpireDashboardStack/DashboardApiLambda/ServiceRole/Resource": [
@@ -94,6 +108,36 @@
           {
             "type": "aws:cdk:logicalId",
             "data": "EmpireDashboardGatewayGETstats572F1F2B"
+          }
+        ],
+        "/EmpireDashboardStack/EmpireDashboardGateway/GET--status/DashboardApiStatusIntegration/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "EmpireDashboardGatewayGETstatusDashboardApiStatusIntegration13055180"
+          }
+        ],
+        "/EmpireDashboardStack/EmpireDashboardGateway/GET--status/DashboardApiStatusIntegration-Permission": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "EmpireDashboardGatewayGETstatusDashboardApiStatusIntegrationPermissionACE29EAA"
+          }
+        ],
+        "/EmpireDashboardStack/EmpireDashboardGateway/GET--status/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "EmpireDashboardGatewayGETstatusA9750F76"
+          }
+        ],
+        "/EmpireDashboardStack/EmpireDashboardGateway/POST--status/DashboardApiStatusIntegration-Permission": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "EmpireDashboardGatewayPOSTstatusDashboardApiStatusIntegrationPermission65194FB4"
+          }
+        ],
+        "/EmpireDashboardStack/EmpireDashboardGateway/POST--status/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "EmpireDashboardGatewayPOSTstatus54AEE76C"
           }
         ],
         "/EmpireDashboardStack/EmpireFrontendBucket/Resource": [

@@ -120,22 +120,17 @@
                 </div>
 
                 <div class="mt-8">
-                    <h4 class="text-sm font-semibold text-slate-400 mb-2">Systems Status</h4>
-                    <div class="space-y-3">
-                        <div class="flex items-center justify-between text-sm">
-                            <span class="flex items-center gap-2"><span class="status-dot dot-green"></span> Crypto (V4
-                                Hybrid)</span>
-                            <span class="text-green-400 text-xs">ACTIVE</span>
-                        </div>
-                        <div class="flex items-center justify-between text-sm">
-                            <span class="flex items-center gap-2"><span class="status-dot dot-green"></span> Forex
-                                (Trend)</span>
-                            <span class="text-green-400 text-xs">ACTIVE</span>
-                        </div>
-                        <div class="flex items-center justify-between text-sm">
-                            <span class="flex items-center gap-2"><span class="status-dot dot-green"></span> Indices
-                                (Momentum)</span>
-                            <span class="text-green-400 text-xs">ACTIVE</span>
+                    <h4 class="text-xs font-bold text-slate-500 mb-4 uppercase tracking-widest">Systems Status & Panic
+                        Switches</h4>
+                    <div id="statusList" class="space-y-4">
+                        <!-- Statusses will be injected here -->
+                        <div class="flex items-center justify-between p-3 bg-slate-800/30 rounded-lg">
+                            <div class="flex items-center gap-3">
+                                <span class="status-dot dot-green"></span>
+                                <span class="text-sm font-semibold">Crypto</span>
+                            </div>
+                            <button
+                                class="text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 px-2 py-1 rounded hover:bg-red-500 hover:text-white transition-all">PANIC</button>
                         </div>
                     </div>
                 </div>
@@ -190,10 +185,71 @@
                 const response = await fetch(url);
                 const data = await response.json();
                 renderDashboard(data);
+                fetchStatuses(); // Also fetch system statuses
             } catch (error) {
                 console.error("Error fetching data:", error);
                 document.getElementById('totalEquity').innerText = "Offline";
             }
+        }
+
+        async function fetchStatuses() {
+            try {
+                const response = await fetch(API_URL.replace('/stats', '/status'));
+                const statuses = await response.json();
+                renderStatuses(statuses);
+            } catch (e) { console.error("Status fetch fail", e); }
+        }
+
+        function renderStatuses(statuses) {
+            const list = document.getElementById('statusList');
+            list.innerHTML = '';
+
+            const systems = [
+                { id: 'Crypto', label: 'Crypto (V4 Hybrid)' },
+                { id: 'Forex', label: 'Forex (Trend)' },
+                { id: 'Indices', label: 'Indices (Momentum)' }
+            ];
+
+            systems.forEach(sys => {
+                const status = statuses[sys.id] || 'ACTIVE';
+                const isPanic = status === 'PANIC';
+
+                const html = `
+                    <div class="flex items-center justify-between p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+                        <div class="flex items-center gap-3">
+                            <span class="status-dot ${isPanic ? 'dot-red' : 'dot-green'}"></span>
+                            <div>
+                                <p class="text-sm font-bold text-white leading-none">${sys.id}</p>
+                                <p class="text-[10px] text-slate-500 mt-1">${sys.label}</p>
+                            </div>
+                        </div>
+                        <button onclick="togglePanic('${sys.id}', '${status}')" 
+                            class="text-[10px] font-bold px-3 py-1.5 rounded transition-all duration-300 ${isPanic
+                        ? 'bg-green-500/10 text-green-400 border border-green-500/30 hover:bg-green-500 hover:text-white'
+                        : 'bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500 hover:text-white'}">
+                            ${isPanic ? 'RE-ENABLE' : 'PANIC STOP'}
+                        </button>
+                    </div>
+                `;
+                list.innerHTML += html;
+            });
+        }
+
+        async function togglePanic(system, currentStatus) {
+            const newStatus = currentStatus === 'ACTIVE' ? 'PANIC' : 'ACTIVE';
+            const action = newStatus === 'PANIC' ? 'STOP' : 'RE-ENABLE';
+
+            const confirmMsg = `Are you sure you want to ${action} the ${system} trading system?`;
+            if (!window.confirm(confirmMsg)) return;
+
+            try {
+                const response = await fetch(API_URL.replace('/stats', '/status'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ system, status: newStatus })
+                });
+                if (response.ok) fetchStatuses();
+            } catch (e) { alert("Failed to toggle status"); }
         }
 
         function renderDashboard(data) {
@@ -208,8 +264,8 @@
             pnlTag.innerText = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} All Time`;
             pnlTag.className = `text-sm font-bold mt-1 ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`;
 
-            document.getElementById('winRate').innerText = `${stats.win_rate}%`;
-            document.getElementById('totalTrades').innerText = stats.total_trades;
+            document.getElementById('winRate').innerText = `${stats.win_rate || 0}%`;
+            document.getElementById('totalTrades').innerText = stats.total_trades || 0;
 
             // 2. Chart
             updateChart(data.equity_curve || []);
@@ -233,23 +289,15 @@
             ];
 
             assets.forEach(asset => {
-                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0 };
+                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0, total: 0, open: 0, closed: 0 };
                 const pnl = data.pnl;
                 const current = data.current;
 
-                // Color Logic for Text: Green if Profit, Red if Loss, Slate if Neutral
                 let valueColor = "text-slate-300";
                 if (pnl > 0) valueColor = "text-green-400";
                 if (pnl < 0) valueColor = "text-red-400";
 
-                // Bar Width (relative to total equity to show scale, or relative to initial?)
-                // Let's make it relative to Total Equity to show "Weight"
-                // Or mostly full? Let's simply fill it based on logic:
-                // If profit, full bar. If loss, shrink it?
-                // Visualizing budget is tricky. Let's just show progress bar representing % of Total Capital.
                 const percent = (current / totalEquity) * 100;
-
-                // PnL Label
                 const pnlLabel = pnl >= 0 ? `+${pnl.toFixed(0)}` : `${pnl.toFixed(0)}`;
 
                 const html = `
@@ -261,8 +309,13 @@
                                 <span class="text-slate-500">(${pnlLabel})</span>
                             </div>
                         </div>
-                        <div class="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
-                            <div class="${asset.color} h-2 rounded-full transition-all duration-1000" style="width: ${percent}%"></div>
+                        <div class="w-full bg-slate-700 rounded-full h-1 overflow-hidden mb-2">
+                            <div class="${asset.color} h-1 rounded-full transition-all duration-1000" style="width: ${percent}%"></div>
+                        </div>
+                        <div class="flex gap-4 text-[10px] text-slate-500 uppercase font-bold tracking-tighter">
+                            <span>Trades: <span class="text-white">${data.total}</span></span>
+                            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span> Open: <span class="text-blue-400">${data.open}</span></span>
+                            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Closed: <span class="text-slate-300">${data.closed}</span></span>
                         </div>
                     </div>
                 `;
@@ -271,18 +324,26 @@
         }
 
         function updateChart(dataPoints) {
+            console.log("📈 Updating Chart with points:", dataPoints.length);
             const ctx = document.getElementById('equityChart').getContext('2d');
 
-            // Format Data for Chart.js
+            if (!dataPoints || dataPoints.length === 0) {
+                console.warn("No chart data points available");
+                return;
+            }
+
+            // Format Data
             const chartData = dataPoints.map(pt => ({
-                x: pt.x,
+                x: new Date(pt.x),
                 y: pt.y
-            }));
+            })).filter(pt => !isNaN(pt.x.getTime()));
 
             if (chartInstance) {
+                console.log("Updating existing chart instance");
                 chartInstance.data.datasets[0].data = chartData;
                 chartInstance.update();
             } else {
+                console.log("Creating new chart instance");
                 chartInstance = new Chart(ctx, {
                     type: 'line',
                     data: {
@@ -294,7 +355,7 @@
                             borderWidth: 3,
                             fill: true,
                             tension: 0.4, // Smooth curve
-                            pointRadius: 0,
+                            pointRadius: 2,
                             pointHoverRadius: 6
                         }]
                     },

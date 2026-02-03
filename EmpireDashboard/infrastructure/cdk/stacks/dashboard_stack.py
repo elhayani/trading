@@ -78,8 +78,8 @@ class EmpireDashboardStack(Stack):
             api_name="EmpireDashboardApi",
             cors_preflight={
                 "allow_origins": ["*"],
-                "allow_methods": [apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.OPTIONS],
-                "allow_headers": ["*"]
+                "allow_methods": [apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.POST, apigw.CorsHttpMethod.OPTIONS],
+                "allow_headers": ["Content-Type", "X-Amz-Date", "Authorization", "X-Api-Key", "X-Amz-Security-Token"]
             }
         )
         
@@ -101,7 +101,6 @@ class EmpireDashboardStack(Stack):
                 "DashboardApiStatusIntegration",
                 api_lambda
             )
-        )
         )
 
         # =====================================================================
