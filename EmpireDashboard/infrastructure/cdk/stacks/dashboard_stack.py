@@ -6,6 +6,8 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_apigatewayv2 as apigw,
     aws_apigatewayv2_integrations as integrations,
+    aws_s3 as s3,
+    aws_s3_deployment as s3deploy,
     CfnOutput,
     RemovalPolicy
 )
@@ -35,6 +37,18 @@ class EmpireDashboardStack(Stack):
             removal_policy=RemovalPolicy.RETAIN, # Don't delete data if stack is destroyed
         )
 
+        # Config Table (Panic Switch State)
+        config_table = dynamodb.Table(
+            self, "EmpireConfig",
+            table_name="EmpireConfig",
+            partition_key=dynamodb.Attribute(
+                name="ConfigKey",
+                type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN
+        )
+
         # =====================================================================
         # Lambda: Dashboard API (Reader)
         # =====================================================================
@@ -45,12 +59,14 @@ class EmpireDashboardStack(Stack):
             handler="lambda_function.lambda_handler",
             code=lambda_.Code.from_asset("../../lambda/dashboard_api"),  # Relative to cdk dir
             environment={
-                "TABLE_NAME": trades_table.table_name
+                "TABLE_NAME": trades_table.table_name,
+                "CONFIG_TABLE": config_table.table_name
             }
         )
         
-        # Grant Read Access to Table
+        # Grant Permissions
         trades_table.grant_read_data(api_lambda)
+        config_table.grant_read_write_data(api_lambda)
 
         # =====================================================================
         # API Gateway (HTTP API - Low Cost)
@@ -74,7 +90,44 @@ class EmpireDashboardStack(Stack):
             integration=integrations.HttpLambdaIntegration(
                 "DashboardApiIntegration",
                 api_lambda
+                )
+        )
+
+        # Add Route (POST /status) - For Panic Switch
+        http_api.add_routes(
+            path="/status",
+            methods=[apigw.HttpMethod.GET, apigw.HttpMethod.POST],
+            integration=integrations.HttpLambdaIntegration(
+                "DashboardApiStatusIntegration",
+                api_lambda
             )
+        )
+        )
+
+        # =====================================================================
+        # S3 Frontend Hosting
+        # =====================================================================
+        
+        # 1. Bucket
+        frontend_bucket = s3.Bucket(
+            self, "EmpireFrontendBucket",
+            public_read_access=True,
+            website_index_document="index.html",
+            block_public_access=s3.BlockPublicAccess(
+                block_public_acls=False,
+                block_public_policy=False,
+                ignore_public_acls=False,
+                restrict_public_buckets=False
+            ),
+            removal_policy=RemovalPolicy.DESTROY, # For dev, clean up easily
+            auto_delete_objects=True
+        )
+
+        # 2. Deployment (Upload index.html)
+        s3deploy.BucketDeployment(
+            self, "DeployFrontend",
+            sources=[s3deploy.Source.asset("../../frontend")], # Points to EmpireDashboard/frontend
+            destination_bucket=frontend_bucket
         )
 
         # =====================================================================
@@ -86,4 +139,10 @@ class EmpireDashboardStack(Stack):
             self, "ApiEndpoint",
             value=http_api.api_endpoint,
             description="Dashboard API Endpoint URL"
+        )
+
+        CfnOutput(
+            self, "DashboardUrl",
+            value=frontend_bucket.bucket_website_url,
+            description="Empire Dashboard Frontend URL"
         )

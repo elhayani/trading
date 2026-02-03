@@ -112,6 +112,14 @@
                 </div>
 
                 <div class="mt-8">
+                    <h3 class="text-lg font-semibold text-slate-300 mb-4">Capital Allocation</h3>
+                    <div id="allocationsContainer" class="space-y-4">
+                        <!-- Allocations will be injected here -->
+                        <div class="text-center text-slate-500 text-xs">Loading allocations...</div>
+                    </div>
+                </div>
+
+                <div class="mt-8">
                     <h4 class="text-sm font-semibold text-slate-400 mb-2">Systems Status</h4>
                     <div class="space-y-3">
                         <div class="flex items-center justify-between text-sm">
@@ -206,8 +214,60 @@
             // 2. Chart
             updateChart(data.equity_curve || []);
 
+
             // 3. Table
             updateTable(data.recent_trades || []);
+
+            // 4. Allocations
+            updateAllocations(data.allocations || {}, stats.current_equity);
+        }
+
+        function updateAllocations(allocations, totalEquity) {
+            const container = document.getElementById('allocationsContainer');
+            container.innerHTML = '';
+
+            const assets = [
+                { id: 'Crypto', color: 'bg-blue-500' },
+                { id: 'Forex', color: 'bg-purple-500' },
+                { id: 'Indices', color: 'bg-indigo-500' }
+            ];
+
+            assets.forEach(asset => {
+                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0 };
+                const pnl = data.pnl;
+                const current = data.current;
+
+                // Color Logic for Text: Green if Profit, Red if Loss, Slate if Neutral
+                let valueColor = "text-slate-300";
+                if (pnl > 0) valueColor = "text-green-400";
+                if (pnl < 0) valueColor = "text-red-400";
+
+                // Bar Width (relative to total equity to show scale, or relative to initial?)
+                // Let's make it relative to Total Equity to show "Weight"
+                // Or mostly full? Let's simply fill it based on logic:
+                // If profit, full bar. If loss, shrink it?
+                // Visualizing budget is tricky. Let's just show progress bar representing % of Total Capital.
+                const percent = (current / totalEquity) * 100;
+
+                // PnL Label
+                const pnlLabel = pnl >= 0 ? `+${pnl.toFixed(0)}` : `${pnl.toFixed(0)}`;
+
+                const html = `
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-slate-400 font-semibold">${asset.id}</span>
+                            <div class="flex gap-2">
+                                <span class="${valueColor} font-bold">$${current.toFixed(0)}</span>
+                                <span class="text-slate-500">(${pnlLabel})</span>
+                            </div>
+                        </div>
+                        <div class="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+                            <div class="${asset.color} h-2 rounded-full transition-all duration-1000" style="width: ${percent}%"></div>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += html;
+            });
         }
 
         function updateChart(dataPoints) {

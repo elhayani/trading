@@ -145,6 +145,29 @@ def lambda_handler(event, context):
         else:
              end_equity = 1000.0 + total_pnl
 
+        # 4. Asset Allocation Breakdown (End of Period)
+        # Determine relevant trades for cumulative PnL calculation
+        if year_filter and year_filter != 'ALL':
+            next_year = int(year_filter) + 1
+            cutoff_date = f"{next_year}-01-01"
+            cumulative_trades = [t for t in all_trades if t.get('Timestamp', '') < cutoff_date]
+        else:
+            cumulative_trades = all_trades
+
+        # Initial Allocations
+        allocations = {
+            'Crypto': {'initial': 500.0, 'current': 500.0, 'pnl': 0.0},
+            'Forex': {'initial': 300.0, 'current': 300.0, 'pnl': 0.0},
+            'Indices': {'initial': 200.0, 'current': 200.0, 'pnl': 0.0}
+        }
+
+        for t in cumulative_trades:
+            asset = t.get('AssetClass') # 'Crypto', 'Forex', 'Indices'
+            if asset in allocations:
+                pnl = float(t.get('PnL', 0.0))
+                allocations[asset]['pnl'] += pnl
+                allocations[asset]['current'] += pnl
+
         response_body = {
             'stats': {
                 'total_pnl': round(total_pnl, 2),
@@ -152,6 +175,7 @@ def lambda_handler(event, context):
                 'total_trades': total_count,
                 'current_equity': round(end_equity, 2)
             },
+            'allocations': allocations,
             'equity_curve': equity_data,
             'recent_trades': recent_trades,
             'year': year_filter or 'ALL'
