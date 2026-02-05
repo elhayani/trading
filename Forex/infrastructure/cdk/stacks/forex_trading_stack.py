@@ -69,12 +69,16 @@ class ForexTradingStack(Stack):
             )
         )
 
-        # Grant Permission to EmpireTradesHistory (Shared Table)
+        # Grant Permission to EmpireForexHistory (Specific Table)
         history_table = dynamodb.Table.from_table_name(
             self, "HistoryTable",
-            table_name="EmpireTradesHistory"
+            table_name="EmpireForexHistory"
         )
         history_table.grant_write_data(forex_lambda)
+        history_table.grant_read_data(forex_lambda)
+        
+        # Add table name to env
+        forex_lambda.add_environment("DYNAMO_TABLE", history_table.table_name)
         
         # =====================================================================
         # EventBridge Rule (Cron: Every Hour)

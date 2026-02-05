@@ -69,13 +69,17 @@ class IndicesTradingStack(Stack):
             )
         )
 
-        # Grant Permission to EmpireTradesHistory (Shared Table)
+        # Grant Permission to EmpireIndicesHistory (Specific Table)
         # We reference it by name since it's in a different stack
         history_table = dynamodb.Table.from_table_name(
             self, "HistoryTable",
-            table_name="EmpireTradesHistory"
+            table_name="EmpireIndicesHistory"
         )
         history_table.grant_write_data(indices_lambda)
+        history_table.grant_read_data(indices_lambda)
+        
+        # Add table name to env
+        indices_lambda.add_environment("DYNAMO_TABLE", history_table.table_name)
         
         # =====================================================================
         # EventBridge Rule (Cron: Every Hour)
