@@ -19,7 +19,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 STACK_NAME="V4TradingStack"
-REGION="us-east-1"
+REGION="eu-west-3"
 CDK_DIR="Crypto/infrastructure/cdk"
 
 # Step 1: Prerequisites
@@ -81,20 +81,23 @@ pip3 install \
     --python-version 3.12 \
     --only-binary=:all: \
     --upgrade \
-    ccxt yfinance requests
+    ccxt yfinance requests pandas numpy
 
-# Optimize CCXT size: Keep only Binance to save space (CCXT is huge)
-echo "  → Optimizing CCXT size (keeping only Binance)..."
-find $LAYER_DIR/ccxt -maxdepth 1 -type f -name "*.py" ! -name "binance.py" ! -name "__init__.py" -delete
+# Optimize CCXT size: Keep only essential files if possible, but don't break imports
+echo "  → Optimizing CCXT size..."
+# find $LAYER_DIR/ccxt -maxdepth 1 -type f -name "*.py" ! -name "binance.py" ! -name "__init__.py" -delete
 if [ -d "$LAYER_DIR/ccxt/async_support" ]; then
-    find $LAYER_DIR/ccxt/async_support -maxdepth 1 -type f -name "*.py" ! -name "binance.py" ! -name "__init__.py" -delete
+    rm -rf $LAYER_DIR/ccxt/async_support
 fi
 
-# Cleanup heavy libs provided by AWS Layer (Pandas, Numpy, Scipy, etc.)
-rm -rf $LAYER_DIR/pandas $LAYER_DIR/numpy $LAYER_DIR/numpy.libs $LAYER_DIR/scipy $LAYER_DIR/docutils $LAYER_DIR/boto3 $LAYER_DIR/botocore $LAYER_DIR/dateutil $LAYER_DIR/pytz
+# Cleanup heavy libs (keeping pandas/numpy)
+rm -rf $LAYER_DIR/scipy $LAYER_DIR/docutils $LAYER_DIR/boto3 $LAYER_DIR/botocore
+# Cleanup non-essential heavy libs
+rm -rf $LAYER_DIR/numba $LAYER_DIR/llvmlite
 
 # Cleanup cache/dist info to save space
 find $LAYER_DIR -name "__pycache__" -type d -exec rm -rf {} +
+# find $LAYER_DIR -name "*.dist-info" -type d -exec rm -rf {} +
 
 echo -e "${GREEN}✅ Layer prepared in lambda/layer${NC}"
 echo ""

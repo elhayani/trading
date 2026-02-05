@@ -7,10 +7,11 @@ from datetime import datetime
 
 # Initialize DynamoDB Client
 dynamodb = boto3.resource('dynamodb')
-table_name = os.environ.get('TABLE_NAME', 'EmpireTradesHistory')
 config_table_name = os.environ.get('CONFIG_TABLE', 'EmpireConfig')
 
-table = dynamodb.Table(table_name)
+# Tables to scan (same as reporter.py)
+TABLES_TO_SCAN = ["EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]
+
 config_table = dynamodb.Table(config_table_name)
 
 class DecimalEncoder(json.JSONEncoder):
@@ -21,31 +22,40 @@ class DecimalEncoder(json.JSONEncoder):
         return super(DecimalEncoder, self).default(obj)
 
 def get_all_trades():
-    try:
-        response = table.scan()
-        data = response.get('Items', [])
-        while 'LastEvaluatedKey' in response:
-            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-            data.extend(response['Items'])
-        return data
-    except Exception as e:
-        print(f"Error scanning table: {e}")
-        return []
+    """Scan all 4 trading tables (same logic as reporter.py)"""
+    all_items = []
+    for table_name in TABLES_TO_SCAN:
+        try:
+            table = dynamodb.Table(table_name)
+            response = table.scan()
+            all_items.extend(response.get('Items', []))
+            # Handle pagination
+            while 'LastEvaluatedKey' in response:
+                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+                all_items.extend(response.get('Items', []))
+        except Exception as e:
+            print(f"Error scanning {table_name}: {e}")
+    return all_items
 
 def calculate_equity_curve(trades):
-    if not trades:
-        return []
-    
-    # Sort trades by timestamp
-    sorted_trades = sorted(trades, key=lambda x: x.get('Timestamp', ''))
-    
     initial_capital = 1000.0 
     current_equity = initial_capital
     equity_curve = []
     
-    # Start point
+    if not trades:
+         # Default start point for empty history
+        return [{'x': '2026-01-01T00:00:00', 'y': initial_capital}]
+    
+    # Sort trades by timestamp
+    sorted_trades = sorted(trades, key=lambda x: x.get('Timestamp', ''))
+    
+    # Start point (either Jan 1st 2026 or very first trade date if older)
     start_date = sorted_trades[0].get('Timestamp')
-    equity_curve.append({'x': start_date, 'y': initial_capital})
+    # If first trade is after Jan 1st, we can prepend Jan 1st for better viz
+    if start_date > '2026-01-01':
+         equity_curve.append({'x': '2026-01-01T00:00:00', 'y': initial_capital})
+    else:
+         equity_curve.append({'x': start_date, 'y': initial_capital})
         
     for trade in sorted_trades:
         pnl = float(trade.get('PnL', 0.0))
@@ -78,7 +88,7 @@ def lambda_handler(event, context):
         if '/status' in path:
             if method == 'GET':
                 statuses = {}
-                for sys in ['Crypto', 'Forex', 'Indices']:
+                for sys in ['Crypto', 'Forex', 'Indices', 'Commodities']:
                     try:
                         res = config_table.get_item(Key={'ConfigKey': f'PANIC_{sys.upper()}'})
                         statuses[sys] = res.get('Item', {}).get('Value', 'ACTIVE')
@@ -95,7 +105,7 @@ def lambda_handler(event, context):
                     body = json.loads(event.get('body', '{}'))
                     system = body.get('system')
                     new_status = body.get('status')
-                    if system in ['Crypto', 'Forex', 'Indices'] and new_status in ['ACTIVE', 'PANIC']:
+                    if system in ['Crypto', 'Forex', 'Indices', 'Commodities'] and new_status in ['ACTIVE', 'PANIC']:
                         config_table.put_item(Item={
                             'ConfigKey': f'PANIC_{system.upper()}',
                             'Value': new_status,
@@ -158,9 +168,10 @@ def lambda_handler(event, context):
             cum_trades = all_trades
 
         allocations = {
-            'Crypto': {'current': 500.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0},
-            'Forex': {'current': 300.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0},
-            'Indices': {'current': 200.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0}
+            'Crypto': {'current': 400.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0},
+            'Forex': {'current': 200.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0},
+            'Indices': {'current': 200.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0},
+            'Commodities': {'current': 200.0, 'pnl': 0.0, 'total': 0, 'open': 0, 'closed': 0}
         }
         for t in cum_trades:
             asset = t.get('AssetClass')

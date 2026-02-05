@@ -5,6 +5,7 @@ CDK Stack: V4 HYBRID Live Trading
 Deploy V4 HYBRID on AWS Lambda with EventBridge cron
 """
 
+import os
 from aws_cdk import (
     Stack,
     Duration,
@@ -14,6 +15,7 @@ from aws_cdk import (
     aws_dynamodb as dynamodb,
     aws_iam as iam,
     aws_logs as logs,
+    aws_sns as sns,
     RemovalPolicy,
     CfnOutput
 )
@@ -24,6 +26,19 @@ class V4TradingStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        
+        # Base directory for resolving assets (relative to this file)
+        base_dir = os.path.dirname(os.path.realpath(__file__))
+        lambda_root = os.path.join(base_dir, "../../../lambda")
+
+        # =====================================================================
+        # SNS Topic (Notifications)
+        # =====================================================================
+        status_topic = sns.Topic(
+            self, "EmpireStatusTopic",
+            topic_name="Empire_Status_Reports",
+            display_name="Empire V4 Status"
+        )
 
         # =====================================================================
         # DynamoDB Tables
@@ -60,14 +75,6 @@ class V4TradingStack(Stack):
         )
         
         # =====================================================================
-        # Lambda Layer (Dependencies)
-        # =====================================================================
-        
-        # Note: You need to create this layer manually or with script
-        # Includes: ccxt, numpy, requests, etc.
-        # See: scripts/create_lambda_layer.sh
-        
-        # =====================================================================
         # Lambda Function: V4 HYBRID Trader
         # =====================================================================
         
@@ -76,11 +83,11 @@ class V4TradingStack(Stack):
             function_name="V4HybridLiveTrader",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="v4_hybrid_lambda.lambda_handler",
-            code=lambda_.Code.from_asset("../../lambda/v4_trader"),  # Relative to cdk dir
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
             timeout=Duration.minutes(5),  # Max 5 minutes per execution
             memory_size=512,  # 512 MB
             environment={
-               "STATE_TABLE": state_table.table_name,
+                "STATE_TABLE": state_table.table_name,
                 "HISTORY_TABLE": history_table.table_name,
                 "TRADING_MODE": "test",  # 'test' or 'live'
                 "CAPITAL": "1000",
@@ -95,12 +102,50 @@ class V4TradingStack(Stack):
         state_table.grant_read_write_data(trading_lambda)
         history_table.grant_read_write_data(trading_lambda)
         
-        # Grant Permission to EmpireTradesHistory (Shared Table)
-        empire_history_table = dynamodb.Table.from_table_name(
-            self, "EmpireHistoryTable",
-            table_name="EmpireTradesHistory"
+        # Grant Permission to EmpireCryptoV4 (Created here for Isolation)
+        empire_history_table = dynamodb.Table(
+            self, "EmpireCryptoTable",
+            table_name="EmpireCryptoV4",
+            partition_key=dynamodb.Attribute(
+                name="TradeId",
+                type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+            point_in_time_recovery=True
         )
         empire_history_table.grant_write_data(trading_lambda)
+        empire_history_table.grant_read_data(trading_lambda)
+        
+        # Define other tables for Reporting (Forex, Indices, Commodities)
+        # We define them here so CDK creates them if they don't exist, and we can grant permissions.
+        
+        empire_forex_table = dynamodb.Table(
+            self, "EmpireForexTable",
+            table_name="EmpireForexHistory",
+            partition_key=dynamodb.Attribute(name="TradeId", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+            point_in_time_recovery=True
+        )
+
+        empire_indices_table = dynamodb.Table(
+            self, "EmpireIndicesTable",
+            table_name="EmpireIndicesHistory",
+            partition_key=dynamodb.Attribute(name="TradeId", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+            point_in_time_recovery=True
+        )
+
+        empire_commodities_table = dynamodb.Table(
+            self, "EmpireCommoditiesTable",
+            table_name="EmpireCommoditiesHistory",
+            partition_key=dynamodb.Attribute(name="TradeId", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+            point_in_time_recovery=True
+        )
         
         # Grant Bedrock permissions
         trading_lambda.add_to_role_policy(
@@ -111,8 +156,47 @@ class V4TradingStack(Stack):
                     "bedrock:InvokeModelWithResponseStream"
                 ],
                 resources=[
-                    f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+                    f"arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
                 ]
+            )
+        )
+        
+        # =====================================================================
+        # Reporter Lambda (Independent)
+        # =====================================================================
+        reporter_lambda = lambda_.Function(
+            self, "V4StatusReporter",
+            function_name="V4StatusReporter",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="reporter.lambda_handler",
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            timeout=Duration.minutes(1),
+            memory_size=256,
+            environment={
+                "SYMBOLS": "SOL/USDT",
+                "TRADING_MODE": "test",
+                "SNS_TOPIC_ARN": status_topic.topic_arn
+            },
+            log_retention=logs.RetentionDays.ONE_MONTH
+        )
+        
+        # Reporter Permissions
+        # Reporter Permissions
+        status_topic.grant_publish(reporter_lambda)
+        empire_history_table.grant_read_data(reporter_lambda)
+        empire_forex_table.grant_read_data(reporter_lambda)
+        empire_indices_table.grant_read_data(reporter_lambda)
+        empire_commodities_table.grant_read_data(reporter_lambda)
+        
+        # Grant SES SendEmail Permission
+        reporter_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "ses:SendEmail",
+                    "ses:SendRawEmail"
+                ],
+                resources=["*"] # Can restrict to specific identity ARN for tighter security
             )
         )
         
@@ -122,45 +206,63 @@ class V4TradingStack(Stack):
         
         # 1. AWS Managed Pandas Layer (Pandas, Numpy, AWS SDK)
         # ARN for us-east-1 Python 3.12 (Verify version matches runtime)
-        pandas_layer = lambda_.LayerVersion.from_layer_version_arn(
-            self, "AWSPandasLayer",
-            layer_version_arn=f"arn:aws:lambda:{self.region}:336392948345:layer:AWSSDKPandas-Python312:8" 
-        )
+        # Note: Using eu-west-3 ARN if available or assuming deployment script handles it. 
+        # Actually using strict ARN for eu-west-3 for Python 3.12:
+        # pandas_layer = lambda_.LayerVersion.from_layer_version_arn(
+        #      self, "AWSPandasLayer",
+        #      layer_version_arn=f"arn:aws:lambda:eu-west-3:336392948345:layer:AWSSDKPandas-Python312:13" 
+        # )
+        # Note: Version 13 is current stable for py3.12 in eu-west-3 as of mid-2024. If error, try 8 or 12.
         
         # 2. Custom Layer (CCXT, Requests, etc.)
-        # Assumes 'lambda/layer' directory is prepared by deployment script
         dependency_layer = lambda_.LayerVersion(
             self, "V4DependencyLayer",
-            code=lambda_.Code.from_asset("../../lambda/layer"),
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "layer")),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Dependencies: ccxt, requests, ta-lib fallback"
         )
         
-        trading_lambda.add_layers(pandas_layer)
+        # trading_lambda.add_layers(pandas_layer)
         trading_lambda.add_layers(dependency_layer)
         
+        # reporter_lambda.add_layers(pandas_layer)
+        reporter_lambda.add_layers(dependency_layer)
+        
         # =====================================================================
-        # EventBridge Rule (Cron: Every Hour)
+        # EventBridge Rules
         # =====================================================================
         
+        # 1. Trading Bot (Every Hour)
         trading_rule = events.Rule(
             self, "V4TradingSchedule",
             rule_name="V4HybridHourlyCron",
             description="Trigger V4 HYBRID trader every hour",
             schedule=events.Schedule.cron(
-                minute="0",  # At minute 0
-                hour="*",    # Every hour
+                minute="0",
+                hour="*",
                 month="*",
                 week_day="*",
                 year="*"
             ),
-            enabled=True  # Set to False to pause trading
+            enabled=True
         )
+        trading_rule.add_target(targets.LambdaFunction(trading_lambda))
         
-        # Add Lambda as target
-        trading_rule.add_target(
-            targets.LambdaFunction(trading_lambda)
+        # 2. Reporting Bot (Every 30 mins, 9h-21h)
+        reporting_rule = events.Rule(
+            self, "V4ReportingSchedule",
+            rule_name="V4ReporterCron",
+            description="Trigger Status Report every 30 mins (9-21h UTC)",
+            schedule=events.Schedule.cron(
+                minute="0/30",
+                hour="9-21",
+                month="*",
+                week_day="*",
+                year="*"
+            ),
+            enabled=True
         )
+        reporting_rule.add_target(targets.LambdaFunction(reporter_lambda))
         
         # =====================================================================
         # Manual Trigger Lambda (for testing)

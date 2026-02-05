@@ -1,16 +1,123 @@
 import json
 import logging
 import os
+import uuid
+from datetime import datetime, timedelta
 from config import CONFIGURATION
 from strategies import ForexStrategies
 from data_loader import DataLoader
 from news_fetcher import news_fetcher
-import uuid
-from datetime import datetime
+import boto3
 
 # Configuration Logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# ==================== CONFIGURATION ====================
+CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # 200€ total / 2 max positions
+STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-3.0'))   # -3% Stop Loss
+HARD_TP_PCT = float(os.environ.get('HARD_TP', '4.0'))        # +4% Take Profit  
+COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '6')) # 6h between trades per pair
+MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '2'))       # Max 2 trades per pair
+DYNAMO_TABLE = os.environ.get('DYNAMO_TABLE', 'EmpireForexHistory')
+# ========================================================
+
+# AWS Clients
+dynamodb_client = boto3.resource('dynamodb')
+history_table = dynamodb_client.Table(DYNAMO_TABLE)
+bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+
+def get_portfolio_context(pair):
+    """Get current exposure and last trade info for cooldown"""
+    try:
+        response = history_table.scan(
+            FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(pair) & 
+                            boto3.dynamodb.conditions.Attr('Status').eq('OPEN')
+        )
+        open_trades = response.get('Items', [])
+        
+        # Get last trade for cooldown check
+        all_trades = history_table.scan(
+            FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(pair)
+        ).get('Items', [])
+        
+        sorted_trades = sorted(all_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)
+        last_trade = sorted_trades[0] if sorted_trades else None
+        
+        return {
+            'exposure': len(open_trades),
+            'last_trade': last_trade,
+            'open_trades': open_trades
+        }
+    except Exception as e:
+        logger.error(f"Portfolio context error: {e}")
+        return {'exposure': 0, 'last_trade': None, 'open_trades': []}
+
+def manage_exits(pair, current_price, asset_class='Forex'):
+    """Manage Stop Loss and Take Profit for open positions"""
+    try:
+        context = get_portfolio_context(pair)
+        open_trades = context.get('open_trades', [])
+        
+        if not open_trades:
+            return None
+            
+        exit_time = datetime.utcnow().isoformat()
+        closed_count = 0
+        total_pnl = 0
+        
+        for trade in open_trades:
+            entry_price = float(trade.get('EntryPrice', 0))
+            trade_type = trade.get('Type', 'LONG').upper()
+            size = float(trade.get('Size', CAPITAL_PER_TRADE))
+            
+            if entry_price == 0:
+                continue
+            
+            # Calculate PnL based on direction
+            if trade_type in ['LONG', 'BUY']:
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+            else:  # SHORT/SELL
+                pnl_pct = ((entry_price - current_price) / entry_price) * 100
+            
+            pnl_dollars = (pnl_pct / 100) * size
+            
+            exit_reason = None
+            
+            # Check Stop Loss
+            if pnl_pct <= STOP_LOSS_PCT:
+                exit_reason = "STOP_LOSS"
+                logger.warning(f"🛑 STOP LOSS HIT for {pair}: {pnl_pct:.2f}%")
+                
+            # Check Take Profit
+            elif pnl_pct >= HARD_TP_PCT:
+                exit_reason = "TAKE_PROFIT"
+                logger.info(f"💎 TAKE PROFIT HIT for {pair}: {pnl_pct:.2f}%")
+            
+            if exit_reason:
+                history_table.update_item(
+                    Key={'TradeId': trade['TradeId']},
+                    UpdateExpression="set #st = :s, PnL = :p, ExitPrice = :ep, ExitTime = :et, ExitReason = :er",
+                    ExpressionAttributeNames={'#st': 'Status'},
+                    ExpressionAttributeValues={
+                        ':s': 'CLOSED',
+                        ':p': str(round(pnl_dollars, 2)),
+                        ':ep': str(current_price),
+                        ':et': exit_time,
+                        ':er': exit_reason
+                    }
+                )
+                closed_count += 1
+                total_pnl += pnl_dollars
+                
+        if closed_count > 0:
+            return f"CLOSED_{closed_count}_TRADES_PNL_${total_pnl:.2f}"
+            
+        return "HOLD"
+        
+    except Exception as e:
+        logger.error(f"Exit management error: {e}")
+        return None
 
 def lambda_handler(event, context):
     """
@@ -64,13 +171,35 @@ def lambda_handler(event, context):
             logger.error(f"❌ Error indicators {pair}: {e}")
             continue
             
-        # 3. Check Signal
+        # 3. Manage Exits First (Priority)
+        current_price = df.iloc[-1]['close']
+        exit_result = manage_exits(pair, current_price)
+        if exit_result and "CLOSED" in str(exit_result):
+            logger.info(f"📤 Exit executed for {pair}: {exit_result}")
+            results.append({'pair': pair, 'action': 'EXIT', 'result': exit_result})
+            continue
+        
+        # 4. Check Cooldown & Exposure
+        portfolio = get_portfolio_context(pair)
+        
+        if portfolio['exposure'] >= MAX_EXPOSURE:
+            logger.info(f"⏸️ Max exposure ({MAX_EXPOSURE}) reached for {pair}")
+            continue
+            
+        if portfolio.get('last_trade'):
+            last_time = datetime.fromisoformat(portfolio['last_trade']['Timestamp'])
+            hours_since = (datetime.utcnow() - last_time).total_seconds() / 3600
+            if hours_since < COOLDOWN_HOURS:
+                logger.info(f"⏳ Cooldown active for {pair}. {COOLDOWN_HOURS - hours_since:.1f}h remaining.")
+                continue
+        
+        # 5. Check Signal
         signal = ForexStrategies.check_signal(pair, df, config)
         
         if signal:
             logger.info(f"🎯 TECHNICAL SIGNAL: {signal}")
             
-            # --- 4. AI VALIDATION (Bedrock) ---
+            # --- 6. AI VALIDATION (Bedrock) ---
             try:
                 # Fetch News Context
                 news_context = news_fetcher.get_news_context(pair)
@@ -92,12 +221,12 @@ def lambda_handler(event, context):
                     logger.info(f"🛑 Trade Cancelled by AI")
                 
                 if ai_decision['decision'] == 'CONFIRM':
-                     log_trade_to_dynamo(signal)
+                    log_trade_to_dynamo(signal)
+                    results.append(signal)
             
             except Exception as e:
                 logger.error(f"❌ AI Validation Failed: {e}")
-                # Fallback: Add signal anyway if AI fails? Or be safe and skip?
-                # Let's skip to be safe in v1
+                # Skip to be safe
                 
         else:
             logger.info(f"➡️ No signal for {pair}")
@@ -111,16 +240,19 @@ def lambda_handler(event, context):
         }, default=str)
     }
 
-# AWS Bedrock Client
-import boto3
-bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
-dynamodb_client = boto3.resource('dynamodb', region_name='us-east-1')
-history_table = dynamodb_client.Table('EmpireTradesHistory')
+
 
 def log_trade_to_dynamo(signal_data):
+    """Log trade to DynamoDB with Size and Cost calculations"""
     try:
         trade_id = f"FOREX-{uuid.uuid4().hex[:8]}"
         timestamp = datetime.utcnow().isoformat()
+        
+        entry_price = float(signal_data.get('entry', 0))
+        
+        # Calculate Size (Forex: units based on capital)
+        # For Forex, Size represents notional value in base currency
+        size = CAPITAL_PER_TRADE  # $200 notional
         
         item = {
             'TradeId': trade_id,
@@ -129,7 +261,10 @@ def log_trade_to_dynamo(signal_data):
             'Pair': signal_data.get('pair'),
             'Type': signal_data.get('signal'), 
             'Strategy': signal_data.get('strategy'),
-            'EntryPrice': str(signal_data.get('entry')), 
+            'EntryPrice': str(entry_price), 
+            'Size': str(size),
+            'Cost': str(CAPITAL_PER_TRADE),
+            'Value': str(CAPITAL_PER_TRADE),
             'SL': str(signal_data.get('sl')),
             'TP': str(signal_data.get('tp')),
             'ATR': str(signal_data.get('atr')),
@@ -139,7 +274,7 @@ def log_trade_to_dynamo(signal_data):
         }
         
         history_table.put_item(Item=item)
-        logger.info(f"✅ Trade logged to EmpireTradesHistory: {trade_id}")
+        logger.info(f"✅ Trade logged to {DYNAMO_TABLE}: {trade_id} | Size: ${size}")
         
     except Exception as e:
         logger.error(f"❌ Failed to log trade to DynamoDB: {e}")
@@ -149,7 +284,7 @@ def ask_bedrock(pair, signal_data, news_context):
     Validates the trade with Claude 3 Haiku using Technicals + News
     """
     prompt = f"""
-    You are a professional Forex rk manager.
+    You are a professional Forex Risk Manager.
     
     TRADE PROPOSAL:
     - Pair: {pair}

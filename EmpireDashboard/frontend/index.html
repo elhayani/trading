@@ -149,14 +149,16 @@
                             <th class="p-4">Time</th>
                             <th class="p-4">Asset</th>
                             <th class="p-4">Type</th>
-                            <th class="p-4">Price</th>
-                            <th class="p-4">Reason (AI)</th>
+                            <th class="p-4">Qty</th>
+                            <th class="p-4">Cost</th>
+                            <th class="p-4">Value</th>
+                            <th class="p-4">Status</th>
                             <th class="p-4 text-right">PnL</th>
                         </tr>
                     </thead>
                     <tbody id="tradesTableBody" class="text-sm text-slate-300">
                         <tr>
-                            <td colspan="6" class="p-8 text-center text-slate-500">Waiting for data...</td>
+                            <td colspan="8" class="p-8 text-center text-slate-500">Waiting for data...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -166,7 +168,7 @@
 
     <script>
         // CONFIGURATION
-        const API_URL = "https://c1029mw9x4.execute-api.us-east-1.amazonaws.com/stats";
+        const API_URL = "https://qhwqgpto9c.execute-api.eu-west-3.amazonaws.com/stats";
         const REFRESH_INTERVAL = 300000; // 5 min
 
         let chartInstance = null;
@@ -207,7 +209,8 @@
             const systems = [
                 { id: 'Crypto', label: 'Crypto (V4 Hybrid)' },
                 { id: 'Forex', label: 'Forex (Trend)' },
-                { id: 'Indices', label: 'Indices (Momentum)' }
+                { id: 'Indices', label: 'Indices (Momentum)' },
+                { id: 'Commodities', label: 'Gold & Oil (Trend)' }
             ];
 
             systems.forEach(sys => {
@@ -285,7 +288,8 @@
             const assets = [
                 { id: 'Crypto', color: 'bg-blue-500' },
                 { id: 'Forex', color: 'bg-purple-500' },
-                { id: 'Indices', color: 'bg-indigo-500' }
+                { id: 'Indices', color: 'bg-indigo-500' },
+                { id: 'Commodities', color: 'bg-yellow-500' }
             ];
 
             assets.forEach(asset => {
@@ -401,7 +405,7 @@
             tbody.innerHTML = '';
 
             if (trades.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>';
                 return;
             }
 
@@ -412,26 +416,60 @@
                 // Colorize Side
                 const sideColor = trade.Type === 'LONG' || trade.Type === 'BUY' ? 'text-green-400' : 'text-red-400';
 
-                // Format Status/PnL
-                let pnlDisplay = '<span class="text-blue-400">OPEN</span>';
-                if (trade.Status === 'CLOSED' || trade.PnL) {
+                // Get quantity and prices
+                const qty = parseFloat(trade.Size || trade.PositionSize || 0);
+                const entryPrice = parseFloat(trade.EntryPrice || 0);
+                const exitPrice = parseFloat(trade.ExitPrice || 0);
+
+                // Calculate Cost (qty * entry) and Value (qty * exit)
+                const cost = parseFloat(trade.Cost || qty * entryPrice || 0);
+                const value = exitPrice > 0 ? (parseFloat(trade.Value || qty * exitPrice)) : 0;
+
+                // Format displays
+                const qtyDisplay = qty > 0 ? qty.toFixed(4) : '-';
+                const costDisplay = cost > 0 ? `€${cost.toFixed(2)}` : '-';
+                const valueDisplay = value > 0 ? `€${value.toFixed(2)}` : '-';
+
+                // Format Status
+                const status = trade.Status || 'OPEN';
+                let statusDisplay = '';
+                if (status === 'OPEN') {
+                    statusDisplay = '<span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">OPEN</span>';
+                } else if (status === 'CLOSED') {
+                    const exitReason = trade.ExitReason || '';
+                    if (exitReason === 'STOP_LOSS') {
+                        statusDisplay = '<span class="bg-red-500/20 text-red-400 px-2 py-1 rounded text-xs">SL</span>';
+                    } else if (exitReason === 'TAKE_PROFIT') {
+                        statusDisplay = '<span class="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs">TP</span>';
+                    } else {
+                        statusDisplay = '<span class="bg-slate-500/20 text-slate-400 px-2 py-1 rounded text-xs">CLOSED</span>';
+                    }
+                }
+
+                // Format PnL
+                let pnlDisplay = '-';
+                if (trade.Status === 'CLOSED' && trade.PnL) {
                     const pnlVal = parseFloat(trade.PnL || 0);
                     const pnlColor = pnlVal >= 0 ? 'text-green-400' : 'text-red-400';
-                    pnlDisplay = `<span class="${pnlColor}">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</span>`;
+                    pnlDisplay = `<span class="${pnlColor} font-bold">${pnlVal >= 0 ? '+' : ''}€${pnlVal.toFixed(2)}</span>`;
                 }
 
                 // Icons
                 let icon = '📊';
                 if (trade.AssetClass === 'Crypto') icon = '₿';
                 if (trade.AssetClass === 'Forex') icon = '💱';
+                if (trade.AssetClass === 'Indices') icon = '📈';
+                if (trade.AssetClass === 'Commodities') icon = '🛢️';
 
                 tr.innerHTML = `
                     <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
                     <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
                     <td class="p-4 ${sideColor} font-bold text-xs uppercase bg-slate-800/40 rounded w-max px-2 py-1">${trade.Type}</td>
-                    <td class="p-4 font-mono">${trade.EntryPrice}</td>
-                    <td class="p-4 text-slate-300 italic text-xs max-w-xs truncate" title="${trade.AI_Reason}">${trade.AI_Reason || '-'}</td>
-                    <td class="p-4 text-right font-bold">${pnlDisplay}</td>
+                    <td class="p-4 font-mono text-slate-300">${qtyDisplay}</td>
+                    <td class="p-4 font-mono text-green-300">${costDisplay}</td>
+                    <td class="p-4 font-mono text-orange-300">${valueDisplay}</td>
+                    <td class="p-4">${statusDisplay}</td>
+                    <td class="p-4 text-right">${pnlDisplay}</td>
                 `;
                 tbody.appendChild(tr);
             });

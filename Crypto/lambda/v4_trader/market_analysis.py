@@ -1,11 +1,26 @@
-import pandas_ta as ta
 import pandas as pd
 import numpy as np
 
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_sma(series, period):
+    return series.rolling(window=period).mean()
+
+def calculate_atr(high, low, close, period=14):
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
+
 def analyze_market(ohlcv_data):
     """
-    Analyzes market data and returns indicators and patterns.
-    Expects ohlcv_data as list of [timestamp, open, high, low, close, volume]
+    Analyzes market data using plain pandas/numpy (no pandas_ta/numba/llvmlite).
     """
     if not ohlcv_data:
         return {'indicators': {}, 'patterns': [], 'market_context': 'NO_DATA'}
@@ -17,15 +32,10 @@ def analyze_market(ohlcv_data):
     df['low'] = df['low'].astype(float)
     
     # Calculate Indicators
-    # RSI
-    df['RSI'] = ta.rsi(df['close'], length=14)
-    
-    # SMA
-    df['SMA_50'] = ta.sma(df['close'], length=50)
-    df['SMA_200'] = ta.sma(df['close'], length=200)
-    
-    # ATR
-    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+    df['RSI'] = calculate_rsi(df['close'], period=14)
+    df['SMA_50'] = calculate_sma(df['close'], period=50)
+    df['SMA_200'] = calculate_sma(df['close'], period=200)
+    df['ATR'] = calculate_atr(df['high'], df['low'], df['close'], period=14)
     
     # Latest values
     current = df.iloc[-1]
@@ -38,7 +48,7 @@ def analyze_market(ohlcv_data):
         'long_term_trend': 'BULLISH' if current['close'] > current['SMA_200'] else 'BEARISH'
     }
     
-    # Simple Pattern Detection (Placeholder for more complex logic)
+    # Simple Pattern Detection
     patterns = []
     if current['close'] > current['SMA_50'] and df.iloc[-2]['close'] <= df.iloc[-2]['SMA_50']:
         patterns.append('GOLDEN_CROSS_SMA50_PRICE')

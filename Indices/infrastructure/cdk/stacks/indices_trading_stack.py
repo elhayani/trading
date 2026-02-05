@@ -1,3 +1,4 @@
+import os
 from aws_cdk import (
     Stack,
     Duration,
@@ -16,6 +17,10 @@ class IndicesTradingStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        
+        # Base directory for resolving assets
+        base_dir = os.path.dirname(os.path.realpath(__file__))
+        lambda_root = os.path.join(base_dir, "../../../lambda")
 
         # =====================================================================
         # Lambda Function: Indices Trader
@@ -26,7 +31,7 @@ class IndicesTradingStack(Stack):
             function_name="IndicesLiveTrader",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
-            code=lambda_.Code.from_asset("../../lambda/indices_trader"),
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "indices_trader")),
             timeout=Duration.minutes(5),
             memory_size=512,
             environment={
@@ -48,7 +53,7 @@ class IndicesTradingStack(Stack):
         # 2. Custom Layer (yfinance, pandas_ta)
         dependency_layer = lambda_.LayerVersion(
             self, "IndicesDependencyLayer",
-            code=lambda_.Code.from_asset("../../lambda/layer_indices"),
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "layer_indices")),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Dependencies: yfinance, pandas_ta"
         )

@@ -13,7 +13,7 @@ ForexTradingStack(
     app, "ForexTradingStack",
     env=cdk.Environment(
         account="946179054632",
-        region="us-east-1"
+        region="eu-west-3"
     ),
     description="Forex Live Trading System"
 )

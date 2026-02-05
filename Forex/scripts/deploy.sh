@@ -13,7 +13,7 @@ echo ""
 
 # Configuration
 STACK_NAME="ForexTradingStack"
-REGION="us-east-1"
+REGION="eu-west-3"
 CDK_DIR="Forex/infrastructure/cdk"
 ACCOUNT_ID="946179054632"
 

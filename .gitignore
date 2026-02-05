@@ -3,3 +3,13 @@ __pycache__
 *.pyc
 .env
 .DS_Store
+Crypto/infrastructure/cdk/cdk.out/
+EmpireDashboard/infrastructure/cdk/cdk.out/
+response.json
+
+# CDK Cache and Output
+cdk.out/
+**/cdk.out/
+.cdk.staging/
+**/cdk.staging/
+cdk.context.json

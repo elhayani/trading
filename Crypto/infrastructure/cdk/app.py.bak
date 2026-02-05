@@ -13,7 +13,7 @@ V4TradingStack(
     app, "V4TradingStack",
     env=cdk.Environment(
         account="946179054632",  # Replace with your AWS account
-        region="us-east-1"
+        region="eu-west-3"
     ),
     description="V4 HYBRID Live Trading System"
 )

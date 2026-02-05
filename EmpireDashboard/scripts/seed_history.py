@@ -7,7 +7,7 @@ from decimal import Decimal
 
 # Configuration
 TABLE_NAME = "EmpireTradesHistory"
-REGION = "us-east-1"
+REGION = "eu-west-3"
 
 # Client
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
