@@ -233,14 +233,10 @@ def lambda_handler(event, context):
                 
                 if ai_decision['decision'] == 'CONFIRM':
                     results.append(signal)
-                    # --- EXECUTION PLACEHOLDER ---
-                    # execute_trade(signal)
+                    log_trade_to_dynamo(signal)
                 else:
                     logger.info(f"🛑 Trade Cancelled by AI")
-                    
-                if ai_decision['decision'] == 'CONFIRM':
-                    log_trade_to_dynamo(signal)
-                    results.append(signal)
+                    log_skip_to_dynamo(pair, f"AI_VETO: {ai_decision['reason']}", current_price)
 
             except Exception as e:
                 logger.error(f"❌ AI Validation Failed: {e}")
@@ -248,6 +244,7 @@ def lambda_handler(event, context):
                 
         else:
             logger.info(f"➡️ No signal for {pair}")
+            log_skip_to_dynamo(pair, "NO_SIGNAL: No technical entry trigger", current_price)
             
     return {
         'statusCode': 200,
@@ -258,6 +255,26 @@ def lambda_handler(event, context):
         }, default=str)
     }
 
+
+def log_skip_to_dynamo(pair, reason, current_price):
+    """Log skipped/no-signal events for the Reporter"""
+    try:
+        timestamp = datetime.utcnow().isoformat()
+        log_id = f"LOG-{uuid.uuid4().hex[:8]}"
+        item = {
+            'TradeId': log_id,
+            'Timestamp': timestamp,
+            'AssetClass': 'Commodities',
+            'Pair': pair,
+            'Status': 'SKIPPED',
+            'Type': 'INFO',
+            'ExitReason': reason,
+            'EntryPrice': str(current_price),
+            'TTL': int((datetime.utcnow() + timedelta(days=2)).timestamp())
+        }
+        history_table.put_item(Item=item)
+    except Exception as e:
+        logger.error(f"Failed to log skip: {e}")
 
 def log_trade_to_dynamo(signal_data):
     """Log trade to DynamoDB with Size and Cost calculations"""

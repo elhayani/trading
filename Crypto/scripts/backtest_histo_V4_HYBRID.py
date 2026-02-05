@@ -208,7 +208,7 @@ class AILogic:
             return {"decision": "CONFIRM", "reason": "Parse/Logic Error"}
 
 # Ajout du path pour importer le moteur d'analyse
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../lambda/data_fetcher')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../lambda/v4_trader')))
 try:
     from market_analysis import analyze_market
     from news_fetcher import get_news_context

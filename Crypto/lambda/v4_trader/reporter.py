@@ -3,7 +3,7 @@ import os
 import boto3
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from exchange_connector import ExchangeConnector
 
 # Setup Logging
@@ -107,6 +107,53 @@ def lambda_handler(event, context):
 
         if not open_trades:
             html_sections = "<div style='text-align:center;padding:30px;color:#94a3b8;'>💤 Aucune position active</div>"
+
+        # --- SECTION: RECENT ACTIVITY (Last 30 min, or since 22h for 10h report) ---
+        now = datetime.utcnow()
+        current_hour = now.hour
+        
+        # Special case: 10h (9h UTC) = Morning report = Scan depuis 22h veille (21h UTC)
+        if current_hour == 9:  # 10h Paris = 9h UTC
+            lookback = now.replace(hour=21, minute=0, second=0, microsecond=0) - timedelta(days=1) if now.hour >= 21 else now.replace(hour=21, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            lookback = datetime(now.year, now.month, now.day, 21, 0, 0) - timedelta(days=1)
+            lookback_label = "depuis 22h hier"
+        else:
+            lookback = now - timedelta(minutes=30)
+            lookback_label = "30 dernières minutes"
+        
+        lookback_iso = lookback.isoformat()
+        
+        # Filter recent events (SKIPPED = NO_SIGNAL + AI_VETO)
+        recent_events = [t for t in all_trades if t.get('Status') == 'SKIPPED' and t.get('Timestamp', '') > lookback_iso]
+        recent_events = sorted(recent_events, key=lambda x: x.get('Timestamp', ''), reverse=True)
+        
+        if recent_events:
+            html_sections += f"<div class='section-title' style='border-left-color: #f59e0b;'>ACTIVITÉ RÉCENTE ({lookback_label})</div>"
+            html_sections += """<table class="empire-table">
+                <thead><tr>
+                    <th style='text-align:left'>HEURE</th>
+                    <th style='text-align:left'>ACTIF</th>
+                    <th style='text-align:left'>RAISON</th>
+                </tr></thead><tbody>"""
+            
+            for ev in recent_events[:20]:  # Limit to 20 events
+                ts = ev.get('Timestamp', '')
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    time_str = dt.strftime('%H:%M')
+                except:
+                    time_str = ts[-8:-3] if len(ts) > 8 else ts
+                
+                pair = ev.get('Pair', 'N/A')
+                reason = ev.get('ExitReason', 'Unknown')
+                
+                html_sections += f"""
+                <tr>
+                    <td style="color:#64748b; font-size:11px;">{time_str}</td>
+                    <td style="font-weight:bold;">{pair}</td>
+                    <td style="font-size:11px; color:#475569;">{reason[:80]}</td>
+                </tr>"""
+            html_sections += "</tbody></table>"
 
         # --- SECTION 2: RECENT AI TRADES (Last 10) ---
         recent_trades = sorted(all_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:10]

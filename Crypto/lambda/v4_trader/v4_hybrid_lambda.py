@@ -70,6 +70,26 @@ def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset
     except Exception as e:
         logger.error(f"❌ Failed to log to Empire: {e}")
 
+def log_skip_to_empire(symbol, reason, price, asset_class='Crypto'):
+    """Log skipped/no-signal events for the Reporter"""
+    try:
+        timestamp = datetime.utcnow().isoformat()
+        log_id = f"LOG-{uuid.uuid4().hex[:8]}"
+        item = {
+            'TradeId': log_id,
+            'Timestamp': timestamp,
+            'AssetClass': asset_class,
+            'Pair': symbol,
+            'Status': 'SKIPPED',
+            'Type': 'INFO',
+            'ExitReason': reason,
+            'EntryPrice': str(price),
+            'TTL': int((datetime.utcnow() + timedelta(days=2)).timestamp())
+        }
+        empire_table.put_item(Item=item)
+    except Exception as e:
+        logger.error(f"Failed to log skip: {e}")
+
 
 # ==================== OPTIMIZATION FUNCTIONS ====================
 
@@ -434,6 +454,7 @@ def lambda_handler(event, context):
                 logger.info(f"⚠️ Weak multi-TF signal. AI will apply extra scrutiny.")
             elif signal_strength == "NO_SIGNAL":
                 logger.info(f"📊 No signal on multi-TF analysis.")
+                log_skip_to_empire(symbol, f"NO_SIGNAL: RSI_4H={rsi_4h:.1f} (Multi-TF filter)", current_price, asset_class)
                 return {"status": "IDLE", "rsi": round(rsi, 2), "rsi_4h": round(rsi_4h, 2), "asset": symbol}
             
             # 6. IA AVOCAT DU DIABLE (Bedrock)
@@ -474,6 +495,7 @@ def lambda_handler(event, context):
                     "ai_confidence": decision.get('confidence', 0)
                 }
             else:
+                log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
                 return {
                     "status": "SKIPPED_AI_VETO", 
                     "reason": decision.get('reason'),
@@ -482,6 +504,7 @@ def lambda_handler(event, context):
                     "signal_strength": signal_strength
                 }
 
+        log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {RSI_BUY_THRESHOLD}", current_price, asset_class)
         return {"status": "IDLE", "rsi": round(rsi, 2), "threshold": RSI_BUY_THRESHOLD, "asset": symbol}
     except Exception as e:
         logger.error(f"Global Error: {e}")
