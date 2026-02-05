@@ -6,6 +6,7 @@ class ForexStrategies:
     def calculate_indicators(df, strategy_type):
         """
         Calcule les indicateurs nécessaires (Pure Pandas implementation)
+        V5 UPDATE: Added EMA 50 for Momentum Filter
         """
         df = df.copy()
         
@@ -30,6 +31,10 @@ class ForexStrategies:
         # --- ATR (Toujours nécessaire) ---
         df['ATR'] = calculate_atr(df['high'], df['low'], df['close'], 14)
         
+        # --- V5 COMMON INDICATORS ---
+        # EMA 50 for Momentum Filter (V5 Fortress)
+        df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
+        
         # --- Strategy Specifics ---
         if strategy_type == 'TREND_PULLBACK':
             df['SMA_200'] = df['close'].rolling(window=200).mean()
@@ -45,9 +50,25 @@ class ForexStrategies:
         return df
 
     @staticmethod
+    def check_reversal(current, direction):
+        """
+        V5 Reversal Trigger: Confirm candle color matches direction
+        Prevents catching falling knives.
+        """
+        open_p = float(current['open'])
+        close_p = float(current['close'])
+        
+        if direction == 'LONG':
+            return close_p >= open_p # Green Candle
+        if direction == 'SHORT':
+            return close_p <= open_p # Red Candle
+        return False
+
+    @staticmethod
     def check_signal(pair, df, config):
         """
         Analyse la dernière bougie pour générer un signal
+        V5 UPDATE: Included Momentum Filter & Reversal Trigger
         """
         # Ensure we have enough data (200 + buffer)
         if len(df) < 201:
@@ -87,15 +108,20 @@ class ForexStrategies:
                 return None
             
             # Condition 1: Tendance Haussière (Prix > SMA 200)
-            if current['close'] > current['SMA_200']:
+            # V5 UPDATE: Added EMA_50 > SMA_200 (Momentum Filter)
+            is_bull_trend = (current['close'] > current['SMA_200']) and (current['EMA_50'] > current['SMA_200'])
+            
+            if is_bull_trend:
                 # Condition 2: Signal Pullback (RSI < Seuil)
                 if current['RSI'] < params['rsi_oversold']:
-                    if atr > 0.0005: 
-                        signal = 'LONG'
-                        sl_dist = atr * params['sl_atr_mult']
-                        tp_dist = atr * params['tp_atr_mult']
-                        stop_loss = entry_price - sl_dist
-                        take_profit = entry_price + tp_dist
+                    if atr > 0.0005:
+                        # V5 UPDATE: Reversal Trigger
+                        if ForexStrategies.check_reversal(current, 'LONG'):
+                            signal = 'LONG'
+                            sl_dist = atr * params['sl_atr_mult']
+                            tp_dist = atr * params['tp_atr_mult']
+                            stop_loss = entry_price - sl_dist
+                            take_profit = entry_price + tp_dist
 
         # --- STRATÉGIE 2: BOLLINGER BREAKOUT (USDJPY) ---
         elif strategy == 'BOLLINGER_BREAKOUT':
@@ -104,19 +130,25 @@ class ForexStrategies:
                 
             # Breakout HAUSSIER
             if current['close'] > current['BBU'] and prev['close'] <= prev['BBU']:
-                signal = 'LONG'
-                sl_dist = atr * params['sl_atr_mult']
-                tp_dist = atr * params['tp_atr_mult']
-                stop_loss = entry_price - sl_dist
-                take_profit = entry_price + tp_dist
+                # V5 UPDATE: Momentum Filter (Price > EMA 50) & Reversal
+                if current['close'] > current['EMA_50']:
+                    if ForexStrategies.check_reversal(current, 'LONG'):
+                        signal = 'LONG'
+                        sl_dist = atr * params['sl_atr_mult']
+                        tp_dist = atr * params['tp_atr_mult']
+                        stop_loss = entry_price - sl_dist
+                        take_profit = entry_price + tp_dist
                 
             # Breakout BAISSIER
             elif current['close'] < current['BBL'] and prev['close'] >= prev['BBL']:
-                signal = 'SHORT'
-                sl_dist = atr * params['sl_atr_mult']
-                tp_dist = atr * params['tp_atr_mult']
-                stop_loss = entry_price + sl_dist
-                take_profit = entry_price - tp_dist
+                # V5 UPDATE: Momentum Filter (Price < EMA 50) & Reversal
+                if current['close'] < current['EMA_50']:
+                    if ForexStrategies.check_reversal(current, 'SHORT'):
+                        signal = 'SHORT'
+                        sl_dist = atr * params['sl_atr_mult']
+                        tp_dist = atr * params['tp_atr_mult']
+                        stop_loss = entry_price + sl_dist
+                        take_profit = entry_price - tp_dist
         
         if signal:
             return {
