@@ -244,7 +244,14 @@ def lambda_handler(event, context):
                 
         else:
             logger.info(f"➡️ No signal for {pair}")
-            log_skip_to_dynamo(pair, "NO_SIGNAL: No technical entry trigger", current_price)
+            # Build detailed reason with indicators
+            last_row = df.iloc[-1]
+            rsi_val = f"RSI={last_row['RSI']:.1f}" if 'RSI' in df.columns else ""
+            sma_val = f"SMA200={last_row['SMA_200']:.2f}" if 'SMA_200' in df.columns else ""
+            bb_val = f"BB={last_row['BBU']:.2f}/{last_row['BBL']:.2f}" if 'BBU' in df.columns else ""
+            detail = " | ".join([x for x in [rsi_val, sma_val, bb_val] if x])
+            reason = f"NO_SIGNAL: {detail}" if detail else "NO_SIGNAL: Waiting for entry conditions"
+            log_skip_to_dynamo(pair, reason, current_price)
             
     return {
         'statusCode': 200,

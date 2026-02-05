@@ -20,7 +20,7 @@ empire_table = dynamodb.Table(EMPIRE_TABLE)
 # ==================== CONFIGURATION ====================
 DEFAULT_SYMBOL = os.environ.get('SYMBOL', 'SOL/USDT')
 CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '133'))   # 400€ total / 3 max positions
-RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '35'))  # More conservative than 40
+RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '40'))  # Increased to 40 (AI Validated)
 RSI_SELL_THRESHOLD = float(os.environ.get('RSI_SELL_THRESHOLD', '75'))  # Overbought exit
 STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-5.0'))  # -5% Stop Loss
 HARD_TP_PCT = float(os.environ.get('HARD_TP', '5.0'))  # +5% Guaranteed Take Profit

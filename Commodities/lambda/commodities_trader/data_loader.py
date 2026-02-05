@@ -13,7 +13,10 @@ class DataLoader:
         """
         Récupère les données live depuis Yahoo Finance
         """
-        if pair.startswith('^'):
+        # Commodities futures already have =F suffix (GC=F, CL=F)
+        # Indices start with ^ (^GSPC, ^NDX)
+        # Forex pairs need =X suffix (EURUSD -> EURUSD=X)
+        if pair.startswith('^') or pair.endswith('=F'):
             ticker = pair
         else:
             ticker = f"{pair}=X"

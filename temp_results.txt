@@ -1,0 +1,49 @@
+🚀 STARTING LONG TERM BACKTEST (Since 2000/Inception)
+📥 Downloading Max History for BTC/USDT (since 2010-01-01)...
+✅ Loaded 4159 daily candles for BTC/USDT (Start: 1410912000000, End: 1770249600000)
+
+🔄 Running V4 Simulation on BTC/USDT (Daily Timeframe)...
+
+========================================
+📊 REPORT: BTC/USDT (2014 - Today)
+========================================
+Initial Capital : $1000.00
+Final Capital   : $302.16
+Net Return      : -69.78%
+Total Trades    : 52
+Win Rate        : 38.5%
+Avg Trade       : -1.34%
+========================================
+
+📥 Downloading Max History for ETH/USDT (since 2010-01-01)...
+✅ Loaded 3010 daily candles for ETH/USDT (Start: 1510185600000, End: 1770249600000)
+
+🔄 Running V4 Simulation on ETH/USDT (Daily Timeframe)...
+
+========================================
+📊 REPORT: ETH/USDT (2014 - Today)
+========================================
+Initial Capital : $1000.00
+Final Capital   : $1363.03
+Net Return      : +36.30%
+Total Trades    : 34
+Win Rate        : 41.2%
+Avg Trade       : +3.03%
+========================================
+
+📥 Downloading Max History for SOL/USDT (since 2010-01-01)...
+✅ Loaded 2127 daily candles for SOL/USDT (Start: 1586476800000, End: 1770249600000)
+
+🔄 Running V4 Simulation on SOL/USDT (Daily Timeframe)...
+
+========================================
+📊 REPORT: SOL/USDT (2014 - Today)
+========================================
+Initial Capital : $1000.00
+Final Capital   : $758.31
+Net Return      : -24.17%
+Total Trades    : 33
+Win Rate        : 33.3%
+Avg Trade       : +0.96%
+========================================
+

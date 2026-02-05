@@ -69,13 +69,12 @@ class CommoditiesTradingStack(Stack):
             )
         )
 
-        # Grant Permission to EmpireTradesHistory (Shared Table)
-        # We reference it by name since it's in a different stack
+        # Grant Permission to EmpireCommoditiesHistory (Dedicated Table)
         history_table = dynamodb.Table.from_table_name(
             self, "HistoryTable",
-            table_name="EmpireTradesHistory"
+            table_name="EmpireCommoditiesHistory"
         )
-        history_table.grant_write_data(commodities_lambda)
+        history_table.grant_read_write_data(commodities_lambda)
         
         # =====================================================================
         # EventBridge Rule (Cron: Every Hour)

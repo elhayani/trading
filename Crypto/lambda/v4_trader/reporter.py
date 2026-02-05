@@ -60,7 +60,56 @@ def lambda_handler(event, context):
             if pair not in categories[ac]: categories[ac][pair] = []
             categories[ac][pair].append(t)
 
+        # --- FINANCIAL SUMMARY ---
+        INITIAL_BUDGET = 20000.0  # Default Initial Capital Assumption
+        total_buy = 0.0
+        total_sell = 0.0
+        realized_pnl = 0.0
+        unrealized_pnl = 0.0
+        open_positions_value = 0.0
+        
+        # Calculate totals from history (Closed Trades) and current open costs
+        for t in all_trades:
+            status = t.get('Status', 'OPEN')
+            if status == 'SKIPPED': continue
+            
+            # Cost basis
+            try:
+                cost = float(t.get('Cost', 0) or 0)
+                # Fallback if Cost is missing but we have EntryPrice * Size
+                if cost == 0:
+                    qty = float(t.get('Size', 0) or 0)
+                    entry = float(t.get('EntryPrice', 0) or 0)
+                    cost = qty * entry
+            except:
+                cost = 0.0
+            
+            total_buy += cost
+            
+            if status != 'OPEN':
+                # For closed trades, Value is the exit value
+                try:
+                    val = float(t.get('Value', 0)) # Usually updated on close
+                    # If Value missing, try ExitPrice * Size
+                    if val == 0:
+                        exit_price = float(t.get('ExitPrice', 0) or 0)
+                        qty = float(t.get('Size', 0) or 0)
+                        val = exit_price * qty
+                except:
+                    val = cost # Fallback break-even
+                
+                total_sell += val
+                
+                # Realized PnL
+                try:
+                    pnl = float(t.get('PnL', 0))
+                except:
+                    pnl = val - cost
+                realized_pnl += pnl
+
         html_sections = ""
+        
+        # We will add Unrealized PnL during the Active Positions loop
         
         # --- SECTION 1: ACTIVE POSITIONS ---
         for ac, pairs in categories.items():
@@ -85,6 +134,14 @@ def lambda_handler(event, context):
                 total_qty = sum(float(t.get('Size', 0)) for t in trades_list)
                 avg_entry = sum(float(t['EntryPrice']) for t in trades_list) / len(trades_list)
                 
+                # Current Value of this position
+                pos_value = total_qty * curr_price
+                pos_cost = sum(float(t.get('Cost', 0)) for t in trades_list)
+                if pos_cost == 0: pos_cost = total_qty * avg_entry
+                
+                unrealized_pnl += (pos_value - pos_cost)
+                open_positions_value += pos_value
+                
                 direction = trades_list[0].get('Type', 'LONG').upper()
                 pnl_pct = ((curr_price - avg_entry) / avg_entry * 100) if direction == 'LONG' else ((avg_entry - curr_price) / avg_entry * 100)
                 
@@ -105,8 +162,45 @@ def lambda_handler(event, context):
                 </tr>"""
             html_sections += "</tbody></table>"
 
+        # Final Budget Calculation
+        # Budget Current = Initial + Realized PnL + Unrealized PnL
+        # Note: 'Total Buy' includes Open positions cost, 'Total Sell' is only closed.
+        # Cash = Initial - Total Buy (Outflow) + Total Sell (Inflow)
+        # Equity = Cash + Open Positions Value
+        #        = Initial - Total Buy + Total Sell + Open Positions Value
+        #        = Initial - (Closed Buy + Open Cost) + Total Sell + Open Value
+        #        = Initial - Closed Buy + Total Sell - Open Cost + Open Value
+        #        = Initial + Realized PnL + Unrealized PnL
+        
+        current_budget = INITIAL_BUDGET + realized_pnl + unrealized_pnl
+        
+        # Build Summary HTML
+        summary_html = f"""
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom: 20px;">
+            <div style="background:#f1f5f9; padding:15px; border-radius:8px; text-align:center;">
+                <div style="font-size:10px; color:#64748b; font-weight:bold;">BUDGET INITIAL</div>
+                <div style="font-size:16px; font-weight:bold; color:#1e293b;">€{INITIAL_BUDGET:,.0f}</div>
+            </div>
+            <div style="background:#dcfce7; padding:15px; border-radius:8px; text-align:center;">
+                <div style="font-size:10px; color:#166534; font-weight:bold;">TOTAL VENTE</div>
+                <div style="font-size:16px; font-weight:bold; color:#166534;">€{total_sell:,.2f}</div>
+            </div>
+            <div style="background:#fee2e2; padding:15px; border-radius:8px; text-align:center;">
+                <div style="font-size:10px; color:#991b1b; font-weight:bold;">TOTAL ACHAT</div>
+                <div style="font-size:16px; font-weight:bold; color:#991b1b;">€{total_buy:,.2f}</div>
+            </div>
+            <div style="background:#3b82f6; padding:15px; border-radius:8px; text-align:center;">
+                <div style="font-size:10px; color:#1e3a8a; font-weight:bold;">BUDGET ACTUEL</div>
+                <div style="font-size:16px; font-weight:bold; color:#1e3a8a;">€{current_budget:,.2f}</div>
+            </div>
+        </div>
+        """
+        
+        # Prepend summary to html_sections
+        html_sections = summary_html + html_sections
+
         if not open_trades:
-            html_sections = "<div style='text-align:center;padding:30px;color:#94a3b8;'>💤 Aucune position active</div>"
+            html_sections += "<div style='text-align:center;padding:30px;color:#94a3b8;'>💤 Aucune position active</div>"
 
         # --- SECTION: RECENT ACTIVITY (Last 30 min, or since 22h for 10h report) ---
         now = datetime.utcnow()
@@ -156,7 +250,9 @@ def lambda_handler(event, context):
             html_sections += "</tbody></table>"
 
         # --- SECTION 2: RECENT AI TRADES (Last 10) ---
-        recent_trades = sorted(all_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:10]
+        # Exclude SKIPPED events (they are shown in ACTIVITÉ RÉCENTE)
+        actual_trades = [t for t in all_trades if t.get('Status') != 'SKIPPED']
+        recent_trades = sorted(actual_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:10]
         
         if recent_trades:
             html_sections += "<div class='section-title' style='border-left-color: #8b5cf6;'>RECENT AI TRADES</div>"
@@ -165,10 +261,8 @@ def lambda_handler(event, context):
                     <th style='text-align:left'>DATE</th>
                     <th style='text-align:left'>ACTIF</th>
                     <th style='text-align:center'>TYPE</th>
-                    <th style='text-align:right'>QTY</th>
-                    <th style='text-align:right'>COST</th>
-                    <th style='text-align:right'>VALUE</th>
                     <th style='text-align:center'>STATUS</th>
+                    <th style='text-align:left'>AI REASON</th>
                     <th style='text-align:right'>PnL</th>
                 </tr></thead><tbody>"""
                 
@@ -184,22 +278,13 @@ def lambda_handler(event, context):
                 pair = t.get('Pair')
                 direction = t.get('Type', 'LONG').upper()
                 
-                # Get qty, prices, cost, value
-                qty = float(t.get('Size', t.get('PositionSize', 0)) or 0)
-                entry_price = float(t.get('EntryPrice', 0) or 0)
-                exit_price = float(t.get('ExitPrice', 0) or 0) if t.get('ExitPrice') else None
-                
-                cost = float(t.get('Cost', 0) or 0) or (qty * entry_price if qty > 0 else entry_price)
-                value = float(t.get('Value', 0) or 0) if t.get('Value') else (exit_price * qty if exit_price and qty > 0 else None)
-                
                 status = t.get('Status', 'OPEN')
                 exit_reason = t.get('ExitReason', '')
                 pnl = float(t.get('PnL', 0)) if t.get('PnL') else None
                 
-                # Format displays
-                qty_str = f"{qty:.4f}" if qty > 0 else "-"
-                cost_str = f"€{cost:,.2f}" if cost > 0 else "-"
-                value_str = f"€{value:,.2f}" if value else "-"
+                # Get AI Reason
+                ai_reason = t.get('AI_Reason', t.get('ai_reason', ''))
+                ai_reason_short = ai_reason[:60] + "..." if len(ai_reason) > 60 else ai_reason
                 
                 # Format status badge
                 if status == 'OPEN':
@@ -223,10 +308,8 @@ def lambda_handler(event, context):
                     <td style="color:#64748b; font-size:11px;">{date_str}</td>
                     <td style="font-weight:bold;">{pair}</td>
                     <td style="text-align:center;"><span class="badge {direction}">{direction}</span></td>
-                    <td style="text-align:right; color:#64748b;">{qty_str}</td>
-                    <td style="text-align:right; color:#16a34a;">{cost_str}</td>
-                    <td style="text-align:right; color:#ea580c;">{value_str}</td>
                     <td style="text-align:center;">{status_badge}</td>
+                    <td style="font-size:11px; color:#475569;">{ai_reason_short}</td>
                     <td style="text-align:right;">{pnl_str}</td>
                 </tr>"""
             html_sections += "</tbody></table>"
