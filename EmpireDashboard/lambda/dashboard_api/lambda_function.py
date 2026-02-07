@@ -2,6 +2,8 @@ import json
 import boto3
 import os
 import traceback
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 from decimal import Decimal
 from datetime import datetime
 
@@ -13,6 +15,31 @@ config_table_name = os.environ.get('CONFIG_TABLE', 'EmpireConfig')
 TABLES_TO_SCAN = ["EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]
 
 config_table = dynamodb.Table(config_table_name)
+
+def fetch_current_price(symbol, asset_class):
+    """Récupère le prix actuel via Yahoo Finance ou Binance"""
+    try:
+        if asset_class == 'Crypto':
+            # Use Binance API for crypto (faster)
+            pair = symbol.replace('/', '')  # SOL/USDT -> SOLUSDT
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urlopen(req, timeout=3) as response:
+                data = json.loads(response.read().decode())
+                return float(data.get('price', 0))
+        else:
+            # Use Yahoo Finance for Forex/Indices/Commodities
+            yahoo_symbol = symbol
+            if asset_class == 'Forex' and '=X' not in symbol:
+                yahoo_symbol = symbol + '=X'
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?interval=1d&range=1d"
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urlopen(req, timeout=3) as response:
+                data = json.loads(response.read().decode())
+                return float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+    except Exception as e:
+        print(f"Error fetching price for {symbol}: {e}")
+        return 0.0
 
 class DecimalEncoder(json.JSONEncoder):
     """Helper class to convert Decimal items to float for JSON compatibility"""
@@ -155,6 +182,19 @@ def lambda_handler(event, context):
 
         # Recent Trades & Key Stats
         recent_trades = sorted(trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:50]
+        
+        # Enrich OPEN positions with current price
+        for trade in recent_trades:
+            if trade.get('Status') == 'OPEN':
+                symbol = trade.get('Pair')
+                asset_class = trade.get('AssetClass', 'Unknown')
+                current_price = fetch_current_price(symbol, asset_class)
+                if current_price > 0:
+                    trade['CurrentPrice'] = current_price
+                    # Calculate current Value
+                    qty = float(trade.get('Size', 0) or 0)
+                    trade['Value'] = qty * current_price
+        
         total_pnl = sum(float(t.get('PnL', 0.0)) for t in trades)
         win_count = sum(1 for t in trades if float(t.get('PnL', 0.0)) > 0)
         total_count = len(trades)

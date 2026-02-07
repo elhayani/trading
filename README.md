@@ -1,111 +1,89 @@
-# 🚀 Empire V4 Multi-Asset - AI-Powered Trading System
+# 🚀 Empire V5.1 Multi-Asset - AI-Powered Trading System
 
-> **Système de trading multi-actifs automatisé** combinant analyse technique avancée, IA générative (AWS Bedrock), et gestion de risque institutionnelle.
+> **Système de trading multi-actifs automatisé** combinant analyse technique avancée, IA générative (AWS Bedrock), micro-corridors adaptatifs, et gestion de risque institutionnelle "Hedge Fund".
 
 ## 🎯 Statut Actuel
 
 ```
 ✅ DÉPLOYÉ EN PRODUCTION AWS (eu-west-3)
-📅 Date: 2026-02-04
+📅 Date: 2026-02-07
 💰 Mode: LIVE (Toutes les stratégies actives)
 ⏰ Cron: Toutes les heures
 🎯 Portfolio: Crypto, Forex, Indices, Commodities
+🆕 Version: V5.1 - Fortress Balanced Edition 🏰
 ```
 
 ---
 
-## 📊 Vue d'Ensemble
+## 🆕 Nouveautés V5.1 "Fortress Balanced" (Février 2026)
 
-Ce projet implémente un système de trading complet **Empire V4** qui gère quatre classes d'actifs distinctes avec des stratégies spécialisées :
+Cette mise à jour majeure transforme le bot d'un simple trader technique en un véritable **gestionnaire de fonds algorithmique**.
 
-| Actif | Stratégie | IA Validation | Status |
-|-------|-----------|---------------|--------|
-| **Crypto** | V4 Hybrid (Adaptive Trend/Capitulation) | ✅ Bedrock | 🛡️ Active (Max 3 Trades) |
-| **Forex** | Trend Pullback (Major Pairs) | ✅ Bedrock | ✅ Active |
-| **Indices** | Quant Momentum (Nasdaq/S&P) | ✅ Bedrock | ✅ Active |
-| **Commodities** | Trend & Breakout (Gold & Oil) | ✅ Bedrock | 🛡️ Active (Safety Captain) |
+### 🏛️ 1. Macro Context Intelligence (Hedge Fund Vision)
+Le bot ne regarde plus seulement le graphique, il analyse le monde macro-économique avant chaque décision :
+- **DXY (Dollar Index)** : Analyse Risk-On/Risk-Off en temps réel.
+- **US 10Y Yields** : Surveille les taux pour protéger les positions Tech/Nasdaq.
+- **VIX (Peur)** : Ajuste la taille des positions selon la volatilité du marché.
+- **Calendrier Éco** : Détecte les jours de CPI/FOMC/NFP pour adapter la prudence.
 
----
+```python
+MACRO CONTEXT:
+- Dollar (DXY): 104.2 (+0.5% today) → RISK_OFF
+- US 10Y Yield: 4.2% (Rising) → BEARISH_TECH
+- VIX: 18.0 → NEUTRAL
+- MACRO REGIME: RISK_OFF
+```
 
-## 🛡️ Sécurité & Risk Management (Updated)
+### 🛡️ 2. Predictability Index (Anti-Erratic Filter)
+Fini le trading sur des actifs "sales" ou manipulés. Le bot calcule un score de propreté technique (0-100) :
+- **Score > 80** (EXCELLENT) : Taille x1.2, Filtres réduits (ex: Nasdaq)
+- **Score < 40** (POOR) : Taille x0.5, TP court sécure
+- **Score < 25** (ERRATIC) : **QUARANTINE** 🚫 (ex: Oil en crise, Shitcoins)
 
-Nous avons intégré un "Safety Captain" (Capitaine de Sécurité) pour protéger le capital contre la volatilité extrême (comme observée en 2026).
+### 🕐 3. Horloge Biologique Centralisée (Golden Windows)
+Chaque actif possède maintenant une "horloge biologique" parfaite :
+- **Indices** : 15h30-22h (Session US uniquement)
+- **Forex** : 08h-17h (Londres + Overlap)
+- **Commodities** : 14h-20h (Session COMEX)
+- **Crypto** : 24/7 avec adaptation aux volumes
 
-### 1. Protection Crypto (DCA Safety & Anti-Crash) 🛡️₿
-- **Anti-Overexposure** : Limite stricte de **3 trades ouverts maximum** par paire (ex: SOL/USDT).
-- **BTC Master Switch** : Interdiction totale d'acheter des "Altcoins" si le **Bitcoin chute de >2% en 1h**. Corrélation dynamique pour éviter d'acheter pendant un crash global.
-- **Time-Gap Cooldown** : Verrou de sécurité de **4 heures** minimum entre deux achats sur le même actif (empêche le "mitraillage" pendant une chute verticale).
-- **Smart Exits** : 
-  - **Global Take Profit** : Si le PnL global de la position atteint **+2.0%**, tout est clôturé automatiquement (sécurisation des gains).
-  - **Reporting Autonome** : Un module indépendant envoie un rapport d'état par email toutes les 30 minutes (9h-21h UTC) avec PnL, exposition et alertes.
-
-### 2. Protection Commodities (Safety Captain) 🛡️🛢️
-- **ATR Cap** : Interdiction de trader si la volatilité (ATR) dépasse les normes historiques (ex: Gold > 25 ATR).
-- **Position Sizing Dynamique** : La taille de position s'ajuste automatiquement inversement à la volatilité.
-  - Risk Fixe : $200 par trade.
-  - Formule : `Taille = $200 / (Entry - SL)`.
-  - Impact : Si le Stop Loss est large (volatilité haute), la taille de position est réduite.
-
----
-
-## 🏆 Détail des Stratégies par Système
-
-### 1. Crypto (V4 Hybrid System) ₿
-*   **Approche** : Adaptative (Multi-Régime)
-*   **Timeframe** : 1H (Hourly)
-*   **Paires** : SOL/USDT, BTC/USDT, ETH/USDT
-*   **Logique** :
-    *   **Régime BULL** (tendance haussière) : Stratégie *Dip Buying*. Achète sur repli modéré (RSI < 45).
-    *   **Régime BEAR** (tendance baissière) : Stratégie *Capitulation*. N'achète QUE les crashs extrêmes (RSI < 25) pour jouer le rebond technique.
-    *   **Sécurité** : Max 3 positions ouvertes (DCA Limité).
-
-### 2. Commodities (Gold & Oil) 🛢️
-*   **Approche** : Trend Following (Gold) & Breakout (Oil)
-*   **Timeframe** : 1H (Hourly)
-*   **Paires** : Gold (GC=F), Crude Oil (CL=F)
-*   **Logique** :
-    *   **Gold (Trend Pullback)** :
-        *   Filtre : Prix > SMA 200 (Tendance Haussière).
-        *   Entry : RSI < 35 (Repli profond).
-        *   Exit : Target 4.0 ATR / Stop 2.5 ATR.
-    *   **Oil (Bollinger Breakout)** :
-        *   Entry : Clôture au-dessus de la bande de Bollinger supérieure (Explosion volatilité).
-        *   Exit : Target 4.0 ATR / Stop 2.0 ATR.
-    *   **Sécurité** : ATR Cap (Pas de trade si volatilité > 25.0).
-
-### 3. Forex (Major Pairs) 💱
-*   **Approche** : Trend Pullback Classique
-*   **Timeframe** : 1H (Hourly)
-*   **Paires** : EUR/USD, GBP/USD, USD/JPY
-*   **Logique** :
-    *   Identification de la tendance long terme (SMA 200).
-    *   Attente d'un repli temporaire (RSI < 30 pour Long, RSI > 70 pour Short).
-    *   Validation par Bedrock AI (Contexte Macro-économique).
-
-### 4. Indices (US Markets) 📈
-*   **Approche** : Quantitative Momentum
-*   **Timeframe** : 1H (Hourly)
-*   **Paires** : Nasdaq (NQ=F), S&P 500 (ES=F)
-*   **Logique** :
-    *   Exploite le biais haussier naturel des indices US.
-    *   **RSI Dynamique** : Niveaux d'achat ajustés (40 au lieu de 30) pour rentrer plus tôt dans les tendances fortes.
-    *   **Momentum Filter** : Bedrock instruit de ne "pas bloquer" le momentum sauf news catastrophique majeure.
+### 💰 4. Position Sizing Cumulatif (Compound Interest)
+Le bot utilise la puissance des intérêts composés :
+```python
+Position_Size = (Capital_Actuel × Risk_Multiplier) / Nombre_Actifs
+```
+Les gains font boule de neige trade après trade ! 🎱
 
 ---
 
-## 🖥️ Empire Dashboard
+## 📊 Stratégies par Actif
 
-Le système est piloté par un dashboard web moderne (React/Tailwind) hébergé sur AWS S3 + Lambda.
-
-### Fonctionnalités
-- **Performance Curve** : Suivi de l'Equity en temps réel.
-- **Panic Switches** : Boutons d'arrêt d'urgence pour chaque bot individuellement.
-- **Capital Allocation** : Vue camembert de l'exposition par classe d'actifs.
-- **Live Feed** : Flux des trades avec **explication détaillée de l'IA** ("Pourquoi j'ai pris ce trade ?").
+| Actif | Stratégie | IA Validation | Nouveautés V5.1 | Status |
+|-------|-----------|---------------|-----------------|--------|
+| **Crypto** | V4 Hybrid (Trend/Capitulation) | ✅ Bedrock | Macro Context + Predictability | 🛡️ Active |
+| **Forex** | Trend Pullback (Major Pairs) | ✅ Bedrock | Macro Context + RSI Adaptatif | ✅ Active |
+| **Indices** | Quant Momentum (Nasdaq/S&P) | ✅ Bedrock | Micro-Corridors (6 régimes) | ✅ Active |
+| **Commodities** | Trend & Breakout (Gold/Oil) | ✅ Bedrock | **Predictability Filter** (Crucial Oil) | 🛡️ Active |
 
 ---
 
-## 🏗️ Architecture Technique
+## 🎯 Micro-Corridors & Régimes (V5.1)
+
+Le système découpe chaque session en **micro-tranches horaires** avec des paramètres adaptatifs :
+
+### Indices (Session US : 15h30-22h Paris)
+| Corridor | Heure | Régime | TP/SL | Risque |
+|----------|-------|--------|-------|--------|
+| 💥 Impact Zone | 15h30-16h30 | Breakout | × 0.7 | × 1.3 |
+| 🔥 Morning Power | 16h30-18h00 | Trend | × 0.8 | × 1.2 |
+| 🍽️ Mid-Day | 18h00-19h30 | Range | × 0.6 | × 0.8 |
+| 🚀 Power Hour | 19h30-21h00 | Aggressive | × 0.9 | × 1.2 |
+| 💰 Profit Taking | 21h00-21h30 | Scalping | × 0.5 | × 0.7 |
+| 🔚 Final Hour | 21h30-22h00 | Cautious | × 0.5 | × 0.5 |
+
+---
+
+## 🏗️ Architecture Technique "Fortress"
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -114,13 +92,17 @@ Le système est piloté par un dashboard web moderne (React/Tailwind) hébergé 
 │  [EventBridge Cron] ───────────────────────────────────────────┐        │
 │          │                                                     │        │
 │          ▼                                                     ▼        │
-│          ▼                                                     ▼        │
-│  [Lambda: Crypto] ──► [SNS Email Reports]      [Lambda: Dashboard API]  │
-│          │                    │                        ▲                │
-│          ▼                    ▼                        │                │
-│  [Bedrock AI (Claude)] [Bedrock AI (Claude)]      [DynamoDB State]      │
-│          │                    │                        │                │
-│          └────────────────────┴────────────────────────┘                │
+│  [Lambda: Traders (Crypto/Forex/Indices)]           [Lambda: Dashboard] │
+│          │                                                     ▲        │
+│          ▼                                                     │        │
+│   🧠 INTELLIGENCE LAYER V5.1                                [DynamoDB]  │
+│    ├── macro_context.py (DXY/VIX/Yields)                       │        │
+│    ├── predictability_index.py (Score 0-100)                   │        │
+│    ├── micro_corridors.py (Time Regimes)                       │        │
+│    └── trading_windows.py (Golden Hours)                       │        │
+│          │                                                     │        │
+│          ▼                                                     │        │
+│   🤖 BEDROCK AI (Devils Advocate) ─────────────────────────────┘        │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
            │
@@ -129,22 +111,67 @@ Le système est piloté par un dashboard web moderne (React/Tailwind) hébergé 
 
 ---
 
-## 🚀 Deployment
+## 📁 Structure des Modules V5.1
 
-Le déploiement est entièrement automatisé via AWS CDK (Infrastructure as Code).
-
-```bash
-# Déployer tout le système
-cd infrastructure/cdk
-cdk deploy --all
+```
+Trading/
+├── shared/                     # 🧠 Cerveau Central V5.1
+│   ├── macro_context.py        # Intelligence Macro (DXY, Yields, VIX)
+│   ├── predictability_index.py # Filtre anti-bruit technique
+│   ├── trading_windows.py      # Filtre horaire (Golden Windows)
+│   ├── micro_corridors.py      # Paramètres adaptatifs par heure
+│   └── position_sizing.py      # Calculateur de risque composé
+├── Crypto/
+├── Forex/
+├── Indices/
+├── Commodities/
+└── EmpireDashboard/            # Dashboard S3 + Lambda
 ```
 
-Ou par stack individuelle :
-- `cdk deploy CryptoTradingStack`
-- `cdk deploy CommoditiesTradingStack`
-- `cdk deploy IndicesTradingStack`
-- `cdk deploy ForexTradingStack`
-- `cdk deploy EmpireDashboardStack`
+## 🚀 Déploiement & Opérations V5.1
+
+### 1. Pré-requis
+- Compte AWS configuré (`aws configure`)
+- Python 3.12+ installé
+- Node.js & CDK installés (pour l'infrastructure)
+
+### 2. Déploiement Individuel par Bot
+
+Chaque bot possède son propre script de déploiement automatisé :
+
+```bash
+# 📈 INDICES (Nasdaq/S&P)
+cd /Users/zakaria/Trading/Indices && ./scripts/deploy.sh
+
+# 💱 FOREX (EUR/USD, USD/JPY)
+cd /Users/zakaria/Trading/Forex && ./scripts/deploy.sh
+
+# 🛢️ COMMODITIES (Gold/Oil)
+cd /Users/zakaria/Trading/Commodities && ./scripts/deploy.sh
+
+# ₿ CRYPTO (Solana/BTC)
+cd /Users/zakaria/Trading/Crypto/scripts && ./deploy.sh
+```
+
+### 3. Mise à jour du Dashboard
+Le dashboard (Frontend S3 + Backend Lambda) se déploie séparément :
+
+```bash
+cd /Users/zakaria/Trading/EmpireDashboard && ./deploy_dashboard.sh
+```
+
+### 4. Vérification & Monitoring
+Une fois déployé, vous pouvez surveiller le système via :
+- **CloudWatch Logs** : `/aws/lambda/Empire-Indices-Trader-V5`, `/aws/lambda/Empire-Forex-Trader-V5`, etc.
+- **EventBridge** : Vérifier que les règles `Cron` (ex: `Empire-EveryHour`) sont `ENABLED`.
+- **Dashboard** : https://empire-dashboard-v2.s3.eu-west-3.amazonaws.com/index.html
+
+### 5. Tests Locaux (Avant déploiement) V5.1
+
+```bash
+# Tester l'intégration de tous les modules V5.1 (Macro, Predictability, Corridors)
+python3 /Users/zakaria/Trading/test_v51_integration.py
+```
 
 ---
 
@@ -152,9 +179,10 @@ Ou par stack individuelle :
 
 **Ce système est un outil technologique puissant mais comporte des risques.**
 - Les performances passées (backtests 2022-2025) ne garantissent pas les résultats futurs.
-- Le trading automatisé peut entraîner des pertes rapides, surtout sur les marchés crypto à fort levier (bien que ce bot n'utilise pas de levier par défaut).
-- Utilisez toujours le mode TEST avant le LIVE.
+- Le trading automatisé peut entraîner des pertes rapides.
+- **Le V5.1 Fortress est conçu pour protéger le capital avant tout**, mais le risque zéro n'existe pas.
 
 ---
 
-**© 2026 Empire Trading Systems** - *Built for the future.*
+**© 2026 Empire Trading Systems** - *V5.1 Fortress Balanced Edition*
+*Dernière mise à jour : 2026-02-07*

@@ -148,17 +148,19 @@
                         <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
                             <th class="p-4">Time</th>
                             <th class="p-4">Asset</th>
+                            <th class="p-4">Prix</th>
                             <th class="p-4">Type</th>
-                            <th class="p-4">Qty</th>
-                            <th class="p-4">Cost</th>
-                            <th class="p-4">Value</th>
+                            <th class="p-4">Qté</th>
+                            <th class="p-4">Prix Achat (Total)</th>
+                            <th class="p-4">Prix Actuel (Total)</th>
                             <th class="p-4">Status</th>
-                            <th class="p-4 text-right">PnL</th>
+                            <th class="p-4 text-right">PnL %</th>
+                            <th class="p-4 text-right">PnL €</th>
                         </tr>
                     </thead>
                     <tbody id="tradesTableBody" class="text-sm text-slate-300">
                         <tr>
-                            <td colspan="8" class="p-8 text-center text-slate-500">Waiting for data...</td>
+                            <td colspan="10" class="p-8 text-center text-slate-500">Waiting for data...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -405,7 +407,7 @@
             tbody.innerHTML = '';
 
             if (trades.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>';
                 return;
             }
 
@@ -419,19 +421,46 @@
                 // Get quantity and prices
                 const qty = parseFloat(trade.Size || trade.PositionSize || 0);
                 const entryPrice = parseFloat(trade.EntryPrice || 0);
-                const exitPrice = parseFloat(trade.ExitPrice || 0);
+                const currentPrice = parseFloat(trade.CurrentPrice || trade.ExitPrice || entryPrice || 0);
+                const marketPrice = parseFloat(trade.MarketPrice || trade.CurrentPrice || currentPrice || 0);
 
-                // Calculate Cost (qty * entry) and Value (qty * exit)
+                // Calculate Cost (qty * entry) and Value (qty * current/exit)
                 const cost = parseFloat(trade.Cost || qty * entryPrice || 0);
-                const value = exitPrice > 0 ? (parseFloat(trade.Value || qty * exitPrice)) : 0;
+                const value = currentPrice > 0 ? (parseFloat(trade.Value || qty * currentPrice)) : 0;
+
+                // Calculate PnL %
+                let pnlPercent = 0;
+                if (entryPrice > 0 && currentPrice > 0) {
+                    if (trade.Type === 'LONG' || trade.Type === 'BUY') {
+                        pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+                    } else {
+                        pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100;
+                    }
+                }
 
                 // Format displays
-                const qtyDisplay = qty > 0 ? qty.toFixed(4) : '-';
-                const costDisplay = cost > 0 ? `€${cost.toFixed(2)}` : '-';
-                const valueDisplay = value > 0 ? `€${value.toFixed(2)}` : '-';
+                const assetClass = trade.AssetClass || 'Unknown';
+                let qtyDisplay = '-';
+                if (qty > 0) {
+                    if (assetClass === 'Crypto') qtyDisplay = qty.toFixed(4);
+                    else if (assetClass === 'Forex') qtyDisplay = qty.toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+                    else qtyDisplay = qty.toFixed(2);
+                }
+
+                // Prix = prix actuel du marché (toujours affiché pour info)
+                const marketPriceDisplay = marketPrice > 0 ? `$${marketPrice.toFixed(2)}` : (entryPrice > 0 ? `$${entryPrice.toFixed(2)}` : '-');
+
+                // Conditions d'affichage des données financières
+                const status = trade.Status || 'OPEN';
+                const isTrade = status === 'OPEN' || status === 'CLOSED' || status === 'TP' || status === 'SL';
+
+                // PRIX ACHAT (TOTAL) = COST
+                const entryDisplay = (isTrade && cost > 0) ? `€${cost.toFixed(2)}` : '-';
+
+                // PRIX ACTUEL (TOTAL) = VALUE
+                const currentDisplay = (isTrade && value > 0) ? `€${value.toFixed(2)}` : '-';
 
                 // Format Status
-                const status = trade.Status || 'OPEN';
                 let statusDisplay = '';
                 if (status === 'OPEN') {
                     statusDisplay = '<span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">OPEN</span>';
@@ -444,14 +473,28 @@
                     } else {
                         statusDisplay = '<span class="bg-slate-500/20 text-slate-400 px-2 py-1 rounded text-xs">CLOSED</span>';
                     }
+                } else {
+                    // SKIPPED, INFO, etc.
+                    statusDisplay = '<span class="bg-slate-500/20 text-slate-500 px-2 py-1 rounded text-xs">SKIP</span>';
                 }
 
-                // Format PnL
-                let pnlDisplay = '-';
-                if (trade.Status === 'CLOSED' && trade.PnL) {
-                    const pnlVal = parseFloat(trade.PnL || 0);
-                    const pnlColor = pnlVal >= 0 ? 'text-green-400' : 'text-red-400';
-                    pnlDisplay = `<span class="${pnlColor} font-bold">${pnlVal >= 0 ? '+' : ''}€${pnlVal.toFixed(2)}</span>`;
+                // Format PnL % et € (seulement si trade réel)
+                let pnlPercentDisplay = '-';
+                let pnlEuroDisplay = '-';
+
+                if (isTrade) {
+                    const pnlPercentColor = pnlPercent >= 0 ? 'text-green-400' : 'text-red-400';
+                    pnlPercentDisplay = (currentPrice > 0 && entryPrice > 0) ? `<span class="${pnlPercentColor} font-bold">${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</span>` : '-';
+
+                    if (trade.Status === 'CLOSED' && trade.PnL) {
+                        const pnlVal = parseFloat(trade.PnL || 0);
+                        const pnlColor = pnlVal >= 0 ? 'text-green-400' : 'text-red-400';
+                        pnlEuroDisplay = `<span class="${pnlColor} font-bold">${pnlVal >= 0 ? '+' : ''}€${pnlVal.toFixed(2)}</span>`;
+                    } else if (trade.Status === 'OPEN' && value > 0 && cost > 0) {
+                        const unrealizedPnl = value - cost;
+                        const pnlColor = unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400';
+                        pnlEuroDisplay = `<span class="${pnlColor}">${unrealizedPnl >= 0 ? '+' : ''}€${unrealizedPnl.toFixed(2)}</span>`;
+                    }
                 }
 
                 // Icons
@@ -464,12 +507,14 @@
                 tr.innerHTML = `
                     <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
                     <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
+                    <td class="p-4 font-mono text-cyan-300">${marketPriceDisplay}</td>
                     <td class="p-4 ${sideColor} font-bold text-xs uppercase bg-slate-800/40 rounded w-max px-2 py-1">${trade.Type}</td>
                     <td class="p-4 font-mono text-slate-300">${qtyDisplay}</td>
-                    <td class="p-4 font-mono text-green-300">${costDisplay}</td>
-                    <td class="p-4 font-mono text-orange-300">${valueDisplay}</td>
+                    <td class="p-4 font-mono text-blue-300">${entryDisplay}</td>
+                    <td class="p-4 font-mono text-purple-300">${currentDisplay}</td>
                     <td class="p-4">${statusDisplay}</td>
-                    <td class="p-4 text-right">${pnlDisplay}</td>
+                    <td class="p-4 text-right">${pnlPercentDisplay}</td>
+                    <td class="p-4 text-right">${pnlEuroDisplay}</td>
                 `;
                 tbody.appendChild(tr);
             });

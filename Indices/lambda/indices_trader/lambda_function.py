@@ -13,8 +13,46 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# ==================== V5.1 MODULES ====================
+# Position Sizing Cumulatif (Point 2)
+try:
+    from position_sizing import calculate_position_size, get_account_balance
+    POSITION_SIZING_AVAILABLE = True
+except ImportError:
+    POSITION_SIZING_AVAILABLE = False
+    logger.warning("⚠️ Position Sizing module not available")
+
+# Horloge Biologique (Point 1)
+try:
+    from trading_windows import get_session_phase, get_session_info
+    SESSION_PHASE_AVAILABLE = True
+except ImportError:
+    SESSION_PHASE_AVAILABLE = False
+
+# Micro-Corridors (pour le prompt Bedrock enrichi - Point 4)
+try:
+    from micro_corridors import get_adaptive_params, get_corridor_summary
+    MICRO_CORRIDORS_AVAILABLE = True
+except ImportError:
+    MICRO_CORRIDORS_AVAILABLE = False
+
+# 🏛️ V5.1 Macro Context - Hedge Fund Intelligence
+try:
+    from macro_context import get_macro_context
+    MACRO_CONTEXT_AVAILABLE = True
+except ImportError:
+    MACRO_CONTEXT_AVAILABLE = False
+
+# 🛡️ V5.1 Predictability Index - Anti-Erratic Filter
+try:
+    from predictability_index import calculate_predictability_score, get_predictability_adjustment
+    PREDICTABILITY_INDEX_AVAILABLE = True
+except ImportError:
+    PREDICTABILITY_INDEX_AVAILABLE = False
+
 # ==================== CONFIGURATION ====================
-CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # 200€ total / 2 max positions
+INITIAL_CAPITAL = float(os.environ.get('INITIAL_CAPITAL', '400'))  # Capital initial total
+CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # Fallback
 STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-4.0'))   # -4% Stop Loss (Indices are volatile)
 HARD_TP_PCT = float(os.environ.get('HARD_TP', '5.0'))        # +5% Take Profit  
 COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '4')) # 4h between trades per index
@@ -134,7 +172,24 @@ def lambda_handler(event, context):
     except Exception:
         pass  # Ignore if it fails, it's just cache
     
-    logger.info("🚀 Indices Trader Started")
+    logger.info("🚀 Indices Trader V5.1 Started")
+    
+    # --- 🏛️ MACRO CONTEXT (Global Check) ---
+    macro_data = None
+    if MACRO_CONTEXT_AVAILABLE:
+        try:
+            macro_data = get_macro_context()
+            logger.info(f"🏛️ V5.1 MACRO: Regime={macro_data['regime']} | Yield10Y={macro_data['yields']['value']}% | VIX={macro_data['vix']['level']}")
+            
+            # 🛑 GLOBAL KILL SWITCH (Danger Regime)
+            if not macro_data['can_trade']:
+                logger.warning(f"🛑 TRADING HALTED by Macro Regime: {macro_data['regime']}")
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({'message': 'Trading Halted (Macro Condition)', 'regime': macro_data['regime']})
+                }
+        except Exception as e:
+            logger.error(f"❌ Macro Context Failed: {e}")
     
     results = []
     
@@ -149,6 +204,43 @@ def lambda_handler(event, context):
         if df is None or len(df) < 201:
             logger.warning(f"⚠️ Not enough data for {pair}")
             continue
+
+        # --- 🛡️ V5.1 PREDICTABILITY CHECK ---
+        predictability = {'score': 100, 'grade': 'EXCELLENT', 'multiplier': 1.0}
+        if PREDICTABILITY_INDEX_AVAILABLE:
+            try:
+                pred_adj = get_predictability_adjustment(df)
+                predictability = {
+                    'score': pred_adj.get('score', 50),
+                    'grade': pred_adj.get('grade', 'MODERATE'),
+                    'multiplier': pred_adj.get('size_multiplier', 1.0),
+                    'should_trade': pred_adj.get('should_trade', True)
+                }
+                
+                logger.info(f"   🛡️ Predictability {pair}: {predictability['grade']} ({predictability['score']}/100)")
+                
+                # 🚫 QUARANTINE LOGIC (INDICES SPECIFIC)
+                # Nasdaq/SPX are noisier than Crypto. We lower the threshold (15 vs 25).
+                INDICES_MIN_SCORE = 15
+                
+                if predictability['score'] < INDICES_MIN_SCORE:
+                    # EXCEPTION 1: VIX > 30 (Panic Selling = Opportunity for Indices)
+                    if macro_data and macro_data['vix']['value'] > 30:
+                        logger.warning(f"⚠️ {pair} Very Erratic ({predictability['score']}) but VIX High -> ALLOWED (Size x0.5)")
+                        predictability['multiplier'] = 0.5
+                    else:
+                        logger.warning(f"🛑 {pair} QUARANTINED (Score {predictability['score']} < {INDICES_MIN_SCORE})")
+                        log_skip_to_dynamo(pair, f"QUARANTINE_ERRATIC_{predictability['grade']}", df.iloc[-1]['close'])
+                        continue
+                
+                elif not predictability['should_trade']:
+                    # Score between 15 and 25 (Marked ERRATIC by standard module but OK for Indices)
+                    logger.info(f"ℹ️ {pair} Low Stability ({predictability['score']}) -> ALLOWED for Indices (Range 15-25)")
+                    # Slight penalty for low score
+                    predictability['multiplier'] = min(predictability.get('multiplier', 1.0), 0.8)
+                    
+            except Exception as e:
+                logger.error(f"Predictability Check Error: {e}")
             
         # 2. Calculate Indicators
         try:
@@ -204,8 +296,8 @@ def lambda_handler(event, context):
                 # Fetch News Context
                 news_context = news_fetcher.get_news_context(pair)
                 
-                # Ask Bedrock
-                ai_decision = ask_bedrock(pair, signal, news_context)
+                # Ask Bedrock (V5.1 enriched)
+                ai_decision = ask_bedrock(pair, signal, news_context, macro_data)
                 
                 logger.info(f"🤖 BEDROCK DECISION: {ai_decision['decision']} | Reason: {ai_decision['reason']}")
                 
@@ -274,6 +366,12 @@ def log_trade_to_dynamo(signal_data):
         entry_price = float(signal_data.get('entry', 0))
         size = CAPITAL_PER_TRADE  # Notional value
         
+        # --- V5.1: Position Sizing Logique Manquante dans log_trade_to_dynamo du code original ---
+        # On va chercher les valeurs passées dans signal_data si available (calculées avant)
+        # Sinon fallback sur CAPITAL_PER_TRADE
+        cost = float(signal_data.get('cost', CAPITAL_PER_TRADE))
+        size_units = float(signal_data.get('size', 0))
+        
         item = {
             'TradeId': trade_id,
             'Timestamp': timestamp,
@@ -282,15 +380,18 @@ def log_trade_to_dynamo(signal_data):
             'Type': signal_data.get('signal'),
             'Strategy': signal_data.get('strategy'),
             'EntryPrice': str(entry_price), 
-            'Size': str(size),
-            'Cost': str(CAPITAL_PER_TRADE),
-            'Value': str(CAPITAL_PER_TRADE),
+            'Size': str(size_units),
+            'Cost': str(cost),
+            'Value': str(cost),
             'SL': str(signal_data.get('sl')),
             'TP': str(signal_data.get('tp')),
             'ATR': str(signal_data.get('atr')),
             'AI_Decision': signal_data.get('ai_decision'),
             'AI_Reason': signal_data.get('ai_reason'),
-            'Status': 'OPEN'
+            'Status': 'OPEN',
+            # V5.1 fields
+            'Regime': signal_data.get('regime', 'STANDARD'),
+            'CompoundMode': str(signal_data.get('compound_mode', False))
         }
         
         history_table.put_item(Item=item)
@@ -299,7 +400,7 @@ def log_trade_to_dynamo(signal_data):
     except Exception as e:
         logger.error(f"❌ Failed to log trade to DynamoDB: {e}")
 
-def ask_bedrock(pair, signal_data, news_context):
+def ask_bedrock(pair, signal_data, news_context, macro_data=None):
     """
     Validates the trade with Claude 3 Haiku using Technicals + News
     """
@@ -309,6 +410,31 @@ def ask_bedrock(pair, signal_data, news_context):
     # Custom instruction for Momentum/Breakout (Nasdaq) - Don't block momentum easily
     if 'BOLLINGER_BREAKOUT' in signal_data.get('strategy', ''):
          strategy_instruction = "This is a MOMENTUM trade (High Volatility). Speed is critical. Only CANCEL if the news is EXTREMELY contradictory (e.g. Rate Hike for a Long). If news is just noise or mildly negative, CONFIRM to capture the momentum."
+
+    # --- V5.1 Add Macro Context to Prompt ---
+    macro_context_str = ""
+    if macro_data:
+        macro_context_str = f"""
+    MACRO CONTEXT (Hedge Fund View):
+    - DXY (Dollar): {macro_data['dxy']['signal']} ({macro_data['dxy']['value']})
+    - US 10Y Yield: {macro_data['yields']['signal']} ({macro_data['yields']['value']}%)
+    - VIX (Fear): {macro_data['vix']['level']} ({macro_data['vix']['value']})
+    - GLOBAL REGIME: {macro_data['regime']}
+    """
+    
+    # V5.1 Micro Corridor Context Integration (Manquant dans V5 simple)
+    corridor_context = ""
+    if MICRO_CORRIDORS_AVAILABLE:
+        try:
+            params = get_adaptive_params(pair)
+            corridor_context = f"""
+    MARKET TIMING:
+    - Corridor: {params.get('corridor_name', 'Default')}
+    - Regime: {params.get('regime', 'STANDARD')}
+    - Aggressiveness: {params.get('aggressiveness', 'MEDIUM')}
+    """
+        except Exception: 
+            pass
 
     prompt = f"""
     You are a professional Indices Risk Manager.
@@ -322,6 +448,8 @@ def ask_bedrock(pair, signal_data, news_context):
     {news_context}
     
     TASK: Validate this trade.
+    {corridor_context}
+    {macro_context_str}
     {strategy_instruction}
     
     RESPONSE FORMAT JSON: {{ "decision": "CONFIRM" | "CANCEL", "reason": "short explanation" }}

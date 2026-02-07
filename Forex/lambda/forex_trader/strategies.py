@@ -1,6 +1,51 @@
 import pandas as pd
 import numpy as np
 
+# 🏛️ V5 Golden Windows - Import du module de couloirs horaires
+try:
+    from trading_windows import is_within_golden_window, get_session_info
+    TRADING_WINDOWS_AVAILABLE = True
+except ImportError:
+    TRADING_WINDOWS_AVAILABLE = False
+
+# 🎯 V5.1 Micro-Corridors - Stratégies adaptatives par tranche horaire
+try:
+    from micro_corridors import (
+        get_corridor_params, 
+        get_current_regime, 
+        calculate_adaptive_tp_sl,
+        should_increase_position_size,
+        is_scalping_enabled,
+        get_rsi_threshold_adaptive,
+        get_max_trades_in_corridor,
+        get_adaptive_params,
+        check_volume_veto,
+        MarketRegime
+    )
+    MICRO_CORRIDORS_AVAILABLE = True
+except ImportError:
+    MICRO_CORRIDORS_AVAILABLE = False
+
+# 🕐 V5.1 Session Phase - Horloge biologique centralisée
+try:
+    from trading_windows import get_session_phase
+    SESSION_PHASE_AVAILABLE = True
+except ImportError:
+    SESSION_PHASE_AVAILABLE = False
+
+# 🛡️ V5.1 Predictability Index - Détection des actifs erratiques
+try:
+    from predictability_index import (
+        calculate_predictability_score,
+        is_asset_erratic,
+        get_predictability_adjustment,
+        calculate_symbol_health
+    )
+    PREDICTABILITY_INDEX_AVAILABLE = True
+except ImportError:
+    PREDICTABILITY_INDEX_AVAILABLE = False
+
+
 class ForexStrategies:
     @staticmethod
     def calculate_indicators(df, strategy_type):
@@ -69,6 +114,7 @@ class ForexStrategies:
         """
         Analyse la dernière bougie pour générer un signal
         V5 UPDATE: Included Momentum Filter & Reversal Trigger
+        V5.1 UPDATE: Micro-Corridors adaptatifs (Scalping Mode)
         """
         # Ensure we have enough data (200 + buffer)
         if len(df) < 201:
@@ -90,17 +136,65 @@ class ForexStrategies:
         
         atr = float(current['ATR'])
         
-        # --- ROLLOVER FILTER (22:00-00:00 UTC) ---
-        # Spreads widen significantly, avoid trading
-        try:
-            # Assuming current.name is timestamp or string convertible to timestamp
-            # yfinance index is usually tz-aware datetime
-            ts = pd.to_datetime(current.name)
-            if ts.hour == 23 or ts.hour == 0: 
-                # Block 23:00-01:00 roughly
+        # --- 🏛️ V5 GOLDEN WINDOW FILTER ---
+        # Vérifie si on est dans la session optimale pour cet actif
+        if TRADING_WINDOWS_AVAILABLE:
+            if not is_within_golden_window(pair):
+                # Hors session optimale - on SKIP
                 return None
-        except:
-            pass # Ignore if timestamp parsing fails
+        
+        # --- 🎯 V5.1 MICRO-CORRIDOR ADAPTATIF ---
+        # Récupère les paramètres du corridor actuel (TP/SL courts, Risk, RSI)
+        corridor_info = None
+        tp_multiplier = 1.0
+        sl_multiplier = 1.0
+        risk_multiplier = 1.0
+        scalping_mode = False
+        corridor_name = "Default"
+        current_regime = "STANDARD"
+        
+        if MICRO_CORRIDORS_AVAILABLE:
+            corridor_info = get_corridor_params(pair)
+            corridor_params = corridor_info.get('params', {})
+            tp_multiplier = corridor_params.get('tp_multiplier', 1.0)
+            sl_multiplier = corridor_params.get('sl_multiplier', 1.0)
+            risk_multiplier = corridor_params.get('risk_multiplier', 1.0)
+            scalping_mode = corridor_params.get('scalping_mode', False)
+            corridor_name = corridor_info.get('name', 'Default')
+            current_regime = corridor_info.get('regime', 'STANDARD')
+            
+            # RSI adaptatif selon le corridor
+            adaptive_rsi = get_rsi_threshold_adaptive(pair, params.get('rsi_oversold', 40))
+            # Override le RSI de la config si on est en mode adaptatif
+            params = params.copy()  # Ne pas modifier l'original
+            params['rsi_oversold'] = adaptive_rsi
+        
+        # --- 🛡️ V5.1 PREDICTABILITY INDEX (Anti-Erratic Filter) ---
+        predictability_score = None
+        predictability_grade = None
+        
+        if PREDICTABILITY_INDEX_AVAILABLE and len(df) >= 50:
+            try:
+                pred_result = calculate_predictability_score(df)
+                predictability_score = pred_result.get('score', 50)
+                predictability_grade = pred_result.get('grade', 'MODERATE')
+                
+                # 🚫 QUARANTINE: Asset trop erratique
+                if pred_result.get('is_erratic', False) and predictability_score < 25:
+                    return None
+                
+                # Appliquer les ajustements selon la prédictibilité
+                pred_adj = get_predictability_adjustment(df)
+                if not pred_adj.get('should_trade', True):
+                    return None
+                    
+                # Modifier les multiplicateurs
+                tp_multiplier *= pred_adj.get('tp_multiplier', 1.0)
+                sl_multiplier *= pred_adj.get('sl_multiplier', 1.0)
+                risk_multiplier *= pred_adj.get('position_multiplier', 1.0)
+                    
+            except Exception:
+                pass
         
         # --- STRATÉGIE 1: TREND PULLBACK (EURUSD, GBPUSD) ---
         if strategy == 'TREND_PULLBACK':
@@ -112,14 +206,15 @@ class ForexStrategies:
             is_bull_trend = (current['close'] > current['SMA_200']) and (current['EMA_50'] > current['SMA_200'])
             
             if is_bull_trend:
-                # Condition 2: Signal Pullback (RSI < Seuil)
+                # Condition 2: Signal Pullback (RSI < Seuil adaptatif)
                 if current['RSI'] < params['rsi_oversold']:
                     if atr > 0.0005:
                         # V5 UPDATE: Reversal Trigger
                         if ForexStrategies.check_reversal(current, 'LONG'):
                             signal = 'LONG'
-                            sl_dist = atr * params['sl_atr_mult']
-                            tp_dist = atr * params['tp_atr_mult']
+                            # 🎯 V5.1: TP/SL adaptatifs selon le corridor
+                            sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
+                            tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
                             stop_loss = entry_price - sl_dist
                             take_profit = entry_price + tp_dist
 
@@ -134,8 +229,9 @@ class ForexStrategies:
                 if current['close'] > current['EMA_50']:
                     if ForexStrategies.check_reversal(current, 'LONG'):
                         signal = 'LONG'
-                        sl_dist = atr * params['sl_atr_mult']
-                        tp_dist = atr * params['tp_atr_mult']
+                        # 🎯 V5.1: TP/SL adaptatifs
+                        sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
+                        tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
                         stop_loss = entry_price - sl_dist
                         take_profit = entry_price + tp_dist
                 
@@ -145,13 +241,14 @@ class ForexStrategies:
                 if current['close'] < current['EMA_50']:
                     if ForexStrategies.check_reversal(current, 'SHORT'):
                         signal = 'SHORT'
-                        sl_dist = atr * params['sl_atr_mult']
-                        tp_dist = atr * params['tp_atr_mult']
+                        # 🎯 V5.1: TP/SL adaptatifs
+                        sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
+                        tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
                         stop_loss = entry_price + sl_dist
                         take_profit = entry_price - tp_dist
         
         if signal:
-            return {
+            result = {
                 'pair': pair,
                 'signal': signal,
                 'strategy': strategy,
@@ -159,7 +256,18 @@ class ForexStrategies:
                 'sl': stop_loss,
                 'tp': take_profit,
                 'atr': atr,
-                'timestamp': str(current.name)
+                'timestamp': str(current.name),
+                # 🎯 V5.1: Métadonnées du corridor pour le logging
+                'corridor': corridor_name,
+                'regime': current_regime,
+                'scalping_mode': scalping_mode,
+                'risk_multiplier': risk_multiplier,
+                'tp_multiplier': tp_multiplier,
+                'sl_multiplier': sl_multiplier,
+                # 🛡️ V5.1: Predictability Index
+                'predictability_score': predictability_score,
+                'predictability_grade': predictability_grade,
             }
+            return result
             
         return None

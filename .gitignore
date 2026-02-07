@@ -13,3 +13,12 @@ cdk.out/
 .cdk.staging/
 **/cdk.staging/
 cdk.context.json
+
+# Tests / cache / temp
+.pytest_cache/
+.coverage
+htmlcov/
+.aws-sam/
+temp_results.txt
+*.pyo
+*.pyd

@@ -13,8 +13,46 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# ==================== V5.1 MODULES ====================
+# Position Sizing Cumulatif (Point 2)
+try:
+    from position_sizing import calculate_position_size, get_account_balance
+    POSITION_SIZING_AVAILABLE = True
+except ImportError:
+    POSITION_SIZING_AVAILABLE = False
+    logger.warning("⚠️ Position Sizing module not available")
+
+# Horloge Biologique (Point 1)
+try:
+    from trading_windows import get_session_phase, get_session_info
+    SESSION_PHASE_AVAILABLE = True
+except ImportError:
+    SESSION_PHASE_AVAILABLE = False
+
+# Micro-Corridors (pour le prompt Bedrock enrichi - Point 4)
+try:
+    from micro_corridors import get_adaptive_params, get_corridor_summary
+    MICRO_CORRIDORS_AVAILABLE = True
+except ImportError:
+    MICRO_CORRIDORS_AVAILABLE = False
+
+# 🏛️ V5.1 Macro Context - Hedge Fund Intelligence
+try:
+    from macro_context import get_macro_context
+    MACRO_CONTEXT_AVAILABLE = True
+except ImportError:
+    MACRO_CONTEXT_AVAILABLE = False
+
+# 🛡️ V5.1 Predictability Index - Anti-Erratic Filter
+try:
+    from predictability_index import calculate_predictability_score, get_predictability_adjustment
+    PREDICTABILITY_INDEX_AVAILABLE = True
+except ImportError:
+    PREDICTABILITY_INDEX_AVAILABLE = False
+
 # ==================== CONFIGURATION ====================
-CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # 200€ total / 2 max positions
+INITIAL_CAPITAL = float(os.environ.get('INITIAL_CAPITAL', '400'))  # Capital initial total
+CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # Fallback
 STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-3.0'))   # -3% Stop Loss
 HARD_TP_PCT = float(os.environ.get('HARD_TP', '4.0'))        # +4% Take Profit  
 COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '6')) # 6h between trades per pair
@@ -123,6 +161,7 @@ def lambda_handler(event, context):
     """
     AWS Lambda Handler pour le trading Forex
     Trigger: EventBridge (Toutes les heures)
+    V5.1: Position Sizing Cumulatif + Bedrock enrichi
     """
     # Fix yfinance cache issue on Lambda (Read-only file system)
     os.environ['YFINANCE_CACHE_DIR'] = '/tmp/yf_cache'
@@ -134,7 +173,24 @@ def lambda_handler(event, context):
     except Exception:
         pass  # Ignore if it fails, it's just cache
     
-    logger.info("🚀 Forex Trader Started")
+    logger.info("🚀 Forex Trader V5.1 Started")
+    
+    # --- 🏛️ MACRO CONTEXT (Global Check) ---
+    macro_data = None
+    if MACRO_CONTEXT_AVAILABLE:
+        try:
+            macro_data = get_macro_context()
+            logger.info(f"🏛️ V5.1 MACRO: Regime={macro_data['regime']} | DXY={macro_data['dxy']['signal']} | VIX={macro_data['vix']['level']}")
+            
+            # 🛑 GLOBAL KILL SWITCH (Danger Regime)
+            if not macro_data['can_trade']:
+                logger.warning(f"🛑 TRADING HALTED by Macro Regime: {macro_data['regime']}")
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({'message': 'Trading Halted (Macro Condition)', 'regime': macro_data['regime']})
+                }
+        except Exception as e:
+            logger.error(f"❌ Macro Context Failed: {e}")
     
     results = []
     
@@ -149,6 +205,29 @@ def lambda_handler(event, context):
         if df is None or len(df) < 201:
             logger.warning(f"⚠️ Not enough data for {pair}")
             continue
+
+        # --- 🛡️ V5.1 PREDICTABILITY CHECK ---
+        predictability = {'score': 100, 'grade': 'EXCELLENT', 'multiplier': 1.0}
+        if PREDICTABILITY_INDEX_AVAILABLE:
+            try:
+                pred_adj = get_predictability_adjustment(df)
+                predictability = {
+                    'score': pred_adj.get('score', 50),
+                    'grade': pred_adj.get('grade', 'MODERATE'),
+                    'multiplier': pred_adj.get('size_multiplier', 1.0),
+                    'should_trade': pred_adj.get('should_trade', True)
+                }
+                
+                logger.info(f"   🛡️ Predictability {pair}: {predictability['grade']} ({predictability['score']}/100)")
+                
+                # 🚫 QUARANTINE: Reject Erratic Assets
+                if not predictability['should_trade']:
+                    logger.warning(f"🛑 {pair} QUARANTINED (Erratic/Poor Score: {predictability['score']})")
+                    log_skip_to_dynamo(pair, f"QUARANTINE_ERRATIC_{predictability['grade']}", df.iloc[-1]['close'])
+                    continue
+                    
+            except Exception as e:
+                logger.error(f"Predictability Check Error: {e}")
             
         # 2. Calculate Indicators
         try:
@@ -199,13 +278,69 @@ def lambda_handler(event, context):
         if signal:
             logger.info(f"🎯 TECHNICAL SIGNAL: {signal}")
             
+            # --- 💰 V5.1 POSITION SIZING CUMULATIF (Point 2) ---
+            entry = signal['entry']
+            sl = signal['sl']
+            
+            if POSITION_SIZING_AVAILABLE:
+                # Calcul dynamique basé sur le capital actuel
+                position_info = calculate_position_size(
+                    symbol=pair,
+                    initial_capital=INITIAL_CAPITAL,
+                    dynamo_table=DYNAMO_TABLE,
+                    asset_class='Forex',
+                    entry_price=entry,
+                    stop_loss=sl
+                )
+                
+                position_usd = position_info.get('position_usd', CAPITAL_PER_TRADE)
+                
+                # Apply Predictability Multiplier (V5.1)
+                pred_mult = predictability.get('multiplier', 1.0)
+                if pred_mult != 1.0:
+                    position_usd *= pred_mult
+                    logger.info(f"   📉 Adjusted Size by Predictability ({pred_mult}x): ${position_usd:.2f}")
+
+                # Apply Macro Multiplier (V5.1)
+                if macro_data:
+                    macro_mult = macro_data.get('size_multiplier', 1.0)
+                    if macro_mult != 1.0:
+                        position_usd *= macro_mult
+                        logger.info(f"   🏛️ Adjusted Size by Macro ({macro_mult}x): ${position_usd:.2f}")
+                
+                risk_multiplier = position_info.get('risk_multiplier', 1.0)
+                current_capital = position_info.get('current_capital', INITIAL_CAPITAL)
+                
+                logger.info(f"   💰 COMPOUND SIZING: Capital=${current_capital:.2f} | "
+                           f"Position=${position_usd:.2f} | RiskMult={risk_multiplier:.1f}x")
+                
+                signal['cost'] = position_usd
+                signal['capital_at_trade'] = current_capital
+                signal['compound_mode'] = True
+            else:
+                position_usd = config.get('risk_usd', CAPITAL_PER_TRADE)
+                signal['cost'] = position_usd
+                signal['compound_mode'] = False
+            
+            # Calculer la taille en unités
+            dist = abs(entry - sl)
+            if dist > 0:
+                pos_size = position_usd / dist
+            else:
+                pos_size = 0
+                
+            signal['size'] = round(pos_size, 4)
+            signal['risk_usd'] = position_usd
+            
+            logger.info(f"   ⚖️ Position Sizing: Cost=${position_usd:.2f} | SL Dist={dist:.5f} | Size={signal['size']}")
+            
             # --- 6. AI VALIDATION (Bedrock) ---
             try:
                 # Fetch News Context
                 news_context = news_fetcher.get_news_context(pair)
                 
-                # Ask Bedrock
-                ai_decision = ask_bedrock(pair, signal, news_context)
+                # Ask Bedrock (V5.1 enriched with Macro)
+                ai_decision = ask_bedrock(pair, signal, news_context, macro_data)
                 
                 logger.info(f"🤖 BEDROCK DECISION: {ai_decision['decision']} | Reason: {ai_decision['reason']}")
                 
@@ -238,7 +373,7 @@ def lambda_handler(event, context):
     return {
         'statusCode': 200,
         'body': json.dumps({
-            'message': 'Analysis complete',
+            'message': 'Analysis complete (V5.1)',
             'signals_found': len(results),
             'details': results
         }, default=str)
@@ -266,16 +401,14 @@ def log_skip_to_dynamo(pair, reason, current_price):
         logger.error(f"Failed to log skip: {e}")
 
 def log_trade_to_dynamo(signal_data):
-    """Log trade to DynamoDB with Size and Cost calculations"""
+    """Log trade to DynamoDB with Size and Cost calculations (V5.1)"""
     try:
         trade_id = f"FOREX-{uuid.uuid4().hex[:8]}"
         timestamp = datetime.utcnow().isoformat()
         
         entry_price = float(signal_data.get('entry', 0))
-        
-        # Calculate Size (Forex: units based on capital)
-        # For Forex, Size represents notional value in base currency
-        size = CAPITAL_PER_TRADE  # $200 notional
+        size = float(signal_data.get('size', 0))
+        cost = float(signal_data.get('cost', CAPITAL_PER_TRADE))
         
         item = {
             'TradeId': trade_id,
@@ -286,42 +419,132 @@ def log_trade_to_dynamo(signal_data):
             'Strategy': signal_data.get('strategy'),
             'EntryPrice': str(entry_price), 
             'Size': str(size),
-            'Cost': str(CAPITAL_PER_TRADE),
-            'Value': str(CAPITAL_PER_TRADE),
+            'Cost': str(cost),
+            'Value': str(cost),
             'SL': str(signal_data.get('sl')),
             'TP': str(signal_data.get('tp')),
             'ATR': str(signal_data.get('atr')),
             'AI_Decision': signal_data.get('ai_decision'),
             'AI_Reason': signal_data.get('ai_reason'),
-            'Status': 'OPEN'
+            'Status': 'OPEN',
+            # V5.1 new fields
+            'Corridor': signal_data.get('corridor', 'Default'),
+            'Regime': signal_data.get('regime', 'STANDARD'),
+            'RiskMultiplier': str(signal_data.get('risk_multiplier', 1.0)),
+            'CompoundMode': str(signal_data.get('compound_mode', False)),
         }
         
         history_table.put_item(Item=item)
-        logger.info(f"✅ Trade logged to {DYNAMO_TABLE}: {trade_id} | Size: ${size}")
+        logger.info(f"✅ Trade logged to {DYNAMO_TABLE}: {trade_id} | Size: {size} | Cost: ${cost}")
         
     except Exception as e:
         logger.error(f"❌ Failed to log trade to DynamoDB: {e}")
 
-def ask_bedrock(pair, signal_data, news_context):
+def ask_bedrock(pair, signal_data, news_context, macro_data=None):
     """
-    Validates the trade with Claude 3 Haiku using Technicals + News
+    Validates the trade with Claude 3 Haiku using Technicals + News + Corridor Context (V5.1)
+    Point 4: Le prompt est enrichi avec les informations du corridor actuel.
     """
+    # --- V5.1: Récupérer le contexte du corridor ---
+    corridor_context = ""
+    regime_instruction = ""
+    
+    if MICRO_CORRIDORS_AVAILABLE:
+        try:
+            params = get_adaptive_params(pair)
+            corridor_name = params.get('corridor_name', 'Default')
+            regime = params.get('regime', 'STANDARD')
+            aggressiveness = params.get('aggressiveness', 'MEDIUM')
+            risk_mult = params.get('risk_multiplier', 1.0)
+            
+            corridor_context = f"""
+    MARKET TIMING (V5.1 Corridor):
+    - Current Corridor: {corridor_name}
+    - Market Regime: {regime}
+    - Aggressiveness Level: {aggressiveness}
+    - Risk Multiplier: {risk_mult}x
+    """
+            
+            # Adapter l'instruction selon le régime
+            if regime == 'AGGRESSIVE_BREAKOUT':
+                regime_instruction = f"""
+    ⚡ HIGH VOLATILITY REGIME (Opening):
+    We are in the {corridor_name} zone with HIGH aggressiveness ({aggressiveness}).
+    This is a BREAKOUT opportunity. Speed is critical.
+    Only CANCEL if news is EXTREMELY contradictory (e.g., major Central Bank action against the trade).
+    For normal/mildly negative news → CONFIRM to capture the momentum.
+    """
+            elif regime == 'TREND_FOLLOWING':
+                regime_instruction = f"""
+    📈 TREND FOLLOWING REGIME (Core Session):
+    We are in {corridor_name} with MEDIUM aggressiveness.
+    The trend is established. Favor continuation trades.
+    CANCEL only if news clearly reverses the fundamental outlook.
+    """
+            elif regime in ['CAUTIOUS_REVERSAL', 'LOW_LIQUIDITY']:
+                regime_instruction = f"""
+    ⚠️ CAUTIOUS REGIME (Closing/Low Liquidity):
+    We are in {corridor_name} with LOW aggressiveness ({aggressiveness}).
+    Be more selective - CANCEL if there's ANY significant doubt.
+    Prefer safety over opportunity.
+    """
+            else:
+                regime_instruction = "Standard validation: CANCEL if news conflicts with the signal."
+                
+        except Exception as e:
+            logger.warning(f"Could not get corridor context: {e}")
+    
+    if SESSION_PHASE_AVAILABLE:
+        try:
+            phase = get_session_phase(pair)
+            session_name = phase.get('session', 'UNKNOWN')
+            phase_name = phase.get('phase', 'UNKNOWN')
+            is_tradeable = phase.get('is_tradeable', True)
+            
+            corridor_context += f"""
+    SESSION PHASE: {session_name} ({phase_name})
+    Tradeable: {'Yes' if is_tradeable else 'No'}
+    """
+        except Exception:
+            pass
+            
+    # --- V5.1 Add Macro Context to Prompt ---
+    macro_context_str = ""
+    if macro_data:
+        macro_context_str = f"""
+    MACRO CONTEXT (Hedge Fund View):
+    - DXY (Dollar): {macro_data['dxy']['signal']} ({macro_data['dxy']['value']})
+    - US 10Y Yield: {macro_data['yields']['signal']} ({macro_data['yields']['value']}%)
+    - VIX (Fear): {macro_data['vix']['level']} ({macro_data['vix']['value']})
+    - GLOBAL REGIME: {macro_data['regime']}
+    """
+    
+    # Default instruction
+    strategy_instruction = "If news is conflicting (e.g. LONG signal but very BEARISH news), return CANCEL. If news is supportive or neutral, return CONFIRM."
+
+    # Build enriched prompt (Point 4)
     prompt = f"""
-    You are a professional Forex Risk Manager.
+    You are a professional Forex Risk Manager for the Empire V5.1 Trading System.
     
     TRADE PROPOSAL:
     - Pair: {pair}
     - Signal: {signal_data['signal']} ({signal_data['strategy']})
     - Technicals: ATR={signal_data['atr']:.5f}
+    - Entry: {signal_data.get('entry', 'N/A')}
+    - Stop Loss: {signal_data.get('sl', 'N/A')}
+    - Take Profit: {signal_data.get('tp', 'N/A')}
+    {corridor_context}
+    {macro_context_str}
     
     NEWS CONTEXT:
     {news_context}
     
-    TASK: Validate this trade.
-    - If news is conflicting (e.g. LONG signal but very BEARISH news), return CANCEL.
-    - If news is supportive or neutral, return CONFIRM.
+    REGIME-SPECIFIC GUIDANCE:
+    {regime_instruction if regime_instruction else strategy_instruction}
     
-    RESPONSE FORMAT JSON: {{ "decision": "CONFIRM" | "CANCEL", "reason": "short explanation" }}
+    TASK: Validate this trade considering BOTH the news AND the current market timing/regime.
+    
+    RESPONSE FORMAT (JSON only): {{ "decision": "CONFIRM" | "CANCEL", "reason": "brief explanation mentioning both news and timing" }}
     """
     
     try:

@@ -8,6 +8,27 @@ from datetime import datetime, timedelta
 from market_analysis import analyze_market
 from news_fetcher import get_news_context
 from exchange_connector import ExchangeConnector
+# 🎯 V5 Micro-Corridors
+try:
+    from micro_corridors import (
+        get_corridor_params, 
+        get_current_regime, 
+        MarketRegime
+    )
+    MICRO_CORRIDORS_AVAILABLE = True
+except ImportError:
+    MICRO_CORRIDORS_AVAILABLE = False
+
+# 🛡️ V5.1 Predictability Index - Détection des actifs erratiques
+try:
+    from predictability_index import (
+        calculate_predictability_score,
+        is_asset_erratic,
+        get_predictability_adjustment
+    )
+    PREDICTABILITY_INDEX_AVAILABLE = True
+except ImportError:
+    PREDICTABILITY_INDEX_AVAILABLE = False
 
 # AWS & Logging
 logger = logging.getLogger()
@@ -54,7 +75,7 @@ REVERSAL_TRIGGER_ENABLED = os.environ.get('REVERSAL_TRIGGER', 'true').lower() ==
 MAX_CRYPTO_EXPOSURE = int(os.environ.get('MAX_CRYPTO_EXPOSURE', '2'))  # Max crypto trades when correlated
 # ========================================================
 
-def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset_class='Crypto'):
+def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0):
     try:
         trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
         timestamp = datetime.utcnow().isoformat()
@@ -76,8 +97,8 @@ def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset
             'Size': str(size),       # Save Quantity
             'Cost': str(capital),    # Save Cost Basis
             'Value': str(capital),   # Initial Value = Cost
-            'SL': '0',
-            'TP': '0',
+            'SL': str(sl_pct),       # Save Dynamic SL %
+            'TP': str(tp_pct),       # Save Dynamic TP %
             'ATR': '0',
             'AI_Decision': decision,
             'AI_Reason': reason,
@@ -637,15 +658,27 @@ def manage_exits(symbol, asset_class, exchange=None):
 
         # ==================== EXIT LOGIC ====================
         
+        # Determine Trade-Specific or Global limits
+        # V5.1 Micro-Corridors support
+        trade_sl_pct = float(open_trades[0].get('SL', 0))
+        trade_tp_pct = float(open_trades[0].get('TP', 0))
+        
+        # Use Dynamic values if set, otherwise Global defaults
+        stop_loss_limit = trade_sl_pct if trade_sl_pct != 0 else STOP_LOSS_PCT
+        take_profit_limit = trade_tp_pct if trade_tp_pct != 0 else HARD_TP_PCT
+        
+        # Ensure SL is negative
+        if stop_loss_limit > 0: stop_loss_limit = -stop_loss_limit
+        
         # 🛑 STOP LOSS CHECK (Priority 1)
-        if pnl_pct <= STOP_LOSS_PCT:
-            logger.warning(f"🛑 STOP LOSS HIT at {pnl_pct:.2f}%! Closing all positions.")
+        if pnl_pct <= stop_loss_limit:
+            logger.warning(f"🛑 STOP LOSS HIT at {pnl_pct:.2f}% (Limit: {stop_loss_limit:.2f}%)! Closing all positions.")
             total_pnl = close_all_positions(open_trades, current_price, "STOP_LOSS")
             return f"STOP_LOSS_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
         
         # 💎 HARD TAKE PROFIT CHECK (Priority 2 - Guaranteed exit)
-        if pnl_pct >= HARD_TP_PCT:
-            logger.info(f"💎 HARD TAKE PROFIT at {pnl_pct:.2f}%! Securing profits.")
+        if pnl_pct >= take_profit_limit:
+            logger.info(f"💎 HARD TAKE PROFIT at {pnl_pct:.2f}% (Limit: {take_profit_limit:.2f}%)! Securing profits.")
             total_pnl = close_all_positions(open_trades, current_price, "HARD_TP")
             return f"HARD_TP_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
         
@@ -776,7 +809,26 @@ def lambda_handler(event, context):
 
         # 5. 🎯 DYNAMIC RSI THRESHOLD (based on market regime) - V4 Fortress Balanced
         dynamic_rsi_threshold, market_regime = get_dynamic_rsi_threshold(cb_level, btc_7d, symbol)
-        logger.info(f"📈 Analysis {symbol}: RSI={rsi:.2f} | Dynamic Threshold={dynamic_rsi_threshold} ({market_regime})")
+        
+        # 🎯 V5.1 Micro-Corridors Override (Time-Based Optimization)
+        corridor_risk_mult = 1.0
+        corridor_tp_mult = 1.0
+        corridor_sl_mult = 1.0
+        corridor_name = "Standard"
+        
+        if MICRO_CORRIDORS_AVAILABLE:
+            c_params = get_corridor_params(symbol)
+            if c_params:
+                p = c_params.get('params', {})
+                corridor_risk_mult = p.get('risk_multiplier', 1.0)
+                corridor_tp_mult = p.get('tp_multiplier', 1.0)
+                corridor_sl_mult = p.get('sl_multiplier', 1.0)
+                corridor_name = c_params.get('name', 'Standard')
+                
+                # Adapt RSI based on corridor
+                dynamic_rsi_threshold = p.get('rsi_threshold', dynamic_rsi_threshold)
+                
+        logger.info(f"📈 Analysis {symbol}: RSI={rsi:.2f} | Dynamic Threshold={dynamic_rsi_threshold} ({market_regime}/{corridor_name})")
         
         if rsi < dynamic_rsi_threshold:
             
@@ -815,6 +867,36 @@ def lambda_handler(event, context):
                 log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
                 return {"status": "SKIPPED_CORRELATION_RISK", "exposure": crypto_exposure, "reason": correlation_reason}
             
+            # 5.8 🛡️ PREDICTABILITY INDEX (V5.1 Anti-Erratic Filter)
+            predictability_score = None
+            predictability_grade = None
+            if PREDICTABILITY_INDEX_AVAILABLE and len(target_ohlcv) >= 50:
+                try:
+                    import pandas as pd
+                    # Convertir OHLCV en DataFrame pour le calcul
+                    ohlcv_df = pd.DataFrame(target_ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                    pred_result = calculate_predictability_score(ohlcv_df)
+                    predictability_score = pred_result.get('score', 50)
+                    predictability_grade = pred_result.get('grade', 'MODERATE')
+                    
+                    logger.info(f"🛡️ Predictability: {predictability_score:.1f}/100 ({predictability_grade})")
+                    
+                    # 🚫 QUARANTINE pour actifs très erratiques
+                    if pred_result.get('is_erratic', False) and predictability_score < 25:
+                        log_skip_to_empire(symbol, f"ERRATIC_ASSET: Score {predictability_score:.1f}/100", current_price, asset_class)
+                        return {"status": "SKIPPED_ERRATIC_ASSET", "predictability_score": round(predictability_score, 1)}
+                    
+                    # Ajustements pour actifs POOR
+                    if predictability_grade == 'POOR':
+                        pred_adj = get_predictability_adjustment(ohlcv_df)
+                        corridor_risk_mult *= pred_adj.get('position_multiplier', 1.0)
+                        corridor_tp_mult *= pred_adj.get('tp_multiplier', 1.0)
+                        corridor_sl_mult *= pred_adj.get('sl_multiplier', 1.0)
+                        logger.info(f"⚠️ Asset POOR - Adjusting: Risk x{corridor_risk_mult:.2f}, TP x{corridor_tp_mult:.2f}")
+                        
+                except Exception as e:
+                    logger.warning(f"Predictability check error: {e}")
+            
             # 6. IA AVOCAT DU DIABLE (Bedrock)
             news_symbol = symbol.split('=')[0].split('/')[0]  # 'SOL/USDT' -> 'SOL', 'GC=F' -> 'GC'
             news_ctx = get_news_context(news_symbol)
@@ -829,8 +911,8 @@ def lambda_handler(event, context):
             logger.info(f"🤖 AI Decision: {decision.get('decision')} | Confidence: {decision.get('confidence', 0)}%")
             
             if decision.get('decision') == "CONFIRM":
-                # 🔥 Apply size multiplier from VIX AND Circuit Breaker
-                final_size_mult = size_multiplier * cb_size_mult
+                # 🔥 Apply size multiplier from VIX, Circuit Breaker AND Micro-Corridors
+                final_size_mult = size_multiplier * cb_size_mult * corridor_risk_mult
                 base_capital = CAPITAL_PER_TRADE * final_size_mult
                 
                 # 🚀 V5: Dynamic Position Sizing based on signal quality
@@ -845,14 +927,20 @@ def lambda_handler(event, context):
                 portfolio_stats['confidence_score'] = confidence
                 portfolio_stats['crypto_exposure'] = crypto_exposure
                 
+                # Calculate Dynamic TP/SL
+                calc_tp = HARD_TP_PCT * corridor_tp_mult
+                calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                
                 log_trade_to_empire(
                     symbol, 
                     "LONG", 
-                    f"V5_FORTRESS_{signal_strength}_{momentum_trend}",
+                    f"V5_{signal_strength}_{corridor_name}",
                     current_price, 
                     "CONFIRM", 
                     decision.get('reason'),
-                    asset_class
+                    asset_class,
+                    tp_pct=round(calc_tp, 2),
+                    sl_pct=round(calc_sl, 2)
                 )
                 return {
                     "status": "TRADE_EXECUTED", 
