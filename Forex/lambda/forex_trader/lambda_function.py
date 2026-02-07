@@ -74,12 +74,16 @@ def get_portfolio_context(pair):
         )
         open_trades = response.get('Items', [])
         
-        # Get last trade for cooldown check
-        all_trades = history_table.scan(
+        # Get last trade for cooldown check (exclude logs)
+        scan_response = history_table.scan(
             FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(pair)
-        ).get('Items', [])
+        )
+        all_items = scan_response.get('Items', [])
         
-        sorted_trades = sorted(all_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)
+        # Filter only actual trades (Status OPEN or CLOSED)
+        real_trades = [t for t in all_items if t.get('Status') in ['OPEN', 'CLOSED']]
+        
+        sorted_trades = sorted(real_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)
         last_trade = sorted_trades[0] if sorted_trades else None
         
         return {
@@ -91,7 +95,7 @@ def get_portfolio_context(pair):
         logger.error(f"Portfolio context error: {e}")
         return {'exposure': 0, 'last_trade': None, 'open_trades': []}
 
-def manage_exits(pair, current_price, asset_class='Forex'):
+def manage_exits(pair, current_price, custom_timestamp=None, asset_class='Forex'):
     """Manage Stop Loss and Take Profit for open positions"""
     try:
         context = get_portfolio_context(pair)
@@ -100,7 +104,7 @@ def manage_exits(pair, current_price, asset_class='Forex'):
         if not open_trades:
             return None
             
-        exit_time = datetime.utcnow().isoformat()
+        exit_time = custom_timestamp if custom_timestamp else datetime.utcnow().isoformat()
         closed_count = 0
         total_pnl = 0
         
@@ -192,6 +196,11 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.error(f"❌ Macro Context Failed: {e}")
     
+    # V5.1: Time Override for Backtesting
+    event_timestamp = event.get('timestamp')
+    current_time_dt = datetime.fromisoformat(event_timestamp) if event_timestamp else datetime.utcnow()
+    current_time_str = current_time_dt.isoformat()
+    
     results = []
     
     for pair, config in CONFIGURATION.items():
@@ -223,7 +232,7 @@ def lambda_handler(event, context):
                 # 🚫 QUARANTINE: Reject Erratic Assets
                 if not predictability['should_trade']:
                     logger.warning(f"🛑 {pair} QUARANTINED (Erratic/Poor Score: {predictability['score']})")
-                    log_skip_to_dynamo(pair, f"QUARANTINE_ERRATIC_{predictability['grade']}", df.iloc[-1]['close'])
+                    log_skip_to_dynamo(pair, f"QUARANTINE_ERRATIC_{predictability['grade']}", df.iloc[-1]['close'], current_time_str)
                     continue
                     
             except Exception as e:
@@ -252,7 +261,7 @@ def lambda_handler(event, context):
             
         # 3. Manage Exits First (Priority)
         current_price = df.iloc[-1]['close']
-        exit_result = manage_exits(pair, current_price)
+        exit_result = manage_exits(pair, current_price, current_time_str)
         if exit_result and "CLOSED" in str(exit_result):
             logger.info(f"📤 Exit executed for {pair}: {exit_result}")
             results.append({'pair': pair, 'action': 'EXIT', 'result': exit_result})
@@ -267,7 +276,7 @@ def lambda_handler(event, context):
             
         if portfolio.get('last_trade'):
             last_time = datetime.fromisoformat(portfolio['last_trade']['Timestamp'])
-            hours_since = (datetime.utcnow() - last_time).total_seconds() / 3600
+            hours_since = (current_time_dt - last_time).total_seconds() / 3600
             if hours_since < COOLDOWN_HOURS:
                 logger.info(f"⏳ Cooldown active for {pair}. {COOLDOWN_HOURS - hours_since:.1f}h remaining.")
                 continue
@@ -350,10 +359,10 @@ def lambda_handler(event, context):
                 
                 if ai_decision['decision'] == 'CONFIRM':
                     results.append(signal)
-                    log_trade_to_dynamo(signal)
+                    log_trade_to_dynamo(signal, current_time_str)
                 else:
                     logger.info(f"🛑 Trade Cancelled by AI")
-                    log_skip_to_dynamo(pair, f"AI_VETO: {ai_decision['reason']}", current_price)
+                    log_skip_to_dynamo(pair, f"AI_VETO: {ai_decision['reason']}", current_price, current_time_str)
             
             except Exception as e:
                 logger.error(f"❌ AI Validation Failed: {e}")
@@ -368,7 +377,7 @@ def lambda_handler(event, context):
             bb_val = f"BB={last_row['BBU']:.2f}/{last_row['BBL']:.2f}" if 'BBU' in df.columns else ""
             detail = " | ".join([x for x in [rsi_val, sma_val, bb_val] if x])
             reason = f"NO_SIGNAL: {detail}" if detail else "NO_SIGNAL: Waiting for entry conditions"
-            log_skip_to_dynamo(pair, reason, current_price)
+            log_skip_to_dynamo(pair, reason, current_price, current_time_str)
             
     return {
         'statusCode': 200,
@@ -380,10 +389,10 @@ def lambda_handler(event, context):
     }
 
 
-def log_skip_to_dynamo(pair, reason, current_price):
+def log_skip_to_dynamo(pair, reason, current_price, custom_timestamp=None):
     """Log skipped/no-signal events for the Reporter"""
     try:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = custom_timestamp if custom_timestamp else datetime.utcnow().isoformat()
         log_id = f"LOG-{uuid.uuid4().hex[:8]}"
         item = {
             'TradeId': log_id,
@@ -400,11 +409,11 @@ def log_skip_to_dynamo(pair, reason, current_price):
     except Exception as e:
         logger.error(f"Failed to log skip: {e}")
 
-def log_trade_to_dynamo(signal_data):
+def log_trade_to_dynamo(signal_data, custom_timestamp=None):
     """Log trade to DynamoDB with Size and Cost calculations (V5.1)"""
     try:
         trade_id = f"FOREX-{uuid.uuid4().hex[:8]}"
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = custom_timestamp if custom_timestamp else datetime.utcnow().isoformat()
         
         entry_price = float(signal_data.get('entry', 0))
         size = float(signal_data.get('size', 0))

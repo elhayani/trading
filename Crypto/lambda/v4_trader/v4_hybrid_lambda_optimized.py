@@ -65,7 +65,7 @@ CB_COOLDOWN_HOURS = float(os.environ.get('CB_COOLDOWN', '48'))  # Hours of tradi
 # 🎯 SOL TURBO MODE (Capture Volatilité 2025)
 SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '10.0'))  # +10% = activate trailing
 SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '3.0'))  # -3% trailing from peak
-VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))  # Volume must be > 1.2x avg (Optimized)
+VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))  # Volume must be > 1.2x avg (optimized from 1.5)
 
 # 🚀 V5 ADVANCED OPTIMIZATIONS
 MOMENTUM_FILTER_ENABLED = os.environ.get('MOMENTUM_FILTER', 'true').lower() == 'true'
@@ -132,27 +132,6 @@ def log_skip_to_empire(symbol, reason, price, asset_class='Crypto'):
 
 # ==================== OPTIMIZATION FUNCTIONS ====================
 
-def is_golden_window(timestamp_iso=None):
-    """
-    🦁 GOLDEN WINDOWS: High Liquidity Zones
-    - Europe Open: 07:00 - 10:00 UTC
-    - US Open: 13:00 - 16:00 UTC
-    Uses timestamp if provided, else current UTC time.
-    """
-    try:
-        if timestamp_iso:
-            dt = datetime.fromisoformat(timestamp_iso)
-            hour = dt.hour
-        else:
-            hour = datetime.utcnow().hour
-            
-        is_eu = 7 <= hour <= 10
-        is_us = 13 <= hour <= 16
-        return is_eu or is_us
-    except Exception as e:
-        logger.error(f"Golden Window check error: {e}")
-        return False
-
 def check_circuit_breaker(exchange):
     """
     🛡️ CIRCUIT BREAKER (Leçon 2022 - FTX/Luna Crash Protection)
@@ -162,7 +141,6 @@ def check_circuit_breaker(exchange):
     - L3: BTC -20% 7j -> MODE SURVIE (liquider alts)
     Returns: (can_trade: bool, size_mult: float, level: str, btc_24h: float, btc_7d: float)
     """
-
     try:
         # Fetch BTC 24h performance
         btc_ohlcv_24h = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=25)
@@ -206,15 +184,13 @@ def check_circuit_breaker(exchange):
         return True, 1.0, "ERROR", 0, 0
 
 
-def check_volume_confirmation(ohlcv_data, threshold=None):
+def check_volume_confirmation(ohlcv_data):
     """
     🎯 Volume Confirmation Filter (SOL Turbo Mode)
-    Only buy if current volume > threshold (default 1.2x)
+    Only buy if current volume > 1.5x average (avoid false signals in low liquidity)
     Returns: (confirmed: bool, vol_ratio: float)
     """
     try:
-        req_threshold = threshold if threshold is not None else VOLUME_CONFIRMATION
-
         if len(ohlcv_data) < 20:
             return True, 1.0  # Not enough data, allow
         
@@ -224,11 +200,11 @@ def check_volume_confirmation(ohlcv_data, threshold=None):
         
         vol_ratio = current_vol / avg_vol if avg_vol > 0 else 1.0
         
-        if vol_ratio >= req_threshold:
-            logger.info(f"✅ Volume Confirmed: {vol_ratio:.2f}x average (req {req_threshold}x)")
+        if vol_ratio >= VOLUME_CONFIRMATION:
+            logger.info(f"✅ Volume Confirmed: {vol_ratio:.2f}x average")
             return True, vol_ratio
         else:
-            logger.info(f"⚠️ Low Volume: {vol_ratio:.2f}x average (need {req_threshold}x)")
+            logger.info(f"⚠️ Low Volume: {vol_ratio:.2f}x average (need {VOLUME_CONFIRMATION}x)")
             return False, vol_ratio
             
     except Exception as e:
@@ -265,21 +241,15 @@ def get_dynamic_rsi_threshold(circuit_breaker_level, btc_7d_change, symbol=''):
 
 # ==================== V5 ADVANCED OPTIMIZATIONS ====================
 
-def check_momentum_filter(ohlcv_data, rsi=100):
+def check_momentum_filter(ohlcv_data):
     """
     🚀 V5 OPTIMIZATION 1: Momentum Filter (EMA Cross)
     Only buy when EMA 20 > EMA 50 (confirmed uptrend)
     Avoids dead cat bounces and bear market rallies
-    BYPASS: If RSI < 30 (Deep Value), ignore momentum
     Returns: (is_bullish: bool, trend: str, ema_diff_pct: float)
     """
     if not MOMENTUM_FILTER_ENABLED:
         return True, "DISABLED", 0
-    
-    # 🦁 Bypass for Deep Value
-    if rsi < 30:
-        logger.info(f"🦁 Momentum Filter BYPASSED: RSI {rsi:.1f} < 30 (Deep Value)")
-        return True, "DEEP_VALUE", 0
     
     try:
         if len(ohlcv_data) < 50:
@@ -499,12 +469,11 @@ def check_multi_timeframe(symbol, exchange, rsi_1h):
 
 
 
-def check_reversal_pattern(ohlcv_data, rsi=100):
+def check_reversal_pattern(ohlcv_data):
     """
     🚀 OPTIMIZATION FINAL: Reversal Trigger
     Only buy if the last candle is GREEN (Close > Open) or Neutral
     Prevents catching falling knives during active crashes.
-    EXCEPTION: RSI < 25 (Extreme Oversold) allows catching the knife.
     Returns: (is_reversal: bool, reason: str)
     """
     if not REVERSAL_TRIGGER_ENABLED:
@@ -515,14 +484,13 @@ def check_reversal_pattern(ohlcv_data, rsi=100):
         open_p = current_candle[1]
         close_p = current_candle[4]
         
-        # Exception: Extreme Oversold
-        if rsi < 25:
-            return True, f"EXTREME_OVERSOLD (RSI {rsi:.1f} < 25)"
-        
         # Buy only if Green Candle (Bounce started)
         if close_p >= open_p:
             return True, f"GREEN_CANDLE (Close {close_p} >= Open {open_p})"
         
+        # 🔧 OPTIMIZATION: Allow entry if RSI is extremely oversold (< 25)
+        # In extreme oversold, red candle is often the capitulation point
+        # This is handled by caller passing rsi parameter
         return False, f"FALLING_KNIFE (Red Candle: {close_p} < {open_p})"
         
     except Exception as e:
@@ -574,26 +542,37 @@ def ask_bedrock(symbol, rsi, news_context, portfolio_stats, history):
     current_exposure = portfolio_stats.get('current_pair_exposure', 0)
     
     prompt = f"""
-Vous êtes l'Analyste de Flux de Nouvelles pour l'Empire V5.1.
-LA DÉCISION TECHNIQUE EST DÉJÀ PRISE : Le système a confirmé que {symbol} est statistiquement prêt pour un achat (RSI à {rsi:.1f}).
+<role>Senior Crypto Risk Manager & Devil's Advocate</role>
+<mission>REJECT this trade unless it is statistically exceptional.</mission>
 
-VOTRE MISSION UNIQUE :
-1. Examiner les nouvelles récentes ci-dessous.
-2. Déterminer s'il existe une nouvelle CATASTROPHIQUE ou MAJEURE qui invalide ce signal (ex: hack, faillite, décision brutale de la Fed).
-3. NE PAS remettre en question le RSI ou les seuils techniques. Le système a déjà validé la probabilité.
+<market_context>
+- Symbol: {symbol}
+- RSI: {rsi} (Threshold: {RSI_BUY_THRESHOLD})
+- News: {news_context}
+</market_context>
 
-CONTEXTE :
-- Seuil Dynamique appliqué : {portfolio_stats.get('dynamic_threshold', RSI_BUY_THRESHOLD)}
-- RSI Actuel : {rsi:.1f} (C'est mathématiquement VALIDE)
+<portfolio_status>
+- Current Exposure: {current_exposure}/{MAX_EXPOSURE}
+- Last Trade: {last_trade_info}
+- Recent History: {len(history)} trades in last 24h
+</portfolio_status>
 
-NEWS :
-{news_context}
+<rules>
+1. If BTC is bearish or news mention "SEC", "HACK", "FUD", "LAWSUIT", or "CRASH", vote CANCEL.
+2. If RSI > {RSI_BUY_THRESHOLD}, be 2x more critical - this is not oversold enough.
+3. Find 3 SPECIFIC reasons to NOT buy.
+4. Only CONFIRM if the signal is statistically exceptional (RSI < 30 with positive news).
+5. Default to CANCEL when uncertain.
+</rules>
 
-RÈGLE DÉCISIONNELLE :
-- CONFIRM : Si les news sont neutres, positives ou simplement du "bruit" habituel.
-- CANCEL : Uniquement si une news spécifique contredit directement la survie du trade à court terme.
-
-RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication news uniquement" }}
+<output_format>
+Return ONLY a valid JSON object, no markdown:
+{{
+    "decision": "CONFIRM" | "CANCEL",
+    "reason": "Short summary of why (max 200 chars)",
+    "confidence": 0-100
+}}
+</output_format>
 """
     try:
         response = bedrock.invoke_model(
@@ -854,29 +833,24 @@ def lambda_handler(event, context):
                 
         logger.info(f"📈 Analysis {symbol}: RSI={rsi:.2f} | Dynamic Threshold={dynamic_rsi_threshold} ({market_regime}/{corridor_name})")
         
-        # 🦁 GOLDEN WINDOW Check (Run BEFORE threshold check)
-        timestamp_iso = event.get('timestamp')
-        in_golden_window = is_golden_window(timestamp_iso)
-        required_volume = VOLUME_CONFIRMATION
-        
-        if in_golden_window:
-            required_volume = 1.0 # Aggressive Volume in Golden Window
-            dynamic_rsi_threshold = max(dynamic_rsi_threshold, 45) # Allow up to 45
-            logger.info(f"🦁 GOLDEN WINDOW ACTIVE: RSI Thresh -> {dynamic_rsi_threshold}, Vol -> {required_volume}x")
-
         if rsi < dynamic_rsi_threshold:
             
             # 5.1 VOLUME CONFIRMATION (SOL Turbo Mode)
-            vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume)
+            vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv)
             if not vol_confirmed:
-                log_skip_to_empire(symbol, f"LOW_VOLUME: {vol_ratio:.2f}x (need {required_volume}x)", current_price, asset_class)
+                log_skip_to_empire(symbol, f"LOW_VOLUME: {vol_ratio:.2f}x (need {VOLUME_CONFIRMATION}x)", current_price, asset_class)
                 return {"status": "SKIPPED_LOW_VOLUME", "vol_ratio": round(vol_ratio, 2), "rsi": round(rsi, 2)}
             
             # 5.2 🚀 REVERSAL TRIGGER (Final Optimization)
-            reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
+            reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv)
             if not reversal_ok:
-                logger.info(f"🔪 Falling Knife blocked: {reversal_reason}")
-                return {"status": "SKIPPED_FALLING_KNIFE", "reason": reversal_reason, "rsi": round(rsi, 2)}
+                # 🔧 OPTIMIZATION: Allow entry if RSI is extremely oversold (< 25)
+                # In extreme oversold conditions, red candle is often the capitulation point
+                if rsi < 25:
+                    logger.info(f"🔧 RSI={rsi:.1f} < 25: Bypassing Falling Knife filter (extreme oversold)")
+                else:
+                    logger.info(f"🔪 Falling Knife blocked: {reversal_reason}")
+                    return {"status": "SKIPPED_FALLING_KNIFE", "reason": reversal_reason, "rsi": round(rsi, 2)}
             
             # 5.5 MULTI-TIMEFRAME CONFIRMATION
             signal_strength, rsi_4h = check_multi_timeframe(symbol, exchange, rsi)
@@ -890,7 +864,7 @@ def lambda_handler(event, context):
                 return {"status": "IDLE", "rsi": round(rsi, 2), "rsi_4h": round(rsi_4h, 2), "asset": symbol}
             
             # 5.6 🚀 MOMENTUM FILTER (V5 Optimization)
-            momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
+            momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv)
             if not momentum_ok:
                 log_skip_to_empire(symbol, f"BEARISH_MOMENTUM: EMA diff {ema_diff:.2f}%", current_price, asset_class)
                 return {"status": "SKIPPED_BEARISH_MOMENTUM", "ema_diff": round(ema_diff, 2), "rsi": round(rsi, 2)}
@@ -939,7 +913,6 @@ def lambda_handler(event, context):
             portfolio_stats['signal_strength'] = signal_strength
             portfolio_stats['rsi_4h'] = rsi_4h
             portfolio_stats['vix'] = vix_value
-            portfolio_stats['dynamic_threshold'] = dynamic_rsi_threshold
             
             decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
             
