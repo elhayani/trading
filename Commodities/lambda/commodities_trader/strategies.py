@@ -191,7 +191,11 @@ class ForexStrategies:
                 return None
             
             # Simple Trend Filter
-            is_bull_trend = (current['close'] > current['SMA_200'])
+            # V5.1 Update: Relaxed Momentum for Gold if configured
+            sma_threshold = current['SMA_200']
+            if params.get('momentum_relaxed', False):
+                sma_threshold *= 0.995 # Allow 0.5% below (catch 1932 vs 1934)
+            is_bull_trend = (current['close'] > sma_threshold)
             
             if is_bull_trend:
                 # Buy Dip: RSI < 30/40
@@ -209,6 +213,7 @@ class ForexStrategies:
             if 'BBU' not in df.columns or pd.isna(current['BBU']):
                 return None
             
+            # Simple Breakout (V4 Strict)
             # LONG Breakout
             if current['close'] > current['BBU'] and prev['close'] <= prev['BBU']:
                 signal = 'LONG'

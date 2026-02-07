@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": "2026-02-07T21:00:00",
+    "status": "IDLE",
+    "response": {
+      "status": "IDLE",
+      "rsi": 58.78,
+      "threshold": 40.0,
+      "asset": "BTC/USDT"
+    }
+  }
+]

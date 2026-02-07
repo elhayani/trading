@@ -120,10 +120,6 @@ class InMemoryTable:
     def scan(self, FilterExpression=None):
         return {'Items': self.items}
 
-    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues):
-        logger.info(f"DynamoDB Update: {Key} {UpdateExpression}")
-        return {}
-
     def get_trades_at(self, timestamp_str):
         trades = []
         for item in self.items:
@@ -131,6 +127,45 @@ class InMemoryTable:
             if item.get('Timestamp') and item.get('Timestamp').startswith(timestamp_str):
                 trades.append(item)
         return trades
+
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues):
+        logger.info(f"DynamoDB Update: {Key} {UpdateExpression}")
+        
+        # Find the item
+        target_item = None
+        key_name = list(Key.keys())[0]
+        key_val = list(Key.values())[0]
+        
+        for item in self.items:
+            if item.get(key_name) == key_val:
+                target_item = item
+                break
+        
+        if not target_item:
+            logger.warning(f"UpdateItem: Item not found {Key}")
+            return {}
+            
+        # Parse SET expression (simple implementation for test)
+        # "set #st = :s, PnL = :p..."
+        clean_expr = UpdateExpression.strip()
+        if clean_expr.lower().startswith('set '):
+            updates = clean_expr[4:].split(',')
+            for upd in updates:
+                parts = upd.split('=')
+                if len(parts) == 2:
+                    k = parts[0].strip()
+                    v = parts[1].strip()
+                    
+                    # Resolve Names
+                    if ExpressionAttributeNames and k in ExpressionAttributeNames:
+                        k = ExpressionAttributeNames[k]
+                    
+                    # Resolve Values
+                    if ExpressionAttributeValues and v in ExpressionAttributeValues:
+                        val = ExpressionAttributeValues[v]
+                        target_item[k] = val
+                        
+        return {}
 
 class S3DataLoader:
     def __init__(self, historical_data):

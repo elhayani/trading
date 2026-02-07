@@ -60,6 +60,40 @@ def load_macro_data(loader, days, offset_days=0):
             
     return macro_map
 
+# Fake DateTime class for mocking
+class FakeDateTime(datetime):
+    _current_time = datetime(2020, 1, 1)
+
+    @classmethod
+    def utcnow(cls):
+        return cls._current_time
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._current_time
+
+    @classmethod
+    def set_time(cls, new_time):
+        cls._current_time = new_time
+
+def make_mock_get_portfolio_context(mock_dynamodb):
+    def _mock(pair):
+        table = mock_dynamodb.Table('EmpireIndicesHistory') 
+        all_items = table.items
+        
+        open_trades = [item for item in all_items if item.get('Pair') == pair and item.get('Status') == 'OPEN']
+        
+        pair_trades = [item for item in all_items if item.get('Pair') == pair and item.get('Type') in ['BUY', 'SELL', 'LONG', 'SHORT']]
+        pair_trades.sort(key=lambda x: x.get('Timestamp', ''), reverse=True)
+        last_trade = pair_trades[0] if pair_trades else None
+        
+        return {
+            'exposure': len(open_trades),
+            'last_trade': last_trade,
+            'open_trades': open_trades
+        }
+    return _mock
+
 def run_test_crypto(bot_module, symbol, market_data, news_data, mock_dynamodb, s3_requests):
     # Prepare Mocks
     mock_exchange_conn = S3ExchangeConnector(exchange_id='binance', historical_data={symbol: market_data})
@@ -67,39 +101,48 @@ def run_test_crypto(bot_module, symbol, market_data, news_data, mock_dynamodb, s
 
     module_name = bot_module.__name__
     
-    # Crypto bot imports:
-    # - from exchange_connector import ExchangeConnector
-    # - from news_fetcher import get_news_context (function, not class!)
-    # - requests (for macro data)
-    
-    # We need to patch:
-    # 1. ExchangeConnector class
-    # 2. get_news_context function
-    # 3. requests.get for macro data
-    
     with patch(f'{module_name}.ExchangeConnector') as MockExchangeClass, \
          patch(f'{module_name}.get_news_context', side_effect=mock_news_fetcher.get_news_context), \
-         patch(f'{module_name}.requests.get', side_effect=s3_requests.get):
+         patch(f'{module_name}.requests.get', side_effect=s3_requests.get), \
+         patch(f'{module_name}.datetime', FakeDateTime):
         
         MockExchangeClass.return_value = mock_exchange_conn
         
         run_loop(bot_module, 'Crypto', symbol, market_data, mock_exchange_conn, mock_news_fetcher, s3_requests, mock_dynamodb)
 
 def run_test_forex_indices_commodities(bot_module, asset_class, symbol, market_data, news_data, mock_dynamodb, s3_requests):
-    # Forex/Indices/Commodities use static DataLoader and global news_fetcher instance
-    
     mock_loader = S3DataLoader({symbol: market_data})
     mock_news_fetcher = S3NewsFetcher(news_data)
 
     module_name = bot_module.__name__
     
     import requests
+    strategies_module = sys.modules.get('strategies')
     
+    # Patch CONFIGURATION
+    original_config = getattr(bot_module, 'CONFIGURATION', {})
+    if symbol in original_config:
+        patched_config = {symbol: original_config[symbol]}
+    else:
+        patched_config = original_config
+    
+    mock_get_portfolio = make_mock_get_portfolio_context(mock_dynamodb)
+    
+    # Mock Bedrock to avoid hanging/cost and ensure deterministic test
+    mock_ask_bedrock = MagicMock(return_value={'decision': 'CONFIRM', 'reason': 'Test Mock: Strategy Valid'})
+
     with patch(f'{module_name}.DataLoader') as MockDataLoaderPatch, \
          patch(f'{module_name}.news_fetcher', mock_news_fetcher), \
-         patch('requests.get', side_effect=s3_requests.get): # Global patch for requests
+         patch(f'{module_name}.ask_bedrock', mock_ask_bedrock), \
+         patch('requests.get', side_effect=s3_requests.get), \
+         patch(f'{module_name}.datetime', FakeDateTime), \
+         patch(f'{module_name}.CONFIGURATION', patched_config), \
+         patch(f'{module_name}.get_portfolio_context', side_effect=mock_get_portfolio), \
+         patch.object(strategies_module, 'is_within_golden_window', return_value=True) if strategies_module else patch('strategies.is_within_golden_window', return_value=True), \
+         patch.object(strategies_module, 'get_session_phase', return_value={'is_tradeable': True, 'aggressiveness': 'HIGH'}) if strategies_module else patch('strategies.get_session_phase', return_value={'is_tradeable': True, 'aggressiveness': 'HIGH'}), \
+         patch.object(strategies_module, 'check_volume_veto', return_value={'veto': False, 'reason': 'TEST'}) if strategies_module else patch('strategies.check_volume_veto', return_value={'veto': False}):
 
-        # DataLoader is static
+
         MockDataLoaderPatch.get_latest_data.side_effect = mock_loader.get_latest_data
         
         run_loop(bot_module, asset_class, symbol, market_data, mock_loader, mock_news_fetcher, s3_requests, mock_dynamodb)
@@ -109,7 +152,6 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"backtest_{asset_class}_{symbol.replace('/', '_')}_{timestamp_str}.log"
     
-    # Skip first 200 candles for warm-up
     start_idx = min(200, len(market_data)-1)
     logger.info(f"Starting loop from candle {start_idx} to {len(market_data)}")
     
@@ -123,12 +165,12 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
             dt = datetime.fromtimestamp(timestamp/1000)
             close_price = candle[4]
             
-            # Update mocks with current time
+            # Update mocks
             mock_data_provider.set_timestamp(timestamp)
             mock_news_provider.set_timestamp(timestamp)
             s3_requests.set_timestamp(timestamp)
+            FakeDateTime.set_time(dt)
             
-            # Create Event
             event = {
                 'symbol': symbol,
                 'asset_class': asset_class,
@@ -137,61 +179,53 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
             }
             context = TestContext()
             
-            # Call Handler
             try:
-                # Capture logs to check for trade executions
-                with patch('logging.Logger.info') as mock_info, \
-                     patch('logging.Logger.warning') as mock_warn:
-                    
-                    response = bot_module.lambda_handler(event, context)
-                    
-                    # 1. Check Response for Executed Trades (Standard Path)
-                    if isinstance(response, dict):
-                        body = response.get('body')
-                        if body:
-                            b = json.loads(body)
-                            signals = b.get('details', [])
-                            
-                            for signal in signals:
-                                # ENTRY SIGNAL
-                                if signal.get('action') == 'EXIT':
-                                    reason = signal.get('result', 'EXIT')
-                                    profit = "0.0" 
-                                    f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},SELL,{close_price:.4f},0,0,0,{reason},{profit}\n")
-                                    print(f"📝 Logged SELL at {dt}")
-
-                                elif signal.get('signal') in ['BUY', 'LONG', 'SHORT', 'SELL']:
-                                    # Entry
-                                    rsi = signal.get('rsi', 0)
-                                    atr = signal.get('atr', 0)
-                                    reason = f"RSI{int(rsi)}+CONFIRM"
-                                    
-                                    # Determine direction
-                                    direction = signal.get('signal')
-                                    if direction == 'LONG': direction = 'BUY'
-                                    elif direction == 'SHORT': direction = 'SELL'
-                                    
-                                    f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},{direction},{close_price:.4f},{rsi:.1f},0,{atr:.4f},{reason},\n")
-                                    print(f"📝 Logged {direction} at {dt}")
-                    
-                    # 2. Check DynamoDB for SKIPPED logs (No Signal Reason)
-                    if mock_dynamodb:
-                        logs = mock_dynamodb.get_trades_at(dt.isoformat())
-                        for log in logs:
-                            if log.get('Status') == 'SKIPPED':
-                                reason = log.get('ExitReason', 'NO_SIGNAL')
-                                # Clean up reason for CSV
-                                reason = reason.replace(',', ';') 
-                                
-                                # Extract RSI from reason if present (e.g., "NO_SIGNAL: RSI=50.0 | ...")
-                                rsi_val = 0
-                                if 'RSI=' in reason:
+                response = bot_module.lambda_handler(event, context)
+                
+                if isinstance(response, dict):
+                    body = response.get('body')
+                    if body:
+                        b = json.loads(body)
+                        signals = b.get('details', [])
+                        
+                        for signal in signals:
+                            if signal.get('action') == 'EXIT':
+                                reason = signal.get('result', 'EXIT')
+                                profit = "0.0" 
+                                # Parse profit from reason if possible: CLOSED_X_TRADES_PNL_$10.00
+                                if "PNL_" in reason:
                                     try:
-                                        rsi_str = reason.split('RSI=')[1].split('|')[0].strip()
-                                        rsi_val = float(rsi_str)
+                                        profit = reason.split("PNL_")[1]
                                     except: pass
+                                    
+                                f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},SELL,{close_price:.4f},0,0,0,{reason},{profit}\n")
+                                print(f"📝 Logged SELL at {dt}")
+
+                            elif signal.get('signal') in ['BUY', 'LONG', 'SHORT', 'SELL']:
+                                rsi = signal.get('rsi', 0)
+                                atr = signal.get('atr', 0)
+                                reason = f"RSI{int(rsi)}+CONFIRM"
+                                direction = signal.get('signal')
+                                if direction == 'LONG': direction = 'BUY'
+                                elif direction == 'SHORT': direction = 'SELL'
                                 
-                                f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},WAIT,{close_price:.4f},{rsi_val:.1f},0,0,{reason},\n")
+                                f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},{direction},{close_price:.4f},{rsi:.1f},0,{atr:.4f},{reason},\n")
+                                print(f"📝 Logged {direction} at {dt}")
+                
+                if mock_dynamodb:
+                    logs = mock_dynamodb.get_trades_at(dt.isoformat())
+                    for log in logs:
+                        if log.get('Status') == 'SKIPPED':
+                            reason = log.get('ExitReason', 'NO_SIGNAL')
+                            reason = reason.replace(',', ';') 
+                            rsi_val = 0
+                            if 'RSI=' in reason:
+                                try:
+                                    rsi_str = reason.split('RSI=')[1].split('|')[0].strip()
+                                    rsi_val = float(rsi_str)
+                                except: pass
+                            
+                            f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},WAIT,{close_price:.4f},{rsi_val:.1f},0,0,{reason},\n")
 
             except Exception as e:
                 logger.error(f"Error at {dt}: {e}")
@@ -202,12 +236,9 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
 def run_test(asset_class, symbol, days, start_date=None, offset_days=0):
     logger.info(f"Starting test for {asset_class} - {symbol} over {days} days")
     
-    # 1. Load Data from S3
     loader = S3Loader()
     market_data = loader.fetch_historical_data(symbol, days, offset_days)
     news_data = loader.fetch_news_data(symbol, days, offset_days)
-    
-    # Load Macro data
     macro_map = load_macro_data(loader, days, offset_days)
     
     if not market_data:
@@ -219,9 +250,6 @@ def run_test(asset_class, symbol, days, start_date=None, offset_days=0):
     mock_dynamodb = InMemoryDynamoDB()
     s3_requests = S3RequestsMock(macro_map)
 
-    # 2. Setup Patches & Import Bot
-    
-    # Mock boto3.dynamodb.conditions.Attr
     class MockCondition:
         def __init__(self, value='MOCK'):
             self.value = value
@@ -230,23 +258,14 @@ def run_test(asset_class, symbol, days, start_date=None, offset_days=0):
         def __and__(self, other):
             return MockCondition(f"{self.value} & {other.value}")
             
-    mock_attr = MagicMock()
-    mock_attr.eq.side_effect = lambda val: MockCondition(f"EQ({val})")
-    
-    # We need Attr to return an object that has .eq method which returns a MockCondition
-    # Actually, Attr('Status') returns an object that has .eq('OPEN')
-    # .eq('OPEN') returns a Condition object that has .__and__
-    
     mock_condition_builder = MagicMock()
     mock_condition_builder.eq.side_effect = lambda val: MockCondition(f"EQ({val})")
-    
     mock_conditions = MagicMock()
     mock_conditions.Attr.return_value = mock_condition_builder
     mock_conditions.Key.return_value = mock_condition_builder
 
-    # Apply patches
     with patch('boto3.resource') as mock_resource, \
-         patch('boto3.dynamodb.conditions', mock_conditions, create=True):  # Create mock if not exists
+         patch('boto3.dynamodb.conditions', mock_conditions, create=True):
         
         mock_resource.return_value = mock_dynamodb
         

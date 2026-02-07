@@ -139,7 +139,10 @@ class ForexStrategies:
         # Vérifie si on est dans la session optimale pour cet actif
         # Pour les Indices: Session US uniquement (15h-22h Paris)
         if TRADING_WINDOWS_AVAILABLE:
-            if not is_within_golden_window(pair):
+            print(f"DEBUG: Checking Golden Window for {pair}")
+            is_valid = is_within_golden_window(pair)
+            print(f"DEBUG: is_within_golden_window({pair}) -> {is_valid}")
+            if not is_valid:
                 # Hors session optimale - on SKIP
                 return None
         
@@ -233,34 +236,54 @@ class ForexStrategies:
         
         # --- STRATÉGIE 1: TREND PULLBACK ---
         if strategy == 'TREND_PULLBACK':
+            print(f"DEBUG: TREND_PULLBACK Analysis - Close={current['close']:.2f} SMA200={current.get('SMA_200', 'N/A')} EMA50={current.get('EMA_50', 'N/A')} RSI={current.get('RSI', 'N/A')}")
+            
             if 'SMA_200' not in df.columns or pd.isna(current['SMA_200']):
+                print("DEBUG: SMA_200 missing or NaN")
                 return None
             
             is_bull_trend = (current['close'] > current['SMA_200']) and (current['EMA_50'] > current['SMA_200'])
             
             if is_bull_trend:
-                if current['RSI'] < params['rsi_oversold']:
+                # V5.1 FIX: Check Current OR Previous RSI to catch V-shape bounces
+                rsi_val = float(current['RSI'])
+                prev_rsi = float(prev['RSI'])
+                rsi_trigger = (rsi_val < params['rsi_oversold']) or (prev_rsi < params['rsi_oversold'])
+                
+                if rsi_trigger:
+                    print(f"DEBUG: Bull Trend + RSI Trigger (Cur={rsi_val:.1f}, Prev={prev_rsi:.1f} < {params['rsi_oversold']})")
                     if atr > 0.0005:
-                        if ForexStrategies.check_reversal(current, 'LONG'):
+                         reversal = ForexStrategies.check_reversal(current, 'LONG')
+                         print(f"DEBUG: Reversal Check -> {reversal}")
+                         if reversal:
                             signal = 'LONG'
                             sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
                             tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
                             stop_loss = entry_price - sl_dist
                             take_profit = entry_price + tp_dist
+            else:
+                 pass # print("DEBUG: Not in Bull Trend")
 
         # --- STRATÉGIE 2: BOLLINGER BREAKOUT ---
         elif strategy == 'BOLLINGER_BREAKOUT':
             if 'BBU' not in df.columns or pd.isna(current['BBU']):
                 return None
                 
+            print(f"DEBUG: BB Analysis - Close={current['close']:.2f} BBU={current['BBU']:.2f} EMA50={current.get('EMA_50', 'N/A')}")
+            
             if current['close'] > current['BBU'] and prev['close'] <= prev['BBU']:
+                print(f"DEBUG: BB Upside Breakout Detected ({prev['close']:.2f} -> {current['close']:.2f} > {current['BBU']:.2f})")
                 if current['close'] > current['EMA_50']:
-                    if ForexStrategies.check_reversal(current, 'LONG'):
+                    reversal = ForexStrategies.check_reversal(current, 'LONG')
+                    print(f"DEBUG: BB Trend OK + Reversal Check -> {reversal}")
+                    if reversal:
                         signal = 'LONG'
                         sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
                         tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
                         stop_loss = entry_price - sl_dist
                         take_profit = entry_price + tp_dist
+                else:
+                     print(f"DEBUG: BB Breakout but Below EMA50 ({current['close']:.2f} < {current['EMA_50']:.2f})")
                 
             elif current['close'] < current['BBL'] and prev['close'] >= prev['BBL']:
                 if current['close'] < current['EMA_50']:

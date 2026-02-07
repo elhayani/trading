@@ -109,6 +109,10 @@ def manage_exits(pair, current_price, asset_class='Indices'):
             trade_type = trade.get('Type', 'LONG').upper()
             size = float(trade.get('Size', CAPITAL_PER_TRADE))
             
+            # Defensive check: ensure trade is actually OPEN (improves robustness against eventual consistency or mock issues)
+            if trade.get('Status') != 'OPEN':
+                continue
+            
             if entry_price == 0:
                 continue
             

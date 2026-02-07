@@ -21,7 +21,11 @@ class S3Loader:
         """
         end_time = datetime.now() - timedelta(days=offset_days)
         start_time = end_time - timedelta(days=days)
-        
+
+        # Check for Commodities (CSV format)
+        if symbol in ['CL=F', 'CL', 'GC=F', 'GC']:
+            return self._fetch_commodities_csv(symbol, start_time, end_time)
+
         start_year = start_time.year
         end_year = end_time.year
         years = range(start_year, end_year + 1)
@@ -50,6 +54,66 @@ class S3Loader:
         filtered.sort(key=lambda x: x[0])
         
         return filtered
+
+    def _fetch_commodities_csv(self, symbol, start_time, end_time):
+        """
+        Loads Commodities data from CSV: historical/commodities/{SYM}_1d_2010_2023.csv
+        """
+        import csv
+        import io
+
+        # Map symbol to file prefix
+        if symbol in ['CL=F', 'CL']:
+            file_key = "historical/commodities/CL_1d_2010_2023.csv"
+        elif symbol in ['GC=F', 'GC']:
+             file_key = "historical/commodities/GC_1d_2010_2023.csv"
+        else:
+            return []
+
+        logger.info(f"Downloading CSV data for {symbol} from {file_key}...")
+
+        try:
+            resp = self.s3_client.get_object(Bucket=self.bucket, Key=file_key)
+            content = resp['Body'].read().decode('utf-8')
+            
+            all_ohlcv = []
+            reader = csv.DictReader(io.StringIO(content))
+            
+            start_ts = int(start_time.timestamp() * 1000)
+            end_ts = int(end_time.timestamp() * 1000)
+            
+            for row in reader:
+                # Date format YYYY-MM-DD
+                dt_str = row.get('Date')
+                if not dt_str: continue
+                
+                try:
+                    dt = datetime.strptime(dt_str, "%Y-%m-%d")
+                    ts = int(dt.timestamp() * 1000)
+                    
+                    if start_ts <= ts <= end_ts:
+                        # Extract OHLCV
+                        # CSV: Date,close,high,low,open,volume
+                        # Output: [ts, open, high, low, close, volume]
+                        ohlcv = [
+                            ts,
+                            float(row.get('open', 0)),
+                            float(row.get('high', 0)),
+                            float(row.get('low', 0)),
+                            float(row.get('close', 0)),
+                            float(row.get('volume', 0))
+                        ]
+                        all_ohlcv.append(ohlcv)
+                except Exception as e:
+                    continue
+
+            all_ohlcv.sort(key=lambda x: x[0])
+            logger.info(f"Loaded {len(all_ohlcv)} daily candles for {symbol}")
+            return all_ohlcv
+
+        except Exception as e:
+            logger.error(f"Failed to load CSV {file_key}: {e}")
+            return []
 
     def fetch_news_data(self, symbol, days, offset_days=0):
         """

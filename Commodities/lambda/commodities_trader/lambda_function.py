@@ -122,15 +122,42 @@ def manage_exits(pair, current_price, asset_class='Commodities'):
             
             exit_reason = None
             
-            # Check Stop Loss
-            if pnl_pct <= STOP_LOSS_PCT:
-                exit_reason = "STOP_LOSS"
-                logger.warning(f"🛑 STOP LOSS HIT for {pair}: {pnl_pct:.2f}%")
+            # Check Stored Dynamic SL/TP (Priority)
+            stored_sl = float(trade.get('SL', 0))
+            stored_tp = float(trade.get('TP', 0))
+            
+            # Check Dynamic Stop Loss (ATR Based)
+            if stored_sl > 0:
+                if trade_type in ['LONG', 'BUY'] and current_price <= stored_sl:
+                    exit_reason = "STOP_LOSS_ATR"
+                    logger.warning(f"🛑 ATR STOP LOSS HIT for {pair}: {current_price} <= {stored_sl}")
+                elif trade_type in ['SHORT', 'SELL'] and current_price >= stored_sl:
+                    exit_reason = "STOP_LOSS_ATR"
+                    logger.warning(f"🛑 ATR STOP LOSS HIT for {pair}: {current_price} >= {stored_sl}")
+
+            # Check Dynamic Take Profit (ATR Based)
+            if not exit_reason and stored_tp > 0:
+                if trade_type in ['LONG', 'BUY'] and current_price >= stored_tp:
+                    exit_reason = "TAKE_PROFIT_ATR"
+                    logger.info(f"💎 ATR TAKE PROFIT HIT for {pair}: {current_price} >= {stored_tp}")
+                elif trade_type in ['SHORT', 'SELL'] and current_price <= stored_tp:
+                    exit_reason = "TAKE_PROFIT_ATR"
+                    logger.info(f"💎 ATR TAKE PROFIT HIT for {pair}: {current_price} <= {stored_tp}")
+
+            # Fallback: Global Safety Nets (Circuit Breakers)
+            if not exit_reason:
+                if pnl_pct <= STOP_LOSS_PCT: # Default -3% (Safety)
+                    # Only trigger if Stored SL didn't exist or is wider than safety? 
+                    # Actually, if ATR SL is -7%, we don't want this -3% to trigger.
+                    # So we only use this if Stored SL is 0 (not set).
+                    if stored_sl == 0:
+                        exit_reason = "STOP_LOSS_HARD"
+                        logger.warning(f"🛑 HARD STOP LOSS HIT for {pair}: {pnl_pct:.2f}%")
                 
-            # Check Take Profit
-            elif pnl_pct >= HARD_TP_PCT:
-                exit_reason = "TAKE_PROFIT"
-                logger.info(f"💎 TAKE PROFIT HIT for {pair}: {pnl_pct:.2f}%")
+                elif pnl_pct >= HARD_TP_PCT: # Default +4%
+                    if stored_tp == 0:
+                        exit_reason = "TAKE_PROFIT_HARD"
+                        logger.info(f"💎 HARD TAKE PROFIT HIT for {pair}: {pnl_pct:.2f}%")
             
             if exit_reason:
                 history_table.update_item(
