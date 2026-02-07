@@ -566,7 +566,7 @@ def ask_bedrock(symbol, rsi, news_context, portfolio_stats, history):
 Return ONLY a valid JSON object, no markdown:
 {{
     "decision": "CONFIRM" | "CANCEL",
-    "reason": "Short summary of why (max 100 chars)",
+    "reason": "Short summary of why (max 200 chars)",
     "confidence": 0-100
 }}
 </output_format>
@@ -963,7 +963,7 @@ def lambda_handler(event, context):
                     "signal_strength": signal_strength
                 }
 
-        log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {RSI_BUY_THRESHOLD}", current_price, asset_class)
+        log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {dynamic_rsi_threshold} (Threshold)", current_price, asset_class)
         return {"status": "IDLE", "rsi": round(rsi, 2), "threshold": RSI_BUY_THRESHOLD, "asset": symbol}
     except Exception as e:
         logger.error(f"Global Error: {e}")

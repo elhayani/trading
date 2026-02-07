@@ -268,7 +268,7 @@ def lambda_handler(event, context):
                     row_bg = "#fef2f2"
                 elif status == 'SKIPPED':
                     reason = ev.get('ExitReason', '') or ev.get('AI_Reason', '')
-                    event_desc = f"⚪ <i>Skipped: {reason[:40]}...</i>"
+                    event_desc = f"⚪ <i>Skipped: {reason}</i>"
                     row_bg = "#ffffff"
                 else:
                     event_desc = f"{status}"
@@ -417,7 +417,7 @@ def lambda_handler(event, context):
             .section-title {{ font-size: 12px; font-weight: bold; color: #64748b; padding: 20px 20px 10px 20px; border-left: 4px solid #3b82f6; }}
             .empire-table {{ width: 100%; border-collapse: collapse; }}
             .empire-table th {{ background: #f1f5f9; padding: 12px; font-size: 11px; color: #64748b; }}
-            .empire-table td {{ padding: 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }}
+            .empire-table td {{ padding: 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; word-break: break-word; white-space: normal; }}
             .badge {{ padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; }}
             .badge.LONG {{ background: #dcfce7; color: #166534; }}
             .badge.SHORT {{ background: #fee2e2; color: #991b1b; }}
