@@ -1,6 +1,6 @@
-# Configuration Indices V6.0 - Optimized Risk/Reward
+# Configuration Indices V6.2 - HYBRID OPTIMIZATION for Bull Markets
 # Validée par Backtest 2024-2026
-# V6.0 UPDATE: Better R/R ratio (1:3.0) + Trailing Stop activation
+# V6.2 UPDATE: RSI 58 + SL Widened (ATR 1.8 + Fixed -5%) for RSI 58 entries
 
 CONFIGURATION = {
     # S&P 500 (Trend Mean Reversion - Sniper Mode)
@@ -11,9 +11,9 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 52,  # V6.1: Tighter filter (was 55) for premium setups
-            'sl_atr_mult': 1.4,  # V6.1: Slightly tighter (was 1.5)
-            'tp_atr_mult': 5.0,  # V6.1: Increased from 4.5 to 5.0 (R/R 1:3.6)
+            'rsi_oversold': 58,  # V6.2: Bull market optimized (was 52) - captures 66% opportunities
+            'sl_atr_mult': 1.8,  # V6.2: Widened (was 1.4) - lets trades breathe at higher RSI
+            'tp_atr_mult': 5.0,  # V6.2: Keep (good R/R 1:3.6)
             'min_volume_mult': 0.5,
             # V6.0 Trailing Stop Parameters
             'trailing_activation_pct': 0.8,  # V6.1: Earlier activation (was 1.0)
@@ -30,9 +30,9 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 40,
-            'sl_atr_mult': 1.4,  # V6.1: Tighter SL (was 1.5)
-            'tp_atr_mult': 5.5,  # V6.1: Even more aggressive (was 5.0) - Nasdaq rockets
+            'rsi_oversold': 45,  # V6.2: Optimized (was 40) - more selective
+            'sl_atr_mult': 1.8,  # V6.2: Widened (was 1.4) - same logic as S&P
+            'tp_atr_mult': 5.5,  # V6.2: Keep - Nasdaq rockets
             # V6.0 Trailing Stop Parameters
             'trailing_activation_pct': 1.2,  # V6.1: Earlier activation (was 1.5)
             'trailing_distance_pct': 0.6,    # V6.1: Tighter trail (was 0.8)

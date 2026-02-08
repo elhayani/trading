@@ -1,0 +1,38 @@
+2026-02-08 22:35:44,398 - INFO - Starting test for Indices - ^GSPC over 365 days
+2026-02-08 22:35:44,418 - INFO - Found credentials in shared credentials file: ~/.aws/credentials
+2026-02-08 22:35:45,210 - INFO - Downloading historical data for ^GSPC (365 days)...
+2026-02-08 22:35:45,420 - INFO - Loaded 47 candles from S3 for ^GSPC
+2026-02-08 22:35:45,429 - INFO - Downloading news data for ^GSPC (365 days)...
+2026-02-08 22:35:45,513 - WARNING - Failed to load news news/^GSPC/2025.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,531 - WARNING - Failed to load news news/^GSPC/2026.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,531 - INFO - Downloading historical data for ^VIX (365 days)...
+2026-02-08 22:35:45,550 - WARNING - Failed to load historical/^VIX/2025.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,567 - WARNING - Failed to load historical/^VIX/2026.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,567 - INFO - Downloading historical data for DX-Y.NYB (365 days)...
+2026-02-08 22:35:45,585 - WARNING - Failed to load historical/DX-Y.NYB/2025.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,601 - WARNING - Failed to load historical/DX-Y.NYB/2026.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,601 - INFO - Downloading historical data for ^TNX (365 days)...
+2026-02-08 22:35:45,619 - WARNING - Failed to load historical/^TNX/2025.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,640 - WARNING - Failed to load historical/^TNX/2026.json: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.
+2026-02-08 22:35:45,640 - INFO - Loaded 47 candles and 0 news items.
+2026-02-08 22:35:46,069 - INFO - Starting loop from candle 46 to 47
+2026-02-08 22:35:46,070 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 22:35:46,070 - INFO - Trying DXY source: ICE Dollar Index (DX-Y.NYB)
+2026-02-08 22:35:46,070 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 22:35:46,070 - WARNING - ❌ Failed to fetch from ICE Dollar Index (DX-Y.NYB)
+2026-02-08 22:35:46,070 - INFO - Trying DXY source: Invesco DB USD Bullish ETF (UUP)
+2026-02-08 22:35:46,071 - WARNING - Yahoo API error for UUP: 404
+2026-02-08 22:35:46,071 - WARNING - ❌ Failed to fetch from Invesco DB USD Bullish ETF (UUP)
+2026-02-08 22:35:46,071 - INFO - Trying DXY source: WisdomTree USD Bullish Fund (USDU)
+2026-02-08 22:35:46,071 - WARNING - Yahoo API error for USDU: 404
+2026-02-08 22:35:46,071 - WARNING - ❌ Failed to fetch from WisdomTree USD Bullish Fund (USDU)
+2026-02-08 22:35:46,071 - ERROR - 🚨 ALL DXY SOURCES FAILED - Trading blind on Dollar!
+2026-02-08 22:35:46,071 - WARNING - ⚠️ DXY DATA UNAVAILABLE - Using neutral defaults
+2026-02-08 22:35:46,071 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 22:35:46,071 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 22:35:46,071 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 22:35:46,071 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 22:35:46,079 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 22:35:46,079 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 22:35:46,080 - WARNING - ⚠️ Not enough data for ^GSPC
+2026-02-08 22:35:46,080 - INFO - Test complete. CSV Log saved to backtest_Indices_^GSPC_20260208_223546.log

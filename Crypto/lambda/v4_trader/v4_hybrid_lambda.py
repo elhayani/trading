@@ -632,9 +632,11 @@ def close_all_positions(open_trades, current_price, reason):
     
     for trade in open_trades:
         entry_price = float(trade['EntryPrice'])
-        size = float(trade.get('Size', 0))
-        # ✅ FIXED: PnL in $ = (exit - entry) * quantity
-        trade_pnl = (current_price - entry_price) * size
+        # V6.2: Use position VALUE (Cost) for consistency across all bots
+        position_value = float(trade.get('Cost', 0))
+        # Calculate P&L as percentage of position value
+        pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+        trade_pnl = (pnl_pct / 100) * position_value
         total_pnl += trade_pnl
         
         empire_table.update_item(

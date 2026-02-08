@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class S3Loader:
     def __init__(self, bucket_name=DEFAULT_BUCKET, region_name=REGION):
         self.bucket = bucket_name
+        self.region = region_name
         self.s3_client = boto3.client('s3', region_name=region_name)
         
     def fetch_historical_data(self, symbol, days, offset_days=0):
@@ -176,6 +177,102 @@ class S3Loader:
             
             if ts and start_ts <= ts <= end_ts:
                 filtered_news.append(n)
-                
+
         return filtered_news
+
+    def create_bucket_if_not_exists(self):
+        """
+        Crée le bucket S3 s'il n'existe pas déjà.
+        """
+        try:
+            # Vérifier si le bucket existe
+            self.s3_client.head_bucket(Bucket=self.bucket)
+            logger.info(f"Bucket {self.bucket} existe déjà")
+            return True
+        except Exception as e:
+            # Le bucket n'existe pas, le créer
+            logger.info(f"Création du bucket {self.bucket}...")
+            try:
+                if self.region == 'us-east-1':
+                    # us-east-1 ne nécessite pas LocationConstraint
+                    self.s3_client.create_bucket(Bucket=self.bucket)
+                else:
+                    self.s3_client.create_bucket(
+                        Bucket=self.bucket,
+                        CreateBucketConfiguration={'LocationConstraint': self.region}
+                    )
+                logger.info(f"✅ Bucket {self.bucket} créé avec succès")
+                return True
+            except Exception as create_err:
+                logger.error(f"❌ Échec de création du bucket: {create_err}")
+                return False
+
+    def upload_historical_data(self, symbol, data, year):
+        """
+        Upload les données historiques vers S3 au format JSON.
+        Format: historical/{symbol}/{year}.json
+
+        Args:
+            symbol: Le symbole (ex: ^GSPC, EURUSD)
+            data: Liste de candles [timestamp, open, high, low, close, volume]
+            year: L'année des données
+        """
+        if not data:
+            logger.warning(f"Aucune donnée à uploader pour {symbol}")
+            return False
+
+        # Nettoyer le symbole pour le nom de fichier
+        safe_symbol = symbol.replace('/', '_')
+        key = f"historical/{safe_symbol}/{year}.json"
+
+        try:
+            # Convertir en JSON
+            json_data = json.dumps(data, indent=2)
+
+            # Upload vers S3
+            self.s3_client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=json_data,
+                ContentType='application/json'
+            )
+
+            logger.info(f"✅ Uploaded {len(data)} candles to s3://{self.bucket}/{key}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Échec d'upload vers {key}: {e}")
+            return False
+
+    def upload_news_data(self, symbol, data, year):
+        """
+        Upload les données de news vers S3 au format JSON.
+        Format: news/{symbol}/{year}.json
+
+        Args:
+            symbol: Le symbole
+            data: Liste d'articles de news
+            year: L'année des données
+        """
+        if not data:
+            logger.warning(f"Aucune news à uploader pour {symbol}")
+            return False
+
+        safe_symbol = symbol.replace('/', '_')
+        key = f"news/{safe_symbol}/{year}.json"
+
+        try:
+            json_data = json.dumps(data, indent=2)
+
+            self.s3_client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=json_data,
+                ContentType='application/json'
+            )
+
+            logger.info(f"✅ Uploaded {len(data)} news items to s3://{self.bucket}/{key}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Échec d'upload news vers {key}: {e}")
+            return False
 

@@ -248,10 +248,33 @@ def calculate_position_size_from_capital(
         'num_assets': num_assets,
     }
     
-    # Calculer la quantité si entry_price fourni
+    # Calculer la quantité basée sur le RISQUE (stop loss)
     if entry_price and entry_price > 0:
-        quantity = position_usd / entry_price
-        result['quantity'] = round(quantity, 8)
+        if stop_loss and stop_loss > 0:
+            # 🎯 RISK-BASED SIZING V6.2 FIX
+            # Risque = 2% du capital (standard)
+            risk_per_trade = 0.02  # 2%
+            risk_amount_usd = current_capital * risk_per_trade
+
+            # Distance du stop loss en prix absolu
+            sl_distance = abs(entry_price - stop_loss)
+
+            # Quantité = Montant à risquer / Distance du SL
+            # Si SL = 5%, on met moins de capital
+            # Si SL = 1%, on peut mettre plus de capital
+            quantity = risk_amount_usd / sl_distance
+
+            # Position notionnelle réelle
+            actual_position_usd = quantity * entry_price
+
+            result['quantity'] = round(quantity, 8)
+            result['actual_position_usd'] = round(actual_position_usd, 2)
+            result['risk_amount_usd'] = round(risk_amount_usd, 2)
+
+        else:
+            # Fallback si pas de stop loss (utiliser position_usd comme avant)
+            quantity = position_usd / entry_price
+            result['quantity'] = round(quantity, 8)
     
     # Calculer la perte max si SL fourni
     if entry_price and stop_loss and entry_price > 0:

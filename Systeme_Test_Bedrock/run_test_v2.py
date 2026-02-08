@@ -356,16 +356,47 @@ def fetch_crypto_from_binance(symbol, days, offset_days=0):
     logger.info(f"✅ Loaded {len(all_data)} candles from Binance for {binance_symbol}")
     return all_data
 
+def upload_data_to_s3(loader, symbol, data):
+    """
+    Upload downloaded data to S3, grouped by year.
+
+    Args:
+        loader: S3Loader instance
+        symbol: Trading symbol
+        data: List of candles [timestamp, open, high, low, close, volume]
+    """
+    if not data:
+        return
+
+    # Ensure bucket exists
+    loader.create_bucket_if_not_exists()
+
+    # Group data by year
+    data_by_year = {}
+    for candle in data:
+        timestamp = candle[0]
+        dt = datetime.fromtimestamp(timestamp / 1000)
+        year = dt.year
+
+        if year not in data_by_year:
+            data_by_year[year] = []
+        data_by_year[year].append(candle)
+
+    # Upload each year
+    for year, year_data in data_by_year.items():
+        loader.upload_historical_data(symbol, year_data, year)
+
 def fetch_market_data_with_fallback(symbol, days, offset_days=0):
     """
     Tries to fetch from S3Loader, falls back to YFinance/Binance if empty or fails.
+    After fallback, uploads data to S3 for future use.
     """
     loader = S3Loader()
     data = []
-    
+
     # Check if this is a crypto symbol
     is_crypto = '/' in symbol or symbol in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BTCUSDT', 'ETHUSDT']
-    
+
     # 1. Try S3
     try:
         import pandas as pd
@@ -382,6 +413,8 @@ def fetch_market_data_with_fallback(symbol, days, offset_days=0):
         try:
             data = fetch_crypto_from_binance(symbol, days, offset_days)
             if data:
+                # Upload to S3 for future use
+                upload_data_to_s3(loader, symbol, data)
                 return data
         except Exception as e:
             logger.warning(f"Binance fallback failed: {e}")
@@ -440,11 +473,15 @@ def fetch_market_data_with_fallback(symbol, days, offset_days=0):
                     formatted_data.append([ts, op, hi, lo, cl, vo])
 
             logger.info(f"Loaded {len(formatted_data)} candles from YFinance for {symbol}")
+
+            # Upload to S3 for future use
+            upload_data_to_s3(loader, symbol, formatted_data)
+
             return formatted_data
-            
+
     except Exception as e:
         logger.error(f"YFinance Fallback failed: {e}")
-        
+
     return []
 
 def run_test(asset_class, symbol, days, start_date=None, offset_days=0):

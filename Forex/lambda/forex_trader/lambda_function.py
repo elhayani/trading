@@ -124,19 +124,21 @@ def manage_exits(pair, current_price, custom_timestamp=None, asset_class='Forex'
         for trade in open_trades:
             entry_price = float(trade.get('EntryPrice', 0))
             trade_type = trade.get('Type', 'LONG').upper()
-            size = float(trade.get('Size', CAPITAL_PER_TRADE))
+            # V6.2 FIX: Use position VALUE (Cost), not Size (quantity)
+            position_value = float(trade.get('Cost', CAPITAL_PER_TRADE))
             current_sl = float(trade.get('SL', entry_price * (1 + STOP_LOSS_PCT/100)))
-            
+
             if entry_price == 0:
                 continue
-            
+
             # Calculate PnL based on direction
             if trade_type in ['LONG', 'BUY']:
                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
             else:  # SHORT/SELL
                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
-            
-            pnl_dollars = (pnl_pct / 100) * size
+
+            # V6.2 FIX: Calculate P&L using position VALUE, not quantity
+            pnl_dollars = (pnl_pct / 100) * position_value
             
             exit_reason = None
             

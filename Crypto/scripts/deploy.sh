@@ -20,7 +20,7 @@ NC='\033[0m' # No Color
 # Configuration
 STACK_NAME="V4TradingStack"
 REGION="eu-west-3"
-CDK_DIR="Crypto/infrastructure/cdk"
+CDK_DIR="infrastructure/cdk"
 
 # Step 1: Prerequisites
 echo "📋 Step 1: Checking Prerequisites..."
@@ -68,8 +68,8 @@ echo ""
 echo "📚 Step 2.1: Building Dependency Layer..."
 echo "----------------------------------------------------------------------"
 
-LAYER_DIR="Crypto/lambda/layer/python"
-rm -rf Crypto/lambda/layer
+LAYER_DIR="lambda/layer/python"
+rm -rf lambda/layer
 mkdir -p $LAYER_DIR
 
 echo "  → Installing CCXT & YFinance..."

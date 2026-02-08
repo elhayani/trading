@@ -37,14 +37,21 @@ logger = logging.getLogger(__name__)
 # Yahoo Finance API endpoints
 YAHOO_API_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 
-# Symboles des indicateurs macro
+# Symboles des indicateurs macro (avec fallbacks)
 MACRO_SYMBOLS = {
-    'DXY': 'DX-Y.NYB',      # Dollar Index
+    'DXY': 'DX-Y.NYB',      # Dollar Index (primary)
     'US10Y': '^TNX',         # US 10-Year Treasury Yield
     'VIX': '^VIX',           # Volatility Index (Fear Gauge)
     'GOLD': 'GC=F',          # Gold (Safe Haven)
     'SPY': 'SPY',            # S&P 500 ETF (Risk barometer)
 }
+
+# Fallback symbols for Dollar Index (DX-Y.NYB often 404s)
+DXY_FALLBACKS = [
+    ('DX-Y.NYB', 1.0, 'ICE Dollar Index'),           # Primary source
+    ('UUP', 1.0, 'Invesco DB USD Bullish ETF'),      # Fallback 1: correlates ~1:1 with DXY
+    ('USDU', 1.0, 'WisdomTree USD Bullish Fund'),    # Fallback 2: similar correlation
+]
 
 # Seuils pour déterminer le régime macro
 THRESHOLDS = {
@@ -127,23 +134,49 @@ def _fetch_yahoo_data(symbol: str, period: str = '2d') -> Optional[Dict]:
         return None
 
 
+def _fetch_dxy_with_fallback() -> Optional[Dict]:
+    """
+    🔄 Récupère les données DXY avec fallback sur UUP/USDU.
+    Yahoo Finance a des problèmes avec DX-Y.NYB (404), on essaie plusieurs sources.
+    """
+    for symbol, multiplier, source_name in DXY_FALLBACKS:
+        logger.info(f"Trying DXY source: {source_name} ({symbol})")
+        data = _fetch_yahoo_data(symbol)
+
+        if data is not None:
+            # Appliquer le multiplier si nécessaire (UUP/USDU ~= DXY)
+            data['price'] *= multiplier
+            data['prev_close'] *= multiplier
+            data['change_abs'] *= multiplier
+
+            logger.info(f"✅ DXY data fetched from {source_name}: {data['price']:.2f}")
+            return data
+
+        logger.warning(f"❌ Failed to fetch from {source_name} ({symbol})")
+
+    logger.error("🚨 ALL DXY SOURCES FAILED - Trading blind on Dollar!")
+    return None
+
+
 def get_dxy_data() -> Dict:
     """
     🇺🇸 Récupère les données du Dollar Index (DXY).
     Le DXY est LA référence pour le Risk-On/Risk-Off.
     """
-    data = _fetch_yahoo_data(MACRO_SYMBOLS['DXY'])
-    
+    data = _fetch_dxy_with_fallback()
+
     if data is None:
+        logger.warning("⚠️ DXY DATA UNAVAILABLE - Using neutral defaults")
         return {
             'value': 0,
             'change_pct': 0,
             'trend': 'UNKNOWN',
             'signal': 'NEUTRAL',
+            'source': 'FALLBACK (NO DATA)',
         }
-    
+
     change_pct = data['change_pct']
-    
+
     # Déterminer la tendance
     if change_pct > THRESHOLDS['DXY']['strong_dollar']:
         trend = 'RISING'
@@ -154,13 +187,14 @@ def get_dxy_data() -> Dict:
     else:
         trend = 'STABLE'
         signal = 'NEUTRAL'
-    
+
     return {
         'value': data['price'],
         'change_pct': change_pct * 100,  # En pourcentage
         'change_abs': data['change_abs'],
         'trend': trend,
         'signal': signal,
+        'source': data['symbol'],  # Track which source worked
     }
 
 

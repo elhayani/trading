@@ -63,7 +63,7 @@ except ImportError:
 # ==================== CONFIGURATION ====================
 INITIAL_CAPITAL = float(os.environ.get('INITIAL_CAPITAL', '400'))  # Capital initial total
 CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '2000')) # Default: 2000 per position (0.5% Risk)
-STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-4.0'))   # -4% Stop Loss (Indices are volatile)
+STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-5.0'))   # V6.2: -5% SL (was -4%) for RSI 58 entries
 HARD_TP_PCT = float(os.environ.get('HARD_TP', '5.0'))        # +5% Take Profit  
 COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '2')) # OPTIMIZED V5.8: 2h (Was 4h) for re-entries
 MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '5'))       # OPTIMIZED V5.9: 5 simultaneous trades
@@ -120,7 +120,8 @@ def manage_exits(pair, current_price, asset_class='Indices'):
         for trade in open_trades:
             entry_price = float(trade.get('EntryPrice', 0))
             trade_type = trade.get('Type', 'LONG').upper()
-            size = float(trade.get('Size', CAPITAL_PER_TRADE))
+            # V6.2 FIX: Use position VALUE (Cost), not Size (quantity)
+            position_value = float(trade.get('Cost', CAPITAL_PER_TRADE))
             current_sl = float(trade.get('SL', entry_price * (1 + STOP_LOSS_PCT/100)))
             
             # Defensive check
@@ -135,8 +136,9 @@ def manage_exits(pair, current_price, asset_class='Indices'):
                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
             else:  # SHORT/SELL
                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
-            
-            pnl_dollars = (pnl_pct / 100) * size
+
+            # V6.2 FIX: Calculate P&L using position VALUE, not quantity
+            pnl_dollars = (pnl_pct / 100) * position_value
             
             exit_reason = None
             
@@ -371,11 +373,39 @@ def lambda_handler(event, context):
                 signal['news_context'] = news_context
                 
                 if ai_decision['decision'] == 'CONFIRM':
+                    # --- V6.2 SIZING BASÉ SUR LE RISQUE (Risk-Based Position Sizing) ---
+                    current_exposure = portfolio['exposure']
+
+                    # Calculate risk-based position size using SL distance
+                    if POSITION_SIZING_AVAILABLE:
+                        entry_price = float(signal.get('entry', df.iloc[-1]['close']))
+                        stop_loss = signal.get('sl')
+
+                        position_info = calculate_position_size(
+                            symbol=pair,
+                            initial_capital=INITIAL_CAPITAL,
+                            dynamo_table=DYNAMO_TABLE,
+                            asset_class='Indices',
+                            entry_price=entry_price,
+                            stop_loss=stop_loss
+                        )
+
+                        # Use actual_position_usd (risk-based) if SL provided, else position_usd
+                        trade_allocation = position_info.get('actual_position_usd', position_info.get('position_usd', CAPITAL_PER_TRADE))
+
+                        # 🛡️ V6.2 Safety: Prevent negative/too-small positions
+                        if trade_allocation <= 0 or trade_allocation < 100:
+                            logger.warning(f"⚠️ Invalid position size ${trade_allocation:.2f}, using CAPITAL_PER_TRADE")
+                            trade_allocation = CAPITAL_PER_TRADE
+
+                        logger.info(f"💰 V6.2 Risk-Based Sizing: ${trade_allocation:.2f} | Risk: ${position_info.get('risk_amount_usd', 0):.2f}")
+                    else:
+                        # Fallback to fixed allocation
+                        trade_allocation = CAPITAL_PER_TRADE
+                        logger.warning("⚠️ Using fixed CAPITAL_PER_TRADE (position_sizing unavailable)")
+
                     # --- V5.9 SIZING DÉGRESSIF (Risk Management) ---
                     # Si on a déjà 3 positions ou plus, on réduit la taille de 50%
-                    current_exposure = portfolio['exposure']
-                    trade_allocation = CAPITAL_PER_TRADE
-                    
                     if current_exposure >= 3:
                         trade_allocation *= 0.5
                         logger.info(f"⚠️ High Exposure ({current_exposure}): Sizing reduced to ${trade_allocation} (50%)")
@@ -491,6 +521,38 @@ def ask_bedrock(pair, signal_data, news_context, macro_data=None):
     # Custom instruction for Momentum/Breakout (Nasdaq) - Don't block momentum easily
     if 'BOLLINGER_BREAKOUT' in signal_data.get('strategy', ''):
          strategy_instruction = "This is a MOMENTUM trade (High Volatility). Speed is critical. Only CANCEL if the news is EXTREMELY contradictory (e.g. Rate Hike for a Long). If news is just noise or mildly negative, CONFIRM to capture the momentum."
+
+    # V6.2: Custom instruction for S&P 500 TREND_PULLBACK in Bull Markets
+    if 'TREND_PULLBACK' in signal_data.get('strategy', '') and pair == '^GSPC':
+        rsi = signal_data.get('rsi', 50)
+        if rsi > 50 and rsi <= 65:
+            # Bull market pullback - be momentum-friendly
+            strategy_instruction = """This is a PULLBACK in a BULL MARKET (RSI 50-65).
+
+CONTEXT: Market is in uptrend. Small pullbacks and lateral consolidations are HEALTHY buying opportunities.
+
+KEY RULES:
+1. ✅ Lateral consolidation (sideways) → CONFIRM (accumulation phase)
+2. ✅ Small pullback in uptrend (< 3% from high) → CONFIRM (normal breathing)
+3. ✅ Neutral or mildly negative news → CONFIRM (bull markets climb wall of worry)
+
+ONLY CANCEL IF:
+- Major bearish reversal (Head & Shoulders confirmed)
+- Extremely negative news (War, Bank crisis, Emergency Fed hike)
+- VIX spike > 30 with negative news
+
+DEFAULT: In uptrends, prefer CONFIRM unless evidence is OVERWHELMING."""
+
+        elif rsi > 65:
+            # Near overbought - be slightly more cautious
+            strategy_instruction = """This is a LATE-STAGE PULLBACK (RSI > 65, near overbought).
+
+Be slightly more selective:
+- ✅ CONFIRM if pullback > 2% and news neutral/positive
+- ⚠️ CANCEL if minor pullback (< 1%) with negative news
+- ⚠️ CANCEL if major divergence (volume dropping, momentum waning)
+
+Bias: Neutral to slightly cautious."""
 
     # --- V5.1 Add Macro Context to Prompt ---
     macro_context_str = ""
