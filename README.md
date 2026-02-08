@@ -1,4 +1,4 @@
-# 🚀 Empire V6.1 "Maximum Performance" - AI Trading System
+# 🚀 Empire V6.2 "P&L Fix Edition" - AI Trading System
 
 > **Système de trading multi-actifs automatisé** combinant analyse technique avancée, IA générative (AWS Bedrock), trailing stops universels, et gestion de risque optimisée pour maximiser les profits.
 
@@ -10,8 +10,27 @@
 💰 Mode: LIVE (Toutes les stratégies actives)
 ⏰ Cron: Toutes les heures
 🎯 Portfolio: Crypto, Forex, Indices, Commodities
-🆕 Version: V6.1 - Maximum Performance Edition 💎
+🆕 Version: V6.2 - P&L Fix Edition 💎
 ```
+
+---
+
+## 🆕 V6.2 "P&L Fix Edition" - Février 2026
+
+Version **V6.2** déployée pour corriger un bug critique de reporting P&L.
+
+### 🚨 Correction Critique V6.2 (P&L Reporting)
+**Problème** : Le calcul du P&L (Profit & Loss) utilisait la **quantité** (`Size`) au lieu de la **valeur USD** (`Cost`) de la position.
+**Impact** : Les profits affichés étaient minuscules (ex: $0.05 au lieu de $200).
+**Solution** :
+```python
+# AVANT (Incorrect)
+pnl_dollars = (pnl_pct / 100) * size  # Multiplie % par quantité (0.3)
+
+# APRÈS (Corrigé V6.2)
+pnl_dollars = (pnl_pct / 100) * position_value # Multiplie % par USD ($2000)
+```
+**Résultat** : P&L désormais cohérent avec la réalité économique.
 
 ---
 
@@ -175,10 +194,11 @@ def update_item(self, Key=None, UpdateExpression=None,
 ```
 Trading/
 ├── 📄 README.md                  # Ce fichier
-├── 📄 V6_1_BACKTEST_RESULTS.md   # Résultats validation 365j
+├── 📄 V6.2_PNL_FIX_SUMMARY.md    # 🚨 Détails du fix P&L V6.2
+├── 📄 V6_1_BACKTEST_RESULTS.md   # Résultats validation 365j (V6.1)
 ├── 📄 V6_1_OPTIMIZATION_REPORT.md # Détails optimisations
 │
-├── 🧠 shared/                    # Intelligence Centrale V6.1
+├── 🧠 shared/                    # Intelligence Centrale V6.2
 │   ├── modules/
 │   │   ├── trailing_stop.py        # Exit manager universel
 │   │   ├── macro_context.py        # Filtre macro
@@ -431,6 +451,7 @@ aws lambda update-function-configuration \
 
 ### Logs des Versions
 
+- **V6.2** (2026-02-08) : P&L Fix Edition - Correction critique du calcul des profits
 - **V6.1** (2026-02-08) : Maximum Performance - R/R optimisés
 - **V6.0** (2026-02-07) : Profit Maximizer - Trailing Stop universel
 - **V5.1** (2026-01-15) : Fortress Edition - Sécurité + Predictability
@@ -497,5 +518,5 @@ aws lambda update-function-configuration \
 
 ---
 
-**© 2026 Empire Trading Systems** - *V6.1 Maximum Performance Edition*
-*Dernière mise à jour : 2026-02-08 21:20 UTC*
+**© 2026 Empire Trading Systems** - *V6.2 P&L Fix Edition*
+*Dernière mise à jour : 2026-02-08 22:40 UTC*

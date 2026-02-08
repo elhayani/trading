@@ -35,7 +35,7 @@ class IndicesTradingStack(Stack):
             timeout=Duration.minutes(5),
             memory_size=512,
             environment={
-                "TRADING_MODE": "test"
+                "TRADING_MODE": "live",
             },
             log_retention=logs.RetentionDays.ONE_MONTH
         )

@@ -89,7 +89,7 @@ class V4TradingStack(Stack):
             environment={
                 "STATE_TABLE": state_table.table_name,
                 "HISTORY_TABLE": history_table.table_name,
-                "TRADING_MODE": "test",  # 'test' or 'live'
+                "TRADING_MODE": "live",  # 'test' or 'live'
                 "CAPITAL": "1000",
                 "SYMBOLS": "SOL/USDT",
                 "CHECK_INTERVAL": "3600",  # 1 hour
@@ -174,7 +174,7 @@ class V4TradingStack(Stack):
             memory_size=256,
             environment={
                 "SYMBOLS": "SOL/USDT",
-                "TRADING_MODE": "test",
+                "TRADING_MODE": "live",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
             },
             log_retention=logs.RetentionDays.ONE_MONTH
