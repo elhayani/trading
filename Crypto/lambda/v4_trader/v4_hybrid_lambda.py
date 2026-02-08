@@ -38,15 +38,15 @@ bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 EMPIRE_TABLE = "EmpireCryptoV4"
 empire_table = dynamodb.Table(EMPIRE_TABLE)
 
-# ==================== CONFIGURATION ====================
+# ==================== CONFIGURATION V6.1 OPTIMIZED ====================
 DEFAULT_SYMBOL = os.environ.get('SYMBOL', 'SOL/USDT')
-CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '133'))   # 400€ total / 3 max positions
-RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '45'))  # Relaxed to 45 (V5.1 Bull Market)
-RSI_SELL_THRESHOLD = float(os.environ.get('RSI_SELL_THRESHOLD', '75'))  # Overbought exit
-STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-5.0'))  # -5% Stop Loss
-HARD_TP_PCT = float(os.environ.get('HARD_TP', '5.0'))  # +5% Guaranteed Take Profit
-TRAILING_TP_PCT = float(os.environ.get('TRAILING_TP', '2.0'))  # +2% Trailing activation
-MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '3'))  # Max trades per pair
+CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '200'))   # 400€ total / 2 max positions (V6.1: reduced concentration)
+RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '42'))  # V6.1: Tighter filter (was 45)
+RSI_SELL_THRESHOLD = float(os.environ.get('RSI_SELL_THRESHOLD', '78'))  # V6.1: Let winners run (was 75)
+STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-3.5'))  # V6.1 CRITICAL FIX: Tighter SL (was -5.0)
+HARD_TP_PCT = float(os.environ.get('HARD_TP', '8.0'))  # V6.1 CRITICAL FIX: Better R/R (was 5.0) → Now 1:2.3
+TRAILING_TP_PCT = float(os.environ.get('TRAILING_TP', '1.5'))  # V6.1: Faster activation (was 2.0)
+MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '2'))  # V6.1: Reduced concentration risk (was 3)
 COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '4'))  # Hours between trades
 BTC_CRASH_THRESHOLD = float(os.environ.get('BTC_CRASH', '-0.08'))  # Relaxed crash filter (V5.1)
 
@@ -62,10 +62,10 @@ CIRCUIT_BREAKER_L2 = float(os.environ.get('CB_L2', '-0.10'))  # -10% BTC 24h = F
 CIRCUIT_BREAKER_L3 = float(os.environ.get('CB_L3', '-0.20'))  # -20% BTC 7d = SURVIVAL MODE
 CB_COOLDOWN_HOURS = float(os.environ.get('CB_COOLDOWN', '48'))  # Hours of trading pause after L2
 
-# 🎯 SOL TURBO MODE (Capture Volatilité 2025)
-SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '10.0'))  # +10% = activate trailing
-SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '3.0'))  # -3% trailing from peak
-VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.1'))  # Relaxed volume filter (1.1x)
+# 🎯 SOL TURBO MODE V6.1 (Capture Volatilité 2025)
+SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '6.0'))  # V6.1: Activate earlier (was 10.0)
+SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '2.5'))  # V6.1: Tighter trail (was 3.0)
+VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))  # V6.1: Slightly stricter (was 1.1)
 
 # 🚀 V5 ADVANCED OPTIMIZATIONS
 MOMENTUM_FILTER_ENABLED = os.environ.get('MOMENTUM_FILTER', 'true').lower() == 'true'

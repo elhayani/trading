@@ -14,7 +14,7 @@ echo ""
 # Configuration
 STACK_NAME="CommoditiesTradingStack"
 REGION="eu-west-3"
-CDK_DIR="Commodities/infrastructure/cdk"
+CDK_DIR="infrastructure/cdk"
 ACCOUNT_ID="946179054632"
 
 # Colors
@@ -25,8 +25,8 @@ NC='\033[0m'
 echo "📚 Step 1: Building Commodities Dependency Layer..."
 echo "----------------------------------------------------------------------"
 
-LAYER_DIR="Commodities/lambda/layer_commodities/python"
-rm -rf Commodities/lambda/layer_commodities
+LAYER_DIR="lambda/layer_commodities/python"
+rm -rf lambda/layer_commodities
 mkdir -p $LAYER_DIR
 
 echo "  → Installing yfinance, pandas_ta..."
@@ -59,7 +59,7 @@ rm -rf $LAYER_DIR/numba $LAYER_DIR/llvmlite $LAYER_DIR/scipy
 # Cleanup
 find $LAYER_DIR -name "__pycache__" -type d -exec rm -rf {} +
 
-echo -e "${GREEN}✅ Layer prepared in Commodities/lambda/layer_commodities${NC}"
+echo -e "${GREEN}✅ Layer prepared in lambda/layer_commodities${NC}"
 echo ""
 
 # Step 2: Deploy

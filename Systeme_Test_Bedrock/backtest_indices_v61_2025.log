@@ -1,0 +1,1004 @@
+2026-02-08 20:48:44,640 - INFO - Starting test for Indices - ^GSPC over 365 days
+2026-02-08 20:48:44,657 - INFO - Found credentials in shared credentials file: ~/.aws/credentials
+2026-02-08 20:48:45,099 - INFO - Downloading historical data for ^GSPC (365 days)...
+2026-02-08 20:48:45,196 - WARNING - Failed to load historical/^GSPC/2025.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:45,214 - WARNING - Failed to load historical/^GSPC/2026.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:45,214 - INFO - ⚠️ S3 Empty/Failed. Falling back to YFinance for ^GSPC...
+2026-02-08 20:48:45,644 - INFO - 📈 Index detected, using 1d interval for better coverage
+2026-02-08 20:48:45,644 - INFO - Downloading YF data (1d) for ^GSPC...
+2026-02-08 20:48:46,810 - INFO - Loaded 254 candles from YFinance for ^GSPC
+2026-02-08 20:48:46,817 - INFO - Downloading news data for ^GSPC (365 days)...
+2026-02-08 20:48:46,889 - WARNING - Failed to load news news/^GSPC/2025.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,900 - WARNING - Failed to load news news/^GSPC/2026.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,901 - INFO - Downloading historical data for ^VIX (365 days)...
+2026-02-08 20:48:46,910 - WARNING - Failed to load historical/^VIX/2025.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,922 - WARNING - Failed to load historical/^VIX/2026.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,922 - INFO - Downloading historical data for DX-Y.NYB (365 days)...
+2026-02-08 20:48:46,934 - WARNING - Failed to load historical/DX-Y.NYB/2025.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,949 - WARNING - Failed to load historical/DX-Y.NYB/2026.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,949 - INFO - Downloading historical data for ^TNX (365 days)...
+2026-02-08 20:48:46,959 - WARNING - Failed to load historical/^TNX/2025.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,974 - WARNING - Failed to load historical/^TNX/2026.json: An error occurred (NoSuchBucket) when calling the GetObject operation: The specified bucket does not exist
+2026-02-08 20:48:46,974 - INFO - Loaded 254 candles and 0 news items.
+2026-02-08 20:48:47,031 - INFO - Starting loop from candle 200 to 254
+2026-02-08 20:48:47,031 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,032 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,032 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,032 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,032 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,032 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,033 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,034 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,037 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.6/100)
+2026-02-08 20:48:47,042 - INFO -    📊 ^GSPC: Close=6642.16016 | ATR=87.21645 | RSI=41.50 | SMA200=6157.76314
+2026-02-08 20:48:47,047 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6642.16015625, 'sl': 6587.213793945312, 'tp': 6781.706473214285, 'atr': 87.21644810267857, 'timestamp': '2025-11-19 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.63, 'tp_multiplier': 0.32000000000000006, 'sl_multiplier': 0.45, 'predictability_score': np.float64(41.6), 'predictability_grade': 'MODERATE'}
+2026-02-08 20:48:47,047 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,047 - INFO - DynamoDB Put: {'TradeId': 'INDICES-ed92a387', 'Timestamp': '2025-11-19T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6642.16015625', 'Size': '0.3011068617666622', 'Cost': '2000.0', 'Value': '2000.0', 'SL': '6587.213793945312', 'TP': '6781.706473214285', 'ATR': '87.21644810267857', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,047 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-ed92a387 | Size: $2000.0
+2026-02-08 20:48:47,047 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,047 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,048 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,048 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,048 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,048 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,049 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,049 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,052 - INFO -    🛡️ Predictability ^GSPC: POOR (36.1/100)
+2026-02-08 20:48:47,057 - INFO -    📊 ^GSPC: Close=6538.75977 | ATR=99.45860 | RSI=34.88 | SMA200=6160.14954
+2026-02-08 20:48:47,060 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6538.759765625, 'sl': 6490.025051269531, 'tp': 6658.110086495536, 'atr': 99.45860072544643, 'timestamp': '2025-11-20 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.35, 'tp_multiplier': 0.24, 'sl_multiplier': 0.35, 'predictability_score': np.float64(36.1), 'predictability_grade': 'POOR'}
+2026-02-08 20:48:47,061 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,061 - INFO - DynamoDB Put: {'TradeId': 'INDICES-5f860870', 'Timestamp': '2025-11-20T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6538.759765625', 'Size': '0.30586840191227493', 'Cost': '2000.0', 'Value': '2000.0', 'SL': '6490.025051269531', 'TP': '6658.110086495536', 'ATR': '99.45860072544643', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,061 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-5f860870 | Size: $2000.0
+2026-02-08 20:48:47,061 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,061 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,061 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,061 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,061 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,061 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,062 - INFO - 🛡️ BREAK-EVEN: Moving SL to entry 6538.7598
+2026-02-08 20:48:47,063 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,063 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,063 - INFO - 📈 BREAKEVEN: Updated SL to 6538.75977
+2026-02-08 20:48:47,063 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,063 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,065 - INFO -    🛡️ Predictability ^GSPC: POOR (32.4/100)
+2026-02-08 20:48:47,070 - INFO -    📊 ^GSPC: Close=6602.99023 | ATR=104.91790 | RSI=41.16 | SMA200=6162.74664
+2026-02-08 20:48:47,075 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6602.990234375, 'sl': 6551.580463867187, 'tp': 6728.891713169643, 'atr': 104.91789899553571, 'timestamp': '2025-11-21 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.35, 'tp_multiplier': 0.24, 'sl_multiplier': 0.35, 'predictability_score': np.float64(32.4), 'predictability_grade': 'POOR'}
+2026-02-08 20:48:47,075 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,075 - INFO - DynamoDB Put: {'TradeId': 'INDICES-4cd7770a', 'Timestamp': '2025-11-21T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6602.990234375', 'Size': '0.3028930725337213', 'Cost': '2000.0', 'Value': '2000.0', 'SL': '6551.580463867187', 'TP': '6728.891713169643', 'ATR': '104.91789899553571', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,075 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-4cd7770a | Size: $2000.0
+2026-02-08 20:48:47,075 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,075 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,075 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,075 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,075 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,075 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,076 - INFO - 🛡️ BREAK-EVEN: Moving SL to entry 6642.1602
+2026-02-08 20:48:47,077 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,077 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,077 - INFO - 📈 BREAKEVEN: Updated SL to 6642.16016
+2026-02-08 20:48:47,077 - INFO - 📈 TRAILING ACTIVE: Peak=6705.1201 | Trail=2.28% | New SL=6552.1365
+2026-02-08 20:48:47,077 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,077 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,077 - INFO - 📈 TRAILING: Updated SL to 6552.13655
+2026-02-08 20:48:47,077 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,077 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,077 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,079 - INFO -    🛡️ Predictability ^GSPC: POOR (32.4/100)
+2026-02-08 20:48:47,083 - INFO -    📊 ^GSPC: Close=6705.12012 | ATR=106.88215 | RSI=49.49 | SMA200=6166.14229
+2026-02-08 20:48:47,087 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6705.1201171875, 'sl': 6652.747863769531, 'tp': 6833.378696986607, 'atr': 106.88214983258929, 'timestamp': '2025-11-24 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.35, 'tp_multiplier': 0.24, 'sl_multiplier': 0.35, 'predictability_score': np.float64(32.4), 'predictability_grade': 'POOR'}
+2026-02-08 20:48:47,087 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,087 - INFO - ⚠️ High Exposure (3): Sizing reduced to $1000.0 (50%)
+2026-02-08 20:48:47,087 - INFO - DynamoDB Put: {'TradeId': 'INDICES-42c27ded', 'Timestamp': '2025-11-24T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6705.1201171875', 'Size': '0.1491397592470656', 'Cost': '1000.0', 'Value': '1000.0', 'SL': '6652.747863769531', 'TP': '6833.378696986607', 'ATR': '106.88214983258929', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,087 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-42c27ded | Size: $2000.0
+2026-02-08 20:48:47,087 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,087 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,087 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,087 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,088 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,088 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,089 - INFO - 📈 TRAILING ACTIVE: Peak=6765.8799 | Trail=2.28% | New SL=6611.5100
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,089 - INFO - 📈 TRAILING: Updated SL to 6611.51002
+2026-02-08 20:48:47,089 - INFO - 📈 TRAILING ACTIVE: Peak=6765.8799 | Trail=2.38% | New SL=6604.6207
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,089 - INFO - 📈 TRAILING: Updated SL to 6604.62069
+2026-02-08 20:48:47,089 - INFO - 🛡️ BREAK-EVEN: Moving SL to entry 6705.1201
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,089 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,089 - INFO - 📈 BREAKEVEN: Updated SL to 6705.12012
+2026-02-08 20:48:47,089 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,089 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,092 - INFO -    🛡️ Predictability ^GSPC: POOR (32.7/100)
+2026-02-08 20:48:47,096 - INFO -    📊 ^GSPC: Close=6765.87988 | ATR=110.43572 | RSI=53.69 | SMA200=6169.63949
+2026-02-08 20:48:47,099 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,099 - INFO - DynamoDB Put: {'TradeId': 'LOG-6acf9ff6', 'Timestamp': '2025-11-25T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=53.7 | SMA200=6169.64', 'EntryPrice': '6765.8798828125', 'TTL': 1764201600}
+2026-02-08 20:48:47,099 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,099 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,100 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,100 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,100 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,100 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,101 - INFO - 📈 TRAILING ACTIVE: Peak=6812.6099 | Trail=1.97% | New SL=6678.4280
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,101 - INFO - 📈 TRAILING: Updated SL to 6678.42800
+2026-02-08 20:48:47,101 - INFO - 📈 TRAILING ACTIVE: Peak=6812.6099 | Trail=2.28% | New SL=6657.1738
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,101 - INFO - 📈 TRAILING: Updated SL to 6657.17382
+2026-02-08 20:48:47,101 - INFO - 📈 TRAILING ACTIVE: Peak=6812.6099 | Trail=2.38% | New SL=6650.2369
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,101 - INFO - 📈 TRAILING: Updated SL to 6650.23690
+2026-02-08 20:48:47,101 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,101 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,101 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,104 - INFO -    🛡️ Predictability ^GSPC: POOR (32.8/100)
+2026-02-08 20:48:47,108 - INFO -    📊 ^GSPC: Close=6812.60986 | ATR=108.74927 | RSI=56.68 | SMA200=6173.36004
+2026-02-08 20:48:47,112 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,112 - INFO - DynamoDB Put: {'TradeId': 'LOG-e471cc4f', 'Timestamp': '2025-11-26T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.7 | SMA200=6173.36', 'EntryPrice': '6812.60986328125', 'TTL': 1764288000}
+2026-02-08 20:48:47,112 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,112 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,112 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,112 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,112 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,112 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,114 - INFO - 📈 TRAILING ACTIVE: Peak=6849.0898 | Trail=1.97% | New SL=6714.1895
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,114 - INFO - 📈 TRAILING: Updated SL to 6714.18946
+2026-02-08 20:48:47,114 - INFO - 📈 TRAILING ACTIVE: Peak=6849.0898 | Trail=2.28% | New SL=6692.8215
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,114 - INFO - 📈 TRAILING: Updated SL to 6692.82147
+2026-02-08 20:48:47,114 - INFO - 📈 TRAILING ACTIVE: Peak=6849.0898 | Trail=2.38% | New SL=6685.8474
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,114 - INFO - 📈 TRAILING: Updated SL to 6685.84741
+2026-02-08 20:48:47,114 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,114 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,114 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,117 - INFO -    🛡️ Predictability ^GSPC: POOR (33.6/100)
+2026-02-08 20:48:47,121 - INFO -    📊 ^GSPC: Close=6849.08984 | ATR=104.43356 | RSI=58.90 | SMA200=6177.34564
+2026-02-08 20:48:47,125 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,125 - INFO - DynamoDB Put: {'TradeId': 'LOG-f4238970', 'Timestamp': '2025-11-28T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=58.9 | SMA200=6177.35', 'EntryPrice': '6849.08984375', 'TTL': 1764460800}
+2026-02-08 20:48:47,125 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,125 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,125 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,125 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,125 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,125 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,126 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,126 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,129 - INFO -    🛡️ Predictability ^GSPC: POOR (33.5/100)
+2026-02-08 20:48:47,132 - INFO -    📊 ^GSPC: Close=6812.62988 | ATR=99.90712 | RSI=55.81 | SMA200=6180.83344
+2026-02-08 20:48:47,136 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,137 - INFO - DynamoDB Put: {'TradeId': 'LOG-dbf85938', 'Timestamp': '2025-12-01T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=55.8 | SMA200=6180.83', 'EntryPrice': '6812.6298828125', 'TTL': 1764720000}
+2026-02-08 20:48:47,137 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,137 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,137 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,137 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,137 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,137 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,138 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,139 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,141 - INFO -    🛡️ Predictability ^GSPC: POOR (33.6/100)
+2026-02-08 20:48:47,147 - INFO -    📊 ^GSPC: Close=6829.37012 | ATR=99.66284 | RSI=56.93 | SMA200=6184.40714
+2026-02-08 20:48:47,152 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,153 - INFO - DynamoDB Put: {'TradeId': 'LOG-b3702b1c', 'Timestamp': '2025-12-02T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.9 | SMA200=6184.41', 'EntryPrice': '6829.3701171875', 'TTL': 1764806400}
+2026-02-08 20:48:47,153 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,153 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,153 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,153 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,153 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,153 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,155 - INFO - 📈 TRAILING ACTIVE: Peak=6849.7202 | Trail=1.97% | New SL=6714.8074
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,155 - INFO - 📈 TRAILING: Updated SL to 6714.80742
+2026-02-08 20:48:47,155 - INFO - 📈 TRAILING ACTIVE: Peak=6849.7202 | Trail=2.28% | New SL=6693.4375
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,155 - INFO - 📈 TRAILING: Updated SL to 6693.43746
+2026-02-08 20:48:47,155 - INFO - 📈 TRAILING ACTIVE: Peak=6849.7202 | Trail=2.38% | New SL=6686.4628
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,155 - INFO - 📈 TRAILING: Updated SL to 6686.46276
+2026-02-08 20:48:47,155 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,155 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,155 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,159 - INFO -    🛡️ Predictability ^GSPC: POOR (33.9/100)
+2026-02-08 20:48:47,163 - INFO -    📊 ^GSPC: Close=6849.72021 | ATR=100.49854 | RSI=58.31 | SMA200=6188.00784
+2026-02-08 20:48:47,168 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,168 - INFO - DynamoDB Put: {'TradeId': 'LOG-da2f3a87', 'Timestamp': '2025-12-03T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=58.3 | SMA200=6188.01', 'EntryPrice': '6849.72021484375', 'TTL': 1764892800}
+2026-02-08 20:48:47,169 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,169 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,169 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,169 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,169 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,169 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,170 - INFO - 📈 TRAILING ACTIVE: Peak=6857.1201 | Trail=1.97% | New SL=6722.0616
+2026-02-08 20:48:47,170 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,171 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,171 - INFO - 📈 TRAILING: Updated SL to 6722.06157
+2026-02-08 20:48:47,171 - INFO - 📈 TRAILING ACTIVE: Peak=6857.1201 | Trail=2.28% | New SL=6700.6685
+2026-02-08 20:48:47,171 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,171 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set SL = :sl
+2026-02-08 20:48:47,171 - INFO - 📈 TRAILING: Updated SL to 6700.66853
+2026-02-08 20:48:47,171 - INFO - 📈 TRAILING ACTIVE: Peak=6857.1201 | Trail=2.38% | New SL=6693.6863
+2026-02-08 20:48:47,171 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,171 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,171 - INFO - 📈 TRAILING: Updated SL to 6693.68629
+2026-02-08 20:48:47,171 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,171 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,171 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,174 - INFO -    🛡️ Predictability ^GSPC: POOR (34.0/100)
+2026-02-08 20:48:47,179 - INFO -    📊 ^GSPC: Close=6857.12012 | ATR=94.29499 | RSI=58.83 | SMA200=6191.57269
+2026-02-08 20:48:47,184 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,184 - INFO - DynamoDB Put: {'TradeId': 'LOG-2c587dfb', 'Timestamp': '2025-12-04T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=58.8 | SMA200=6191.57', 'EntryPrice': '6857.1201171875', 'TTL': 1764979200}
+2026-02-08 20:48:47,184 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,184 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,184 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,184 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,184 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,184 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,186 - INFO - 📈 TRAILING ACTIVE: Peak=6870.3999 | Trail=1.97% | New SL=6735.0798
+2026-02-08 20:48:47,186 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,186 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,186 - INFO - 📈 TRAILING: Updated SL to 6735.07980
+2026-02-08 20:48:47,186 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set PeakPrice = :p
+2026-02-08 20:48:47,186 - INFO - 💎 TAKE PROFIT HIT for ^GSPC: 5.07%
+2026-02-08 20:48:47,186 - INFO - DynamoDB Update: {'TradeId': 'INDICES-5f860870'} set #st = :s, PnL = :p, ExitPrice = :ep, ExitTime = :et, ExitReason = :er
+2026-02-08 20:48:47,186 - INFO - 📈 TRAILING ACTIVE: Peak=6870.3999 | Trail=2.38% | New SL=6706.6496
+2026-02-08 20:48:47,186 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,186 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,187 - INFO - 📈 TRAILING: Updated SL to 6706.64956
+2026-02-08 20:48:47,187 - INFO - 📈 TRAILING ACTIVE: Peak=6870.3999 | Trail=2.39% | New SL=6706.1247
+2026-02-08 20:48:47,187 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,187 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,187 - INFO - 📈 TRAILING: Updated SL to 6706.12474
+2026-02-08 20:48:47,187 - INFO - 📤 Exit executed for ^GSPC: CLOSED_1_TRADES_PNL_$0.02
+2026-02-08 20:48:47,187 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,187 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,190 - INFO -    🛡️ Predictability ^GSPC: POOR (33.9/100)
+2026-02-08 20:48:47,195 - INFO -    📊 ^GSPC: Close=6870.39990 | ATR=87.95354 | RSI=59.79 | SMA200=6195.33709
+2026-02-08 20:48:47,199 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,199 - INFO - DynamoDB Put: {'TradeId': 'LOG-4c8f750a', 'Timestamp': '2025-12-05T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=59.8 | SMA200=6195.34', 'EntryPrice': '6870.39990234375', 'TTL': 1765065600}
+2026-02-08 20:48:47,200 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,200 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,200 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,200 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,200 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,200 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,201 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,202 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,204 - INFO -    🛡️ Predictability ^GSPC: POOR (33.8/100)
+2026-02-08 20:48:47,209 - INFO -    📊 ^GSPC: Close=6846.50977 | ATR=83.34497 | RSI=57.20 | SMA200=6199.50399
+2026-02-08 20:48:47,214 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,215 - INFO - DynamoDB Put: {'TradeId': 'LOG-77281d22', 'Timestamp': '2025-12-08T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.2 | SMA200=6199.50', 'EntryPrice': '6846.509765625', 'TTL': 1765324800}
+2026-02-08 20:48:47,215 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,216 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,216 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,216 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,216 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,216 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,219 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,219 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,224 - INFO -    🛡️ Predictability ^GSPC: POOR (33.8/100)
+2026-02-08 20:48:47,229 - INFO -    📊 ^GSPC: Close=6840.50977 | ATR=78.30207 | RSI=56.54 | SMA200=6203.79029
+2026-02-08 20:48:47,233 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,233 - INFO - DynamoDB Put: {'TradeId': 'LOG-2b23468f', 'Timestamp': '2025-12-09T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.5 | SMA200=6203.79', 'EntryPrice': '6840.509765625', 'TTL': 1765411200}
+2026-02-08 20:48:47,233 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,233 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,234 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,234 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,234 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,234 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,235 - INFO - 📈 TRAILING ACTIVE: Peak=6886.6802 | Trail=1.97% | New SL=6751.0394
+2026-02-08 20:48:47,235 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,235 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,235 - INFO - 📈 TRAILING: Updated SL to 6751.03941
+2026-02-08 20:48:47,235 - INFO - 📈 TRAILING ACTIVE: Peak=6886.6802 | Trail=2.38% | New SL=6722.5418
+2026-02-08 20:48:47,235 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,235 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,235 - INFO - 📈 TRAILING: Updated SL to 6722.54181
+2026-02-08 20:48:47,236 - INFO - 📈 TRAILING ACTIVE: Peak=6886.6802 | Trail=2.39% | New SL=6722.0157
+2026-02-08 20:48:47,236 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,236 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,236 - INFO - 📈 TRAILING: Updated SL to 6722.01575
+2026-02-08 20:48:47,236 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,236 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,239 - INFO -    🛡️ Predictability ^GSPC: POOR (34.4/100)
+2026-02-08 20:48:47,243 - INFO -    📊 ^GSPC: Close=6886.68018 | ATR=77.56850 | RSI=60.34 | SMA200=6208.44744
+2026-02-08 20:48:47,246 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,246 - INFO - DynamoDB Put: {'TradeId': 'LOG-0ad28a74', 'Timestamp': '2025-12-10T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=60.3 | SMA200=6208.45', 'EntryPrice': '6886.68017578125', 'TTL': 1765497600}
+2026-02-08 20:48:47,247 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,247 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,247 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,247 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,247 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,247 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,248 - INFO - 📈 TRAILING ACTIVE: Peak=6901.0000 | Trail=1.97% | New SL=6765.0772
+2026-02-08 20:48:47,248 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,248 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,248 - INFO - 📈 TRAILING: Updated SL to 6765.07719
+2026-02-08 20:48:47,248 - INFO - 📈 TRAILING ACTIVE: Peak=6901.0000 | Trail=2.38% | New SL=6736.5203
+2026-02-08 20:48:47,248 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set PeakPrice = :p
+2026-02-08 20:48:47,248 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set SL = :sl
+2026-02-08 20:48:47,248 - INFO - 📈 TRAILING: Updated SL to 6736.52033
+2026-02-08 20:48:47,248 - INFO - 📈 TRAILING ACTIVE: Peak=6901.0000 | Trail=2.39% | New SL=6735.9932
+2026-02-08 20:48:47,248 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,248 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,248 - INFO - 📈 TRAILING: Updated SL to 6735.99318
+2026-02-08 20:48:47,248 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,249 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,251 - INFO -    🛡️ Predictability ^GSPC: POOR (35.2/100)
+2026-02-08 20:48:47,255 - INFO -    📊 ^GSPC: Close=6901.00000 | ATR=65.69060 | RSI=61.47 | SMA200=6213.17214
+2026-02-08 20:48:47,258 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,258 - INFO - DynamoDB Put: {'TradeId': 'LOG-3c58e02e', 'Timestamp': '2025-12-11T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=61.5 | SMA200=6213.17', 'EntryPrice': '6901.0', 'TTL': 1765584000}
+2026-02-08 20:48:47,258 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,258 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,258 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,258 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,258 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,258 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,259 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,260 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,262 - INFO -    🛡️ Predictability ^GSPC: POOR (35.5/100)
+2026-02-08 20:48:47,266 - INFO -    📊 ^GSPC: Close=6827.41016 | ATR=62.91061 | RSI=53.12 | SMA200=6218.00134
+2026-02-08 20:48:47,269 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,270 - INFO - DynamoDB Put: {'TradeId': 'LOG-3450e75f', 'Timestamp': '2025-12-12T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=53.1 | SMA200=6218.00', 'EntryPrice': '6827.41015625', 'TTL': 1765670400}
+2026-02-08 20:48:47,270 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,270 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,270 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,270 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,270 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,270 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,271 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,271 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,274 - INFO -    🛡️ Predictability ^GSPC: POOR (36.0/100)
+2026-02-08 20:48:47,278 - INFO -    📊 ^GSPC: Close=6816.50977 | ATR=59.14917 | RSI=51.99 | SMA200=6222.31139
+2026-02-08 20:48:47,281 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,282 - INFO - DynamoDB Put: {'TradeId': 'LOG-40225015', 'Timestamp': '2025-12-15T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=52.0 | SMA200=6222.31', 'EntryPrice': '6816.509765625', 'TTL': 1765929600}
+2026-02-08 20:48:47,282 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,282 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,282 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,282 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,282 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,282 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,283 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,283 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,286 - INFO -    🛡️ Predictability ^GSPC: POOR (36.2/100)
+2026-02-08 20:48:47,289 - INFO -    📊 ^GSPC: Close=6800.25977 | ATR=55.08559 | RSI=50.28 | SMA200=6227.06409
+2026-02-08 20:48:47,293 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6800.259765625, 'sl': 6773.267827148437, 'tp': 6866.362472098214, 'atr': 55.08558872767857, 'timestamp': '2025-12-16 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.35, 'tp_multiplier': 0.24, 'sl_multiplier': 0.35, 'predictability_score': np.float64(36.2), 'predictability_grade': 'POOR'}
+2026-02-08 20:48:47,293 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,293 - INFO - ⚠️ High Exposure (3): Sizing reduced to $1000.0 (50%)
+2026-02-08 20:48:47,293 - INFO - DynamoDB Put: {'TradeId': 'INDICES-8d47036d', 'Timestamp': '2025-12-16T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6800.259765625', 'Size': '0.14705320597530022', 'Cost': '1000.0', 'Value': '1000.0', 'SL': '6773.267827148437', 'TP': '6866.362472098214', 'ATR': '55.08558872767857', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,293 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-8d47036d | Size: $2000.0
+2026-02-08 20:48:47,293 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,293 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,293 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,293 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,294 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,294 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,295 - INFO - 📈 TRAILING STOP triggered for ^GSPC: 1.79%
+2026-02-08 20:48:47,295 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cd7770a'} set #st = :s, PnL = :p, ExitPrice = :ep, ExitTime = :et, ExitReason = :er
+2026-02-08 20:48:47,295 - INFO - 📤 Exit executed for ^GSPC: CLOSED_1_TRADES_PNL_$0.01
+2026-02-08 20:48:47,295 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,295 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,297 - INFO -    🛡️ Predictability ^GSPC: POOR (35.5/100)
+2026-02-08 20:48:47,301 - INFO -    📊 ^GSPC: Close=6721.43018 | ATR=56.96198 | RSI=42.89 | SMA200=6231.78049
+2026-02-08 20:48:47,305 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,305 - INFO - DynamoDB Put: {'TradeId': 'LOG-c512d657', 'Timestamp': '2025-12-17T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=42.9 | SMA200=6231.78', 'EntryPrice': '6721.43017578125', 'TTL': 1766102400}
+2026-02-08 20:48:47,305 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,305 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,306 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,306 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,306 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,306 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,307 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,307 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,309 - INFO -    🛡️ Predictability ^GSPC: POOR (34.1/100)
+2026-02-08 20:48:47,313 - INFO -    📊 ^GSPC: Close=6774.75977 | ATR=60.99411 | RSI=48.41 | SMA200=6236.44114
+2026-02-08 20:48:47,316 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6774.759765625, 'sl': 6744.872653808594, 'tp': 6847.952692522322, 'atr': 60.994105747767854, 'timestamp': '2025-12-18 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.35, 'tp_multiplier': 0.24, 'sl_multiplier': 0.35, 'predictability_score': np.float64(34.1), 'predictability_grade': 'POOR'}
+2026-02-08 20:48:47,317 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,317 - INFO - ⚠️ High Exposure (3): Sizing reduced to $1000.0 (50%)
+2026-02-08 20:48:47,317 - INFO - DynamoDB Put: {'TradeId': 'INDICES-a787ee20', 'Timestamp': '2025-12-18T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6774.759765625', 'Size': '0.14760670999346437', 'Cost': '1000.0', 'Value': '1000.0', 'SL': '6744.872653808594', 'TP': '6847.952692522322', 'ATR': '60.994105747767854', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,317 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-a787ee20 | Size: $2000.0
+2026-02-08 20:48:47,317 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,317 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,317 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,317 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,317 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,317 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,319 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,319 - INFO - 🛡️ BREAK-EVEN: Moving SL to entry 6774.7598
+2026-02-08 20:48:47,319 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,319 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,319 - INFO - 📈 BREAKEVEN: Updated SL to 6774.75977
+2026-02-08 20:48:47,319 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,319 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,321 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.1/100)
+2026-02-08 20:48:47,325 - INFO -    📊 ^GSPC: Close=6834.50000 | ATR=62.14485 | RSI=53.80 | SMA200=6241.92104
+2026-02-08 20:48:47,329 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,329 - INFO - DynamoDB Put: {'TradeId': 'LOG-39481584', 'Timestamp': '2025-12-19T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=53.8 | SMA200=6241.92', 'EntryPrice': '6834.5', 'TTL': 1766275200}
+2026-02-08 20:48:47,329 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,329 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,329 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,329 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,329 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,329 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,330 - INFO - 🛡️ BREAK-EVEN: Moving SL to entry 6800.2598
+2026-02-08 20:48:47,331 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,331 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,331 - INFO - 📈 BREAKEVEN: Updated SL to 6800.25977
+2026-02-08 20:48:47,331 - INFO - 📈 TRAILING ACTIVE: Peak=6878.4902 | Trail=1.35% | New SL=6785.5982
+2026-02-08 20:48:47,331 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,331 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,331 - INFO - 📈 TRAILING: Updated SL to 6785.59823
+2026-02-08 20:48:47,331 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,331 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,333 - INFO -    🛡️ Predictability ^GSPC: MODERATE (40.8/100)
+2026-02-08 20:48:47,337 - INFO -    📊 ^GSPC: Close=6878.49023 | ATR=62.33698 | RSI=57.33 | SMA200=6247.46249
+2026-02-08 20:48:47,340 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,340 - INFO - DynamoDB Put: {'TradeId': 'LOG-e57f4e74', 'Timestamp': '2025-12-22T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.3 | SMA200=6247.46', 'EntryPrice': '6878.490234375', 'TTL': 1766534400}
+2026-02-08 20:48:47,340 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,340 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,341 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,341 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,341 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,341 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING ACTIVE: Peak=6909.7900 | Trail=1.97% | New SL=6773.6941
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING: Updated SL to 6773.69410
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING ACTIVE: Peak=6909.7900 | Trail=2.39% | New SL=6744.5730
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING: Updated SL to 6744.57304
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING ACTIVE: Peak=6909.7900 | Trail=1.22% | New SL=6825.8308
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING: Updated SL to 6825.83078
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING ACTIVE: Peak=6909.7900 | Trail=1.35% | New SL=6816.4753
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,342 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,342 - INFO - 📈 TRAILING: Updated SL to 6816.47534
+2026-02-08 20:48:47,342 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,342 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,345 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.2/100)
+2026-02-08 20:48:47,349 - INFO -    📊 ^GSPC: Close=6909.79004 | ATR=61.62842 | RSI=59.69 | SMA200=6253.93864
+2026-02-08 20:48:47,352 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,353 - INFO - DynamoDB Put: {'TradeId': 'LOG-23d16a12', 'Timestamp': '2025-12-23T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=59.7 | SMA200=6253.94', 'EntryPrice': '6909.7900390625', 'TTL': 1766620800}
+2026-02-08 20:48:47,353 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,353 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,353 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,353 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,353 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,353 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,354 - INFO - 📈 TRAILING ACTIVE: Peak=6932.0498 | Trail=1.97% | New SL=6795.5154
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING: Updated SL to 6795.51544
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING ACTIVE: Peak=6932.0498 | Trail=2.39% | New SL=6766.3006
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING: Updated SL to 6766.30056
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING ACTIVE: Peak=6932.0498 | Trail=1.22% | New SL=6847.8201
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING: Updated SL to 6847.82007
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING ACTIVE: Peak=6932.0498 | Trail=1.35% | New SL=6838.4345
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,355 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,355 - INFO - 📈 TRAILING: Updated SL to 6838.43449
+2026-02-08 20:48:47,355 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,355 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,358 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.8/100)
+2026-02-08 20:48:47,362 - INFO -    📊 ^GSPC: Close=6932.04980 | ATR=61.13267 | RSI=61.33 | SMA200=6260.73854
+2026-02-08 20:48:47,365 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,365 - INFO - DynamoDB Put: {'TradeId': 'LOG-f86c5fc1', 'Timestamp': '2025-12-24T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=61.3 | SMA200=6260.74', 'EntryPrice': '6932.0498046875', 'TTL': 1766707200}
+2026-02-08 20:48:47,366 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,366 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,366 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,366 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,366 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,366 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,367 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,367 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,369 - INFO -    🛡️ Predictability ^GSPC: MODERATE (42.3/100)
+2026-02-08 20:48:47,373 - INFO -    📊 ^GSPC: Close=6929.93994 | ATR=60.09769 | RSI=61.08 | SMA200=6267.39174
+2026-02-08 20:48:47,377 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,377 - INFO - DynamoDB Put: {'TradeId': 'LOG-3766535c', 'Timestamp': '2025-12-26T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=61.1 | SMA200=6267.39', 'EntryPrice': '6929.93994140625', 'TTL': 1766880000}
+2026-02-08 20:48:47,377 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,377 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,378 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,378 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,378 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,378 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,379 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,379 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,381 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.4/100)
+2026-02-08 20:48:47,385 - INFO -    📊 ^GSPC: Close=6905.74023 | ATR=59.39056 | RSI=58.11 | SMA200=6274.31284
+2026-02-08 20:48:47,388 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,388 - INFO - DynamoDB Put: {'TradeId': 'LOG-a2b03f98', 'Timestamp': '2025-12-29T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=58.1 | SMA200=6274.31', 'EntryPrice': '6905.740234375', 'TTL': 1767139200}
+2026-02-08 20:48:47,388 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,388 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,388 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,389 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,389 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,389 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,390 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,390 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,392 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.1/100)
+2026-02-08 20:48:47,396 - INFO -    📊 ^GSPC: Close=6896.24023 | ATR=58.83984 | RSI=56.94 | SMA200=6280.59934
+2026-02-08 20:48:47,399 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,400 - INFO - DynamoDB Put: {'TradeId': 'LOG-18e13821', 'Timestamp': '2025-12-30T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.9 | SMA200=6280.60', 'EntryPrice': '6896.240234375', 'TTL': 1767225600}
+2026-02-08 20:48:47,400 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,400 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,400 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,400 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,400 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,400 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,401 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,401 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,404 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.0/100)
+2026-02-08 20:48:47,407 - INFO -    📊 ^GSPC: Close=6845.50000 | ATR=57.47485 | RSI=51.03 | SMA200=6286.45124
+2026-02-08 20:48:47,411 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,411 - INFO - DynamoDB Put: {'TradeId': 'LOG-1359a7fe', 'Timestamp': '2025-12-31T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=51.0 | SMA200=6286.45', 'EntryPrice': '6845.5', 'TTL': 1767312000}
+2026-02-08 20:48:47,411 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,411 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,411 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,411 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,411 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,412 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,413 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,413 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,415 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.1/100)
+2026-02-08 20:48:47,419 - INFO -    📊 ^GSPC: Close=6858.47021 | ATR=57.51416 | RSI=52.39 | SMA200=6292.67029
+2026-02-08 20:48:47,422 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,422 - INFO - DynamoDB Put: {'TradeId': 'LOG-b9773622', 'Timestamp': '2026-01-02T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=52.4 | SMA200=6292.67', 'EntryPrice': '6858.47021484375', 'TTL': 1767484800}
+2026-02-08 20:48:47,422 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,423 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,423 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,423 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,423 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,423 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,424 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,424 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,426 - INFO -    🛡️ Predictability ^GSPC: MODERATE (40.7/100)
+2026-02-08 20:48:47,430 - INFO -    📊 ^GSPC: Close=6902.04980 | ATR=54.84985 | RSI=56.74 | SMA200=6298.80409
+2026-02-08 20:48:47,433 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,433 - INFO - DynamoDB Put: {'TradeId': 'LOG-3c71393f', 'Timestamp': '2026-01-05T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.7 | SMA200=6298.80', 'EntryPrice': '6902.0498046875', 'TTL': 1767744000}
+2026-02-08 20:48:47,433 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,433 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,434 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,434 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,434 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,434 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,435 - INFO - 📈 TRAILING ACTIVE: Peak=6944.8198 | Trail=1.97% | New SL=6808.0339
+2026-02-08 20:48:47,435 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,435 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,435 - INFO - 📈 TRAILING: Updated SL to 6808.03394
+2026-02-08 20:48:47,435 - INFO - 📈 TRAILING ACTIVE: Peak=6944.8198 | Trail=2.39% | New SL=6778.7652
+2026-02-08 20:48:47,435 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,435 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,435 - INFO - 📈 TRAILING: Updated SL to 6778.76524
+2026-02-08 20:48:47,436 - INFO - 📈 TRAILING ACTIVE: Peak=6944.8198 | Trail=1.22% | New SL=6860.4349
+2026-02-08 20:48:47,436 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,436 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,436 - INFO - 📈 TRAILING: Updated SL to 6860.43493
+2026-02-08 20:48:47,436 - INFO - 📈 TRAILING ACTIVE: Peak=6944.8198 | Trail=1.35% | New SL=6851.0321
+2026-02-08 20:48:47,436 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,436 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,436 - INFO - 📈 TRAILING: Updated SL to 6851.03205
+2026-02-08 20:48:47,436 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,436 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,439 - INFO -    🛡️ Predictability ^GSPC: MODERATE (40.9/100)
+2026-02-08 20:48:47,443 - INFO -    📊 ^GSPC: Close=6944.81982 | ATR=53.88846 | RSI=60.55 | SMA200=6305.21374
+2026-02-08 20:48:47,446 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,447 - INFO - DynamoDB Put: {'TradeId': 'LOG-525a6c4e', 'Timestamp': '2026-01-06T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=60.5 | SMA200=6305.21', 'EntryPrice': '6944.81982421875', 'TTL': 1767830400}
+2026-02-08 20:48:47,447 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,447 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,447 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,447 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,447 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,447 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,448 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,448 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,451 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.4/100)
+2026-02-08 20:48:47,454 - INFO -    📊 ^GSPC: Close=6920.93018 | ATR=52.95776 | RSI=57.50 | SMA200=6311.48059
+2026-02-08 20:48:47,458 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,458 - INFO - DynamoDB Put: {'TradeId': 'LOG-c58af75d', 'Timestamp': '2026-01-07T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.5 | SMA200=6311.48', 'EntryPrice': '6920.93017578125', 'TTL': 1767916800}
+2026-02-08 20:48:47,458 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,458 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,458 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,458 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,458 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,458 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,459 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,459 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,462 - INFO -    🛡️ Predictability ^GSPC: MODERATE (43.0/100)
+2026-02-08 20:48:47,469 - INFO -    📊 ^GSPC: Close=6921.45996 | ATR=48.68063 | RSI=57.55 | SMA200=6317.25004
+2026-02-08 20:48:47,478 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,478 - INFO - DynamoDB Put: {'TradeId': 'LOG-d6ab6f12', 'Timestamp': '2026-01-08T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.6 | SMA200=6317.25', 'EntryPrice': '6921.4599609375', 'TTL': 1768003200}
+2026-02-08 20:48:47,478 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,478 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,479 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,479 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,479 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,479 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,481 - INFO - 📈 TRAILING ACTIVE: Peak=6966.2798 | Trail=1.97% | New SL=6829.0712
+2026-02-08 20:48:47,481 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,481 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set SL = :sl
+2026-02-08 20:48:47,481 - INFO - 📈 TRAILING: Updated SL to 6829.07122
+2026-02-08 20:48:47,481 - INFO - 📈 TRAILING ACTIVE: Peak=6966.2798 | Trail=2.39% | New SL=6799.7121
+2026-02-08 20:48:47,481 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,481 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,481 - INFO - 📈 TRAILING: Updated SL to 6799.71208
+2026-02-08 20:48:47,481 - INFO - 📈 TRAILING ACTIVE: Peak=6966.2798 | Trail=1.22% | New SL=6881.6341
+2026-02-08 20:48:47,481 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,481 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,481 - INFO - 📈 TRAILING: Updated SL to 6881.63413
+2026-02-08 20:48:47,482 - INFO - 📈 TRAILING ACTIVE: Peak=6966.2798 | Trail=1.35% | New SL=6872.2022
+2026-02-08 20:48:47,482 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,482 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,482 - INFO - 📈 TRAILING: Updated SL to 6872.20220
+2026-02-08 20:48:47,482 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,482 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,485 - INFO -    🛡️ Predictability ^GSPC: MODERATE (46.2/100)
+2026-02-08 20:48:47,490 - INFO -    📊 ^GSPC: Close=6966.27979 | ATR=46.25349 | RSI=61.74 | SMA200=6323.19819
+2026-02-08 20:48:47,494 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,494 - INFO - DynamoDB Put: {'TradeId': 'LOG-718663d1', 'Timestamp': '2026-01-09T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=61.7 | SMA200=6323.20', 'EntryPrice': '6966.27978515625', 'TTL': 1768089600}
+2026-02-08 20:48:47,494 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,494 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,494 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,494 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,494 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,494 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set PeakPrice = :p
+2026-02-08 20:48:47,496 - INFO - 💎 TAKE PROFIT HIT for ^GSPC: 5.05%
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-ed92a387'} set #st = :s, PnL = :p, ExitPrice = :ep, ExitTime = :et, ExitReason = :er
+2026-02-08 20:48:47,496 - INFO - 📈 TRAILING ACTIVE: Peak=6977.2700 | Trail=2.39% | New SL=6810.4395
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,496 - INFO - 📈 TRAILING: Updated SL to 6810.43954
+2026-02-08 20:48:47,496 - INFO - 📈 TRAILING ACTIVE: Peak=6977.2700 | Trail=1.22% | New SL=6892.4908
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,496 - INFO - 📈 TRAILING: Updated SL to 6892.49083
+2026-02-08 20:48:47,496 - INFO - 📈 TRAILING ACTIVE: Peak=6977.2700 | Trail=1.35% | New SL=6883.0440
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,496 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,496 - INFO - 📈 TRAILING: Updated SL to 6883.04402
+2026-02-08 20:48:47,496 - INFO - 📤 Exit executed for ^GSPC: CLOSED_1_TRADES_PNL_$0.02
+2026-02-08 20:48:47,496 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,496 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,499 - INFO -    🛡️ Predictability ^GSPC: MODERATE (49.9/100)
+2026-02-08 20:48:47,502 - INFO -    📊 ^GSPC: Close=6977.27002 | ATR=45.32492 | RSI=62.71 | SMA200=6329.52354
+2026-02-08 20:48:47,506 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,506 - INFO - DynamoDB Put: {'TradeId': 'LOG-21a9d22e', 'Timestamp': '2026-01-12T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=62.7 | SMA200=6329.52', 'EntryPrice': '6977.27001953125', 'TTL': 1768348800}
+2026-02-08 20:48:47,506 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,506 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,506 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,506 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,506 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,506 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,507 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,507 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,510 - INFO -    🛡️ Predictability ^GSPC: MODERATE (51.6/100)
+2026-02-08 20:48:47,514 - INFO -    📊 ^GSPC: Close=6963.74023 | ATR=45.29136 | RSI=60.67 | SMA200=6335.87569
+2026-02-08 20:48:47,517 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,517 - INFO - DynamoDB Put: {'TradeId': 'LOG-12c33ba9', 'Timestamp': '2026-01-13T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=60.7 | SMA200=6335.88', 'EntryPrice': '6963.740234375', 'TTL': 1768435200}
+2026-02-08 20:48:47,517 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,517 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,517 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,518 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,518 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,518 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,519 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,519 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,522 - INFO -    🛡️ Predictability ^GSPC: MODERATE (53.5/100)
+2026-02-08 20:48:47,526 - INFO -    📊 ^GSPC: Close=6926.60010 | ATR=47.85781 | RSI=55.35 | SMA200=6342.60399
+2026-02-08 20:48:47,529 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,530 - INFO - DynamoDB Put: {'TradeId': 'LOG-869837b2', 'Timestamp': '2026-01-14T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=55.3 | SMA200=6342.60', 'EntryPrice': '6926.60009765625', 'TTL': 1768521600}
+2026-02-08 20:48:47,530 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,530 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,530 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,530 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,530 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,530 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,531 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,531 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,534 - INFO -    🛡️ Predictability ^GSPC: MODERATE (56.2/100)
+2026-02-08 20:48:47,538 - INFO -    📊 ^GSPC: Close=6944.47021 | ATR=49.30995 | RSI=57.29 | SMA200=6349.26709
+2026-02-08 20:48:47,541 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,541 - INFO - DynamoDB Put: {'TradeId': 'LOG-9ce3d73c', 'Timestamp': '2026-01-15T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.3 | SMA200=6349.27', 'EntryPrice': '6944.47021484375', 'TTL': 1768608000}
+2026-02-08 20:48:47,541 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,541 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,541 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,542 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,542 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,542 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,543 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,543 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,545 - INFO -    🛡️ Predictability ^GSPC: MODERATE (57.4/100)
+2026-02-08 20:48:47,549 - INFO -    📊 ^GSPC: Close=6940.00977 | ATR=50.59853 | RSI=56.63 | SMA200=6355.80179
+2026-02-08 20:48:47,552 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,552 - INFO - DynamoDB Put: {'TradeId': 'LOG-e1f5d3f5', 'Timestamp': '2026-01-16T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.6 | SMA200=6355.80', 'EntryPrice': '6940.009765625', 'TTL': 1768694400}
+2026-02-08 20:48:47,552 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,552 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,553 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,553 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,553 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,553 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,554 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,554 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,556 - INFO -    🛡️ Predictability ^GSPC: MODERATE (56.4/100)
+2026-02-08 20:48:47,560 - INFO -    📊 ^GSPC: Close=6796.85986 | ATR=58.43994 | RSI=40.47 | SMA200=6361.43124
+2026-02-08 20:48:47,564 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,564 - INFO - DynamoDB Put: {'TradeId': 'LOG-411612a1', 'Timestamp': '2026-01-20T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=40.5 | SMA200=6361.43', 'EntryPrice': '6796.85986328125', 'TTL': 1769040000}
+2026-02-08 20:48:47,564 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,564 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,564 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,565 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,565 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,565 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,566 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,566 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,568 - INFO -    🛡️ Predictability ^GSPC: MODERATE (53.2/100)
+2026-02-08 20:48:47,572 - INFO -    📊 ^GSPC: Close=6875.62012 | ATR=65.13640 | RSI=49.08 | SMA200=6368.82674
+2026-02-08 20:48:47,576 - INFO - 🎯 TECHNICAL SIGNAL: {'pair': '^GSPC', 'signal': 'LONG', 'strategy': 'TREND_PULLBACK', 'entry': 6875.6201171875, 'sl': 6834.584182128906, 'tp': 6979.838364955357, 'atr': 65.13640485491071, 'timestamp': '2026-01-21 00:00:00', 'corridor': '💰 Profit Taking', 'regime': 'CAUTIOUS_REVERSAL', 'scalping_mode': True, 'risk_multiplier': 0.63, 'tp_multiplier': 0.32000000000000006, 'sl_multiplier': 0.45, 'predictability_score': np.float64(53.2), 'predictability_grade': 'MODERATE'}
+2026-02-08 20:48:47,576 - INFO - 🤖 BEDROCK DECISION: CONFIRM | Reason: Test Mock: Strategy Valid
+2026-02-08 20:48:47,576 - INFO - ⚠️ High Exposure (3): Sizing reduced to $1000.0 (50%)
+2026-02-08 20:48:47,576 - INFO - DynamoDB Put: {'TradeId': 'INDICES-4cb088fe', 'Timestamp': '2026-01-21T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Type': 'LONG', 'Strategy': 'TREND_PULLBACK', 'EntryPrice': '6875.6201171875', 'Size': '0.14544142680312216', 'Cost': '1000.0', 'Value': '1000.0', 'SL': '6834.584182128906', 'TP': '6979.838364955357', 'ATR': '65.13640485491071', 'AI_Decision': 'CONFIRM', 'AI_Reason': 'Test Mock: Strategy Valid', 'Status': 'OPEN', 'Regime': 'CAUTIOUS_REVERSAL', 'CompoundMode': 'False'}
+2026-02-08 20:48:47,576 - INFO - ✅ Trade logged to EmpireIndicesHistory: INDICES-4cb088fe | Size: $2000.0
+2026-02-08 20:48:47,576 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,576 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,577 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,577 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,577 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,577 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,578 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cb088fe'} set PeakPrice = :p
+2026-02-08 20:48:47,578 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,578 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,580 - INFO -    🛡️ Predictability ^GSPC: MODERATE (53.0/100)
+2026-02-08 20:48:47,584 - INFO -    📊 ^GSPC: Close=6913.35010 | ATR=65.29782 | RSI=52.61 | SMA200=6378.02309
+2026-02-08 20:48:47,588 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,588 - INFO - DynamoDB Put: {'TradeId': 'LOG-6a2f5690', 'Timestamp': '2026-01-22T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=52.6 | SMA200=6378.02', 'EntryPrice': '6913.35009765625', 'TTL': 1769212800}
+2026-02-08 20:48:47,588 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,588 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,588 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,588 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,588 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,588 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,590 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cb088fe'} set PeakPrice = :p
+2026-02-08 20:48:47,590 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,590 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,592 - INFO -    🛡️ Predictability ^GSPC: MODERATE (53.9/100)
+2026-02-08 20:48:47,596 - INFO -    📊 ^GSPC: Close=6915.60986 | ATR=62.93352 | RSI=52.82 | SMA200=6387.28989
+2026-02-08 20:48:47,600 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,600 - INFO - DynamoDB Put: {'TradeId': 'LOG-f72d88f9', 'Timestamp': '2026-01-23T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=52.8 | SMA200=6387.29', 'EntryPrice': '6915.60986328125', 'TTL': 1769299200}
+2026-02-08 20:48:47,600 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,600 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,600 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,601 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,601 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,601 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,602 - INFO - 🛡️ BREAK-EVEN: Moving SL to entry 6875.6201
+2026-02-08 20:48:47,602 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cb088fe'} set PeakPrice = :p
+2026-02-08 20:48:47,602 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cb088fe'} set SL = :sl
+2026-02-08 20:48:47,602 - INFO - 📈 BREAKEVEN: Updated SL to 6875.62012
+2026-02-08 20:48:47,602 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,602 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,605 - INFO -    🛡️ Predictability ^GSPC: MODERATE (55.9/100)
+2026-02-08 20:48:47,609 - INFO -    📊 ^GSPC: Close=6950.22998 | ATR=62.01500 | RSI=56.06 | SMA200=6397.12719
+2026-02-08 20:48:47,613 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,613 - INFO - DynamoDB Put: {'TradeId': 'LOG-ccaba1c1', 'Timestamp': '2026-01-26T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=56.1 | SMA200=6397.13', 'EntryPrice': '6950.22998046875', 'TTL': 1769558400}
+2026-02-08 20:48:47,613 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,614 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,614 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,614 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,614 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,614 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,615 - INFO - 📈 TRAILING ACTIVE: Peak=6978.6001 | Trail=2.39% | New SL=6811.7378
+2026-02-08 20:48:47,615 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set PeakPrice = :p
+2026-02-08 20:48:47,615 - INFO - DynamoDB Update: {'TradeId': 'INDICES-42c27ded'} set SL = :sl
+2026-02-08 20:48:47,615 - INFO - 📈 TRAILING: Updated SL to 6811.73781
+2026-02-08 20:48:47,615 - INFO - 📈 TRAILING ACTIVE: Peak=6978.6001 | Trail=1.22% | New SL=6893.8047
+2026-02-08 20:48:47,615 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set PeakPrice = :p
+2026-02-08 20:48:47,615 - INFO - DynamoDB Update: {'TradeId': 'INDICES-8d47036d'} set SL = :sl
+2026-02-08 20:48:47,615 - INFO - 📈 TRAILING: Updated SL to 6893.80474
+2026-02-08 20:48:47,615 - INFO - 📈 TRAILING ACTIVE: Peak=6978.6001 | Trail=1.35% | New SL=6884.3561
+2026-02-08 20:48:47,615 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set PeakPrice = :p
+2026-02-08 20:48:47,615 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set SL = :sl
+2026-02-08 20:48:47,615 - INFO - 📈 TRAILING: Updated SL to 6884.35613
+2026-02-08 20:48:47,616 - INFO - DynamoDB Update: {'TradeId': 'INDICES-4cb088fe'} set PeakPrice = :p
+2026-02-08 20:48:47,616 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,616 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,618 - INFO -    🛡️ Predictability ^GSPC: MODERATE (58.2/100)
+2026-02-08 20:48:47,622 - INFO -    📊 ^GSPC: Close=6978.60010 | ATR=61.43998 | RSI=58.56 | SMA200=6404.73569
+2026-02-08 20:48:47,626 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,626 - INFO - DynamoDB Put: {'TradeId': 'LOG-36058257', 'Timestamp': '2026-01-27T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=58.6 | SMA200=6404.74', 'EntryPrice': '6978.60009765625', 'TTL': 1769644800}
+2026-02-08 20:48:47,626 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,626 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,627 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,627 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,627 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,627 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,628 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,628 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,631 - INFO -    🛡️ Predictability ^GSPC: MODERATE (58.2/100)
+2026-02-08 20:48:47,634 - INFO -    📊 ^GSPC: Close=6978.02979 | ATR=60.89139 | RSI=58.49 | SMA200=6413.28559
+2026-02-08 20:48:47,638 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,638 - INFO - DynamoDB Put: {'TradeId': 'LOG-24064de4', 'Timestamp': '2026-01-28T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=58.5 | SMA200=6413.29', 'EntryPrice': '6978.02978515625', 'TTL': 1769731200}
+2026-02-08 20:48:47,638 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,638 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,638 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,638 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,638 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,638 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,639 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,639 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,642 - INFO -    🛡️ Predictability ^GSPC: MODERATE (57.2/100)
+2026-02-08 20:48:47,647 - INFO -    📊 ^GSPC: Close=6969.00977 | ATR=67.32642 | RSI=57.29 | SMA200=6421.31384
+2026-02-08 20:48:47,651 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,651 - INFO - DynamoDB Put: {'TradeId': 'LOG-2b8ab9f1', 'Timestamp': '2026-01-29T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.3 | SMA200=6421.31', 'EntryPrice': '6969.009765625', 'TTL': 1769817600}
+2026-02-08 20:48:47,651 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,651 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,651 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,652 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,652 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,652 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,653 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,653 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,655 - INFO -    🛡️ Predictability ^GSPC: MODERATE (56.6/100)
+2026-02-08 20:48:47,659 - INFO -    📊 ^GSPC: Close=6939.02979 | ATR=68.38428 | RSI=53.36 | SMA200=6428.97914
+2026-02-08 20:48:47,663 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,664 - INFO - DynamoDB Put: {'TradeId': 'LOG-84f97c20', 'Timestamp': '2026-01-30T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=53.4 | SMA200=6428.98', 'EntryPrice': '6939.02978515625', 'TTL': 1769904000}
+2026-02-08 20:48:47,664 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,664 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,664 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,664 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,664 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,664 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,665 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,665 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,668 - INFO -    🛡️ Predictability ^GSPC: MODERATE (56.6/100)
+2026-02-08 20:48:47,673 - INFO -    📊 ^GSPC: Close=6976.43994 | ATR=70.19284 | RSI=57.29 | SMA200=6436.87819
+2026-02-08 20:48:47,677 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,677 - INFO - DynamoDB Put: {'TradeId': 'LOG-c273a4a5', 'Timestamp': '2026-02-02T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=57.3 | SMA200=6436.88', 'EntryPrice': '6976.43994140625', 'TTL': 1770163200}
+2026-02-08 20:48:47,678 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,678 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,678 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,678 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,678 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,678 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,679 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,679 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,682 - INFO -    🛡️ Predictability ^GSPC: MODERATE (56.6/100)
+2026-02-08 20:48:47,686 - INFO -    📊 ^GSPC: Close=6917.81006 | ATR=76.19071 | RSI=50.15 | SMA200=6445.08874
+2026-02-08 20:48:47,689 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,690 - INFO - DynamoDB Put: {'TradeId': 'LOG-133ca1c7', 'Timestamp': '2026-02-03T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=50.2 | SMA200=6445.09', 'EntryPrice': '6917.81005859375', 'TTL': 1770249600}
+2026-02-08 20:48:47,690 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,690 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,690 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,690 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,690 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,690 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,692 - INFO - 📈 TRAILING STOP triggered for ^GSPC: 1.59%
+2026-02-08 20:48:47,692 - INFO - DynamoDB Update: {'TradeId': 'INDICES-a787ee20'} set #st = :s, PnL = :p, ExitPrice = :ep, ExitTime = :et, ExitReason = :er
+2026-02-08 20:48:47,692 - INFO - 📤 Exit executed for ^GSPC: CLOSED_1_TRADES_PNL_$0.00
+2026-02-08 20:48:47,692 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,692 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,694 - INFO -    🛡️ Predictability ^GSPC: MODERATE (54.6/100)
+2026-02-08 20:48:47,698 - INFO -    📊 ^GSPC: Close=6882.72021 | ATR=77.56857 | RSI=46.42 | SMA200=6453.08884
+2026-02-08 20:48:47,701 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,702 - INFO - DynamoDB Put: {'TradeId': 'LOG-cd9778aa', 'Timestamp': '2026-02-04T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=46.4 | SMA200=6453.09', 'EntryPrice': '6882.72021484375', 'TTL': 1770336000}
+2026-02-08 20:48:47,702 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,702 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,702 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,702 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,702 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,702 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,703 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,703 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,706 - INFO -    🛡️ Predictability ^GSPC: MODERATE (49.7/100)
+2026-02-08 20:48:47,709 - INFO -    📊 ^GSPC: Close=6798.39990 | ATR=81.12932 | RSI=38.93 | SMA200=6461.28983
+2026-02-08 20:48:47,713 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,714 - INFO - DynamoDB Put: {'TradeId': 'LOG-00bb795e', 'Timestamp': '2026-02-05T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=38.9 | SMA200=6461.29', 'EntryPrice': '6798.39990234375', 'TTL': 1770422400}
+2026-02-08 20:48:47,714 - INFO - 🚀 Indices Trader V5.1 Started
+2026-02-08 20:48:47,714 - WARNING - Yahoo API error for DX-Y.NYB: 404
+2026-02-08 20:48:47,714 - WARNING - Yahoo API error for ^TNX: 404
+2026-02-08 20:48:47,714 - WARNING - Yahoo API error for ^VIX: 404
+2026-02-08 20:48:47,714 - INFO - 🏛️ V5.1 MACRO: Regime=MIXED | Yield10Y=0% | VIX=UNKNOWN
+2026-02-08 20:48:47,714 - INFO - 🚪 Phase 1: Checking exits for all open positions...
+2026-02-08 20:48:47,716 - INFO - 🎯 Phase 2: Analyzing entry signals...
+2026-02-08 20:48:47,716 - INFO - 🔍 Analyzing ^GSPC with TREND_PULLBACK...
+2026-02-08 20:48:47,723 - INFO -    🛡️ Predictability ^GSPC: MODERATE (41.9/100)
+2026-02-08 20:48:47,732 - INFO -    📊 ^GSPC: Close=6932.29980 | ATR=88.57792 | RSI=52.14 | SMA200=6469.51253
+2026-02-08 20:48:47,739 - INFO - ➡️ No signal for ^GSPC
+2026-02-08 20:48:47,739 - INFO - DynamoDB Put: {'TradeId': 'LOG-651c5ba7', 'Timestamp': '2026-02-06T01:00:00', 'AssetClass': 'Indices', 'Pair': '^GSPC', 'Status': 'SKIPPED', 'Type': 'INFO', 'ExitReason': 'NO_SIGNAL: RSI=52.1 | SMA200=6469.51', 'EntryPrice': '6932.2998046875', 'TTL': 1770508800}
+2026-02-08 20:48:47,739 - INFO - Test complete. CSV Log saved to backtest_Indices_^GSPC_20260208_204847.log
+DEBUG: Reversal Valid (Green=True, Doji=False)
+📝 Logged BUY at 2025-11-19 01:00:00
+📝 Logged BUY at 2025-11-19 01:00:00 - TREND_PULLBACK
+   [Portfolio] 1 OPEN positions at 2025-11-20 01:00:00
+DEBUG: Falling Knife Bypass (RSI 34.9 < 35)
+📝 Logged BUY at 2025-11-20 01:00:00
+📝 Logged BUY at 2025-11-20 01:00:00 - TREND_PULLBACK
+   [Portfolio] 2 OPEN positions at 2025-11-21 01:00:00
+DEBUG: Reversal Valid (Green=True, Doji=False)
+📝 Logged BUY at 2025-11-21 01:00:00
+📝 Logged BUY at 2025-11-21 01:00:00 - TREND_PULLBACK
+   [Portfolio] 3 OPEN positions at 2025-11-24 01:00:00
+DEBUG: Reversal Valid (Green=True, Doji=False)
+📝 Logged BUY at 2025-11-24 01:00:00
+📝 Logged BUY at 2025-11-24 01:00:00 - TREND_PULLBACK
+   [Portfolio] 4 OPEN positions at 2025-11-25 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-11-26 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-11-28 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-01 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-02 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-03 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-04 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-05 01:00:00
+📝 Logged SELL at 2025-12-05 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-08 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-09 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-10 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-11 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-12 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-15 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-16 01:00:00
+DEBUG: Reversal Valid (Green=True, Doji=True)
+📝 Logged BUY at 2025-12-16 01:00:00
+📝 Logged BUY at 2025-12-16 01:00:00 - TREND_PULLBACK
+   [Portfolio] 4 OPEN positions at 2025-12-17 01:00:00
+📝 Logged SELL at 2025-12-17 01:00:00
+   [Portfolio] 3 OPEN positions at 2025-12-18 01:00:00
+DEBUG: Reversal Valid (Green=False, Doji=True)
+📝 Logged BUY at 2025-12-18 01:00:00
+📝 Logged BUY at 2025-12-18 01:00:00 - TREND_PULLBACK
+   [Portfolio] 4 OPEN positions at 2025-12-19 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-22 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-23 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-24 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-26 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-29 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-30 01:00:00
+   [Portfolio] 4 OPEN positions at 2025-12-31 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-02 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-05 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-06 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-07 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-08 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-09 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-12 01:00:00
+📝 Logged SELL at 2026-01-12 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-01-13 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-01-14 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-01-15 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-01-16 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-01-20 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-01-21 01:00:00
+DEBUG: Reversal Valid (Green=True, Doji=False)
+📝 Logged BUY at 2026-01-21 01:00:00
+📝 Logged BUY at 2026-01-21 01:00:00 - TREND_PULLBACK
+   [Portfolio] 4 OPEN positions at 2026-01-22 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-23 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-26 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-27 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-28 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-29 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-01-30 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-02-02 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-02-03 01:00:00
+   [Portfolio] 4 OPEN positions at 2026-02-04 01:00:00
+📝 Logged SELL at 2026-02-04 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-02-05 01:00:00
+   [Portfolio] 3 OPEN positions at 2026-02-06 01:00:00

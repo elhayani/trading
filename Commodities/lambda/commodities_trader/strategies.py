@@ -215,7 +215,8 @@ class ForexStrategies:
                             prev_vol = prev.get('volume', 0) or 0
                             is_vol_up = curr_vol > prev_vol if curr_vol > 0 else True
                             
-                            if not (is_green and is_vol_up):
+                            # V5.7 BOOST: Require only ONE condition (green OR volume up)
+                            if not (is_green or is_vol_up):
                                 is_valid_entry = False
                                 # print(f"DEBUG: 🛡️ Anti-Wick blocked {pair} (Green={is_green}, VolUp={is_vol_up})")
                         

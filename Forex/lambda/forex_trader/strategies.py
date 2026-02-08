@@ -216,8 +216,8 @@ class ForexStrategies:
             close_price = float(current['close'])
             deviation_pct = ((close_price - sma200) / sma200) * 100
             
-            # V5.5: Near or above SMA200 (within -1.5% Strict Relaxed)
-            is_bull_trend = deviation_pct > -1.5
+            # V5.7 BOOST: Relaxed to -3.0% to capture more Forex trades
+            is_bull_trend = deviation_pct > -3.0
             
             # V5.2 EXCEPTION: Deep Value (RSI < 30) -> Ignore Trend, catch the bottom
             if current['RSI'] < 30:
@@ -283,7 +283,7 @@ class ForexStrategies:
                 'corridor': corridor_name,
                 'regime': current_regime,
                 'scalping_mode': scalping_mode,
-                'risk_multiplier': risk_multiplier * 0.5, # V5.6 Maintenance Mode (Capital Shifter)
+                'risk_multiplier': risk_multiplier, # V5.7 BOOST: Full risk restored
                 'tp_multiplier': tp_multiplier,
                 'sl_multiplier': sl_multiplier,
                 # 🛡️ V5.1: Predictability Index

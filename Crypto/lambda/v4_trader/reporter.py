@@ -4,6 +4,7 @@ import boto3
 import logging
 import requests
 from datetime import datetime, timedelta
+
 from exchange_connector import ExchangeConnector
 
 # Setup Logging

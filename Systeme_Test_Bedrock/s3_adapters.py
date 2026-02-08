@@ -18,7 +18,24 @@ class S3ExchangeConnector:
         if not self.current_timestamp:
             raise ValueError("Timestamp not set in S3ExchangeConnector")
             
-        data = self.historical_data.get(symbol, [])
+        # Normalize symbol lookup
+        data = self.historical_data.get(symbol)
+        if not data:
+             # Try variations
+             variations = [
+                 symbol.replace('/', '-'),
+                 symbol.replace('-', '/'),
+                 symbol.replace('/', ''),
+                 symbol.replace('-', ''),
+                 symbol.replace('USDT', '-USD'),
+                 symbol.replace('-USD', 'USDT'),
+                 symbol.replace('BTC/USDT', 'BTC-USD') # Specific override
+             ]
+             for var in variations:
+                 if var in self.historical_data:
+                     data = self.historical_data[var]
+                     break
+        
         if not data:
             logger.warning(f"No historical data for {symbol}")
             return []
@@ -37,7 +54,23 @@ class S3ExchangeConnector:
         if not self.current_timestamp:
             raise ValueError("Timestamp not set in S3ExchangeConnector")
 
-        data = self.historical_data.get(symbol, [])
+        # Normalize symbol lookup
+        data = self.historical_data.get(symbol)
+        if not data:
+             # Try variations
+             variations = [
+                 symbol.replace('/', '-'),
+                 symbol.replace('-', '/'),
+                 symbol.replace('/', ''),
+                 symbol.replace('-', ''),
+                 symbol.replace('USDT', '-USD'),
+                 symbol.replace('-USD', 'USDT')
+             ]
+             for var in variations:
+                 if var in self.historical_data:
+                     data = self.historical_data[var]
+                     break
+
         if not data:
             return {'last': 0.0}
 
@@ -117,8 +150,38 @@ class InMemoryTable:
         self.items.append(Item)
         logger.info(f"DynamoDB Put: {Item}")
         
-    def scan(self, FilterExpression=None):
-        return {'Items': self.items}
+    def scan(self, FilterExpression=None, Limit=None, **kwargs):
+        items = self.items
+        
+        if FilterExpression:
+            items = [item for item in self.items if self._evaluate_condition(item, FilterExpression)]
+            
+        if Limit and isinstance(Limit, int):
+            items = items[:Limit]
+            
+        return {'Items': items}
+
+    def _evaluate_condition(self, item, condition):
+        try:
+            op = getattr(condition, 'op', None)
+            
+            if op == 'and':
+                complex_val = getattr(condition, 'complex_val', [])
+                if not complex_val: return True
+                # Recursive AND: all sub-conditions must be true
+                return all(self._evaluate_condition(item, c) for c in complex_val)
+                
+            elif op == 'eq':
+                key = getattr(condition, 'key', None)
+                val = getattr(condition, 'val', None)
+                if key:
+                    return item.get(key) == val
+                    
+            # Fallback for old/unknown
+            return True
+        except Exception as e:
+            logger.warning(f"Error evaluating mock condition: {e}")
+            return True
 
     def get_trades_at(self, timestamp_str):
         trades = []
@@ -128,23 +191,27 @@ class InMemoryTable:
                 trades.append(item)
         return trades
 
-    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues):
+    def update_item(self, Key=None, UpdateExpression=None, ExpressionAttributeNames=None, ExpressionAttributeValues=None, **kwargs):
+        """
+        V6.1 FIX: Accept both positional and keyword arguments
+        Matches real DynamoDB.Table.update_item() signature
+        """
         logger.info(f"DynamoDB Update: {Key} {UpdateExpression}")
-        
+
         # Find the item
         target_item = None
         key_name = list(Key.keys())[0]
         key_val = list(Key.values())[0]
-        
+
         for item in self.items:
             if item.get(key_name) == key_val:
                 target_item = item
                 break
-        
+
         if not target_item:
             logger.warning(f"UpdateItem: Item not found {Key}")
             return {}
-            
+
         # Parse SET expression (simple implementation for test)
         # "set #st = :s, PnL = :p..."
         clean_expr = UpdateExpression.strip()
@@ -155,16 +222,16 @@ class InMemoryTable:
                 if len(parts) == 2:
                     k = parts[0].strip()
                     v = parts[1].strip()
-                    
+
                     # Resolve Names
                     if ExpressionAttributeNames and k in ExpressionAttributeNames:
                         k = ExpressionAttributeNames[k]
-                    
+
                     # Resolve Values
                     if ExpressionAttributeValues and v in ExpressionAttributeValues:
                         val = ExpressionAttributeValues[v]
                         target_item[k] = val
-                        
+
         return {}
 
 class S3DataLoader:

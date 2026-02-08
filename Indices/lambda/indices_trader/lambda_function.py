@@ -247,13 +247,31 @@ def lambda_handler(event, context):
             logger.error(f"❌ Macro Context Failed: {e}")
     
     results = []
-    
+
+    # 🔥 V6.0 FIX: Manage Exits FIRST in separate loop (unconditional)
+    # This ensures positions are closed even if pair is disabled/erratic/no data
+    logger.info("🚪 Phase 1: Checking exits for all open positions...")
+    for pair in CONFIGURATION.keys():
+        try:
+            # Fetch current price (minimal data needed)
+            df = DataLoader.get_latest_data(pair)
+            if df is not None and len(df) > 0:
+                current_price = df.iloc[-1]['close']
+                exit_result = manage_exits(pair, current_price)
+                if exit_result and "CLOSED" in str(exit_result):
+                    logger.info(f"📤 Exit executed for {pair}: {exit_result}")
+                    results.append({'pair': pair, 'action': 'EXIT', 'result': exit_result})
+        except Exception as e:
+            logger.error(f"❌ Error managing exits for {pair}: {e}")
+
+    # 🎯 Phase 2: Analyze entry signals (conditional on checks)
+    logger.info("🎯 Phase 2: Analyzing entry signals...")
     for pair, config in CONFIGURATION.items():
         if not config['enabled']:
             continue
-            
+
         logger.info(f"🔍 Analyzing {pair} with {config['strategy']}...")
-        
+
         # 1. Fetch Data
         df = DataLoader.get_latest_data(pair)
         if df is None or len(df) < 201:
@@ -271,13 +289,13 @@ def lambda_handler(event, context):
                     'multiplier': pred_adj.get('size_multiplier', 1.0),
                     'should_trade': pred_adj.get('should_trade', True)
                 }
-                
+
                 logger.info(f"   🛡️ Predictability {pair}: {predictability['grade']} ({predictability['score']}/100)")
-                
+
                 # 🚫 QUARANTINE LOGIC (INDICES SPECIFIC)
                 # Nasdaq/SPX are noisier than Crypto. We lower the threshold (15 vs 25).
                 INDICES_MIN_SCORE = 15
-                
+
                 if predictability['score'] < INDICES_MIN_SCORE:
                     # EXCEPTION 1: VIX > 30 (Panic Selling = Opportunity for Indices)
                     if macro_data and macro_data['vix']['value'] > 30:
@@ -287,43 +305,35 @@ def lambda_handler(event, context):
                         logger.warning(f"🛑 {pair} QUARANTINED (Score {predictability['score']} < {INDICES_MIN_SCORE})")
                         log_skip_to_dynamo(pair, f"QUARANTINE_ERRATIC_{predictability['grade']}", df.iloc[-1]['close'])
                         continue
-                
+
                 elif not predictability['should_trade']:
                     # Score between 15 and 25 (Marked ERRATIC by standard module but OK for Indices)
                     logger.info(f"ℹ️ {pair} Low Stability ({predictability['score']}) -> ALLOWED for Indices (Range 15-25)")
                     # Slight penalty for low score
                     predictability['multiplier'] = min(predictability.get('multiplier', 1.0), 0.8)
-                    
+
             except Exception as e:
                 logger.error(f"Predictability Check Error: {e}")
-            
+
         # 2. Calculate Indicators
         try:
             df = ForexStrategies.calculate_indicators(df, config['strategy'])
-            
+
             # Log Technical Analysis details (Like Crypto Bot)
             last_row = df.iloc[-1]
             log_msg = f"   📊 {pair}: Close={last_row['close']:.5f} | ATR={last_row['ATR']:.5f}"
-            
+
             if 'RSI' in df.columns:
                 log_msg += f" | RSI={last_row['RSI']:.2f}"
             if 'SMA_200' in df.columns:
                 log_msg += f" | SMA200={last_row['SMA_200']:.5f}"
             if 'BBU' in df.columns:
                 log_msg += f" | BB={last_row['BBU']:.5f}/{last_row['BBL']:.5f}"
-                
+
             logger.info(log_msg)
-            
+
         except Exception as e:
             logger.error(f"❌ Error indicators {pair}: {e}")
-            continue
-            
-        # 3. Manage Exits First (Priority)
-        current_price = df.iloc[-1]['close']
-        exit_result = manage_exits(pair, current_price)
-        if exit_result and "CLOSED" in str(exit_result):
-            logger.info(f"📤 Exit executed for {pair}: {exit_result}")
-            results.append({'pair': pair, 'action': 'EXIT', 'result': exit_result})
             continue
         
         # 4. Check Cooldown & Exposure

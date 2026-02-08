@@ -14,7 +14,7 @@ echo ""
 # Configuration
 STACK_NAME="IndicesTradingStack"
 REGION="eu-west-3"
-CDK_DIR="Indices/infrastructure/cdk"
+CDK_DIR="infrastructure/cdk"
 ACCOUNT_ID="946179054632"
 
 # Colors
@@ -25,8 +25,8 @@ NC='\033[0m'
 echo "📚 Step 1: Building Indices Dependency Layer..."
 echo "----------------------------------------------------------------------"
 
-LAYER_DIR="Indices/lambda/layer_indices/python"
-rm -rf Indices/lambda/layer_indices
+LAYER_DIR="lambda/layer_indices/python"
+rm -rf lambda/layer_indices
 mkdir -p $LAYER_DIR
 
 echo "  → Installing yfinance, pandas_ta..."
@@ -65,7 +65,7 @@ rm -rf $LAYER_DIR/numba $LAYER_DIR/llvmlite $LAYER_DIR/scipy
 # find $LAYER_DIR -name "*.dist-info" -type d -exec rm -rf {} +
 find $LAYER_DIR -name "__pycache__" -type d -exec rm -rf {} +
 
-echo -e "${GREEN}✅ Layer prepared in Indices/lambda/layer_indices${NC}"
+echo -e "${GREEN}✅ Layer prepared in lambda/layer_indices${NC}"
 echo ""
 
 # Step 2: Deploy

@@ -205,10 +205,27 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
                 if isinstance(response, dict):
                     body = response.get('body')
                     if body:
+                        # API Gateway format
                         b = json.loads(body)
-                        signals = b.get('details', [])
+                    else:
+                        # Direct invocation format
+                        b = response
                         
-                        for signal in signals:
+                    signals = b.get('details', [])
+                    # Handle single signal object vs list
+                    if isinstance(signals, str):
+                         # details might be a string message like "STOP_LOSS_AT..."
+                         pass 
+                    elif isinstance(signals, dict):
+                        signals = [signals]
+                    
+                    # Special handling for text-based details from manage_exits
+                    details_str = b.get('details', '')
+                    if isinstance(details_str, str) and ("STOP_LOSS" in details_str or "TAKE_PROFIT" in details_str or "HARD_TP" in details_str or "TRAILING" in details_str):
+                         # reconstruct a signal object for the logger
+                         signals = [{'action': 'EXIT', 'result': details_str}]
+                        
+                    for signal in signals:
                             if signal.get('action') == 'EXIT':
                                 reason = signal.get('result', 'EXIT')
                                 profit = "0.0" 
@@ -450,18 +467,24 @@ def run_test(asset_class, symbol, days, start_date=None, offset_days=0):
     s3_requests = S3RequestsMock(macro_map)
 
     class MockCondition:
-        def __init__(self, value='MOCK'):
-            self.value = value
+        def __init__(self, key=None, op=None, val=None, complex_val=None):
+            self.key = key
+            self.op = op
+            self.val = val
+            self.complex_val = complex_val 
+
         def eq(self, other):
-            return MockCondition(f"{self.value} == {other}")
+            return MockCondition(key=self.key, op='eq', val=other)
+        
         def __and__(self, other):
-            return MockCondition(f"{self.value} & {other.value}")
-            
-    mock_condition_builder = MagicMock()
-    mock_condition_builder.eq.side_effect = lambda val: MockCondition(f"EQ({val})")
+            return MockCondition(op='and', complex_val=[self, other])
+
+    def mock_attr(name):
+        return MockCondition(key=name)
+        
     mock_conditions = MagicMock()
-    mock_conditions.Attr.return_value = mock_condition_builder
-    mock_conditions.Key.return_value = mock_condition_builder
+    mock_conditions.Attr.side_effect = mock_attr
+    mock_conditions.Key.side_effect = mock_attr
 
     with patch('boto3.resource') as mock_resource, \
          patch('boto3.dynamodb.conditions', mock_conditions, create=True):

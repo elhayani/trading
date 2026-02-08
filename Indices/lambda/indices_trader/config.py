@@ -11,14 +11,14 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 55, # OPTIMIZED V5.9 (Was 62/58) - Quality Dip Buying
-            'sl_atr_mult': 1.5,
-            'tp_atr_mult': 4.5, # V6.0: Increased target for better Risk/Reward (was 2.5)
+            'rsi_oversold': 52,  # V6.1: Tighter filter (was 55) for premium setups
+            'sl_atr_mult': 1.4,  # V6.1: Slightly tighter (was 1.5)
+            'tp_atr_mult': 5.0,  # V6.1: Increased from 4.5 to 5.0 (R/R 1:3.6)
             'min_volume_mult': 0.5,
             # V6.0 Trailing Stop Parameters
-            'trailing_activation_pct': 1.0,  # Activate at +1.0%
-            'trailing_distance_pct': 0.5,    # Trail 0.5% behind peak
-            'breakeven_pct': 0.5             # Move SL to BE at +0.5%
+            'trailing_activation_pct': 0.8,  # V6.1: Earlier activation (was 1.0)
+            'trailing_distance_pct': 0.4,    # V6.1: Tighter trail (was 0.5)
+            'breakeven_pct': 0.4             # V6.1: Faster BE (was 0.5)
         }
     },
     
@@ -28,15 +28,15 @@ CONFIGURATION = {
         'enabled': True,
         'timeframe': '1h',
         'params': {
-            'sma_period': 200, # Still used for trend filter (EMA50) if applicable
+            'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 40, # Not used in BB but kept for consistency
-            'sl_atr_mult': 1.5,
-            'tp_atr_mult': 5.0,  # V6.0: Capture big momentum moves (was 3.0)
+            'rsi_oversold': 40,
+            'sl_atr_mult': 1.4,  # V6.1: Tighter SL (was 1.5)
+            'tp_atr_mult': 5.5,  # V6.1: Even more aggressive (was 5.0) - Nasdaq rockets
             # V6.0 Trailing Stop Parameters
-            'trailing_activation_pct': 1.5,  # Activate at +1.5% (more room for NQ volatility)
-            'trailing_distance_pct': 0.8,
-            'breakeven_pct': 0.8
+            'trailing_activation_pct': 1.2,  # V6.1: Earlier activation (was 1.5)
+            'trailing_distance_pct': 0.6,    # V6.1: Tighter trail (was 0.8)
+            'breakeven_pct': 0.6             # V6.1: Faster BE (was 0.8)
         }
     },
 

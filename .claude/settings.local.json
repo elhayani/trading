@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(zip:*)",
+      "Bash(pkill:*)",
+      "Bash(grep:*)",
+      "Bash(while ps aux)",
+      "Bash(done)",
+      "Bash(./scripts/deploy.sh)",
+      "Bash(tee -a ~/Trading/indices_deploy_v61.log)",
+      "Bash(tee:*)"
+    ]
+  }
+}
