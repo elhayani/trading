@@ -10,9 +10,9 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 55,  # ULTRA AGGRESS V5.5
+            'rsi_oversold': 45,  # V5.7 BOOST (was 55)
             'sl_atr_mult': 1.0,
-            'tp_atr_mult': 3.0
+            'tp_atr_mult': 2.5  # Slightly tighter TP for more frequent wins
         }
     },
     
@@ -24,9 +24,9 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 55, # ULTRA AGGRESS V5.5
+            'rsi_oversold': 45, # V5.7 BOOST (was 55)
             'sl_atr_mult': 1.0,
-            'tp_atr_mult': 3.0
+            'tp_atr_mult': 2.5
         }
     },
     
@@ -46,7 +46,7 @@ CONFIGURATION = {
 
 # Paramètres Globlaux
 GLOBAL_SETTINGS = {
-    'risk_per_trade': 0.02,  # 2% du capital
+    'risk_per_trade': 0.02,  # V5.7 BOOST: Restored to 2% (was 1% maintenance)
     'leverage': 30,
     'max_positions_per_pair': 1
 }

@@ -154,6 +154,7 @@
                             <th class="p-4">Prix Achat (Total)</th>
                             <th class="p-4">Prix Actuel (Total)</th>
                             <th class="p-4">Status</th>
+                            <th class="p-4 w-64">Reason</th>
                             <th class="p-4 text-right">PnL %</th>
                             <th class="p-4 text-right">PnL €</th>
                         </tr>
@@ -478,6 +479,13 @@
                     statusDisplay = '<span class="bg-slate-500/20 text-slate-500 px-2 py-1 rounded text-xs">SKIP</span>';
                 }
 
+                // Reason Logic
+                let reasonText = trade.ExitReason || trade.AI_Reason || trade.reason || '-';
+                if (reasonText.startsWith('AI_VETO: ')) reasonText = reasonText.substring(9);
+                const fullReason = reasonText;
+                if (reasonText.length > 40) reasonText = reasonText.substring(0, 40) + '...';
+                const reasonDisplay = `<span title="${fullReason}" class="text-xs text-slate-500 block max-w-[250px] truncate">${reasonText}</span>`;
+
                 // Format PnL % et € (seulement si trade réel)
                 let pnlPercentDisplay = '-';
                 let pnlEuroDisplay = '-';
@@ -513,6 +521,7 @@
                     <td class="p-4 font-mono text-blue-300">${entryDisplay}</td>
                     <td class="p-4 font-mono text-purple-300">${currentDisplay}</td>
                     <td class="p-4">${statusDisplay}</td>
+                    <td class="p-4">${reasonDisplay}</td>
                     <td class="p-4 text-right">${pnlPercentDisplay}</td>
                     <td class="p-4 text-right">${pnlEuroDisplay}</td>
                 `;

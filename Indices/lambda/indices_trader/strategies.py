@@ -97,25 +97,51 @@ class ForexStrategies:
     @staticmethod
     def check_reversal(current, direction):
         """
-        V5 Reversal Trigger: Confirm candle color matches direction
-        Prevents catching falling knives.
+        V5.8 Reversal Trigger: Relaxed for Indices
+        1. Green Candle (Standard)
+        2. Doji (Small Body/Indecision) -> Allowed
+        3. RSI Crossing Up (Signal Line) -> Allowed even if red (if RSI < 40)
+        4. Deep Oversold Exception (<30)
         """
         open_p = float(current['open'])
         close_p = float(current['close'])
+        high_p = float(current['high'])
+        low_p = float(current['low'])
+        
+        body_size = abs(close_p - open_p)
+        total_range = high_p - low_p if high_p != low_p else 1.0
+        is_doji = (body_size / total_range) < 0.15 # Body is less than 15% of range
         
         if direction == 'LONG':
-            # Exception: Deep Oversold (RSI < 30) -> Catch the knife
-            if 'RSI' in current and current['RSI'] < 30:
-                print(f"DEBUG: Falling Knife Bypass (RSI {current['RSI']:.1f} < 30)")
+            rsi = current.get('RSI', 50)
+            
+            # 1. Deep Oversold (Knife Catch)
+            if rsi < 35: # Relaxed form 30 to 35
+                print(f"DEBUG: Falling Knife Bypass (RSI {rsi:.1f} < 35)")
                 return True
-            return close_p >= open_p # Green Candle
+                
+            # 2. Green Candle or Doji
+            if close_p >= open_p or is_doji:
+                print(f"DEBUG: Reversal Valid (Green={close_p>=open_p}, Doji={is_doji})")
+                return True
+                
+            # 3. RSI Hook (If candle red but RSI turning up strongly - simplified as > previous RSI)
+            # This requires 'prev' which relies on caller context, assuming basic candle check here.
+            # We stick to candle logic in this static method for now.
+            
+            return False
         
         if direction == 'SHORT':
-            # Exception: Deep Overbought (RSI > 70) -> Catch the spike
-            if 'RSI' in current and current['RSI'] > 70:
-                print(f"DEBUG: Spiking Knife Bypass (RSI {current['RSI']:.1f} > 70)")
+             # 1. Deep Overbought
+            if 'RSI' in current and current['RSI'] > 65: # Relaxed from 70
+                print(f"DEBUG: Spiking Knife Bypass (RSI {current['RSI']:.1f} > 65)")
                 return True
-            return close_p <= open_p # Red Candle
+                
+            # 2. Red Candle or Doji
+            if close_p <= open_p or is_doji:
+                return True
+                
+            return False
         return False
 
     @staticmethod
@@ -148,9 +174,7 @@ class ForexStrategies:
         # Vérifie si on est dans la session optimale pour cet actif
         # Pour les Indices: Session US uniquement (15h-22h Paris)
         if TRADING_WINDOWS_AVAILABLE:
-            print(f"DEBUG: Checking Golden Window for {pair}")
             is_valid = is_within_golden_window(pair)
-            print(f"DEBUG: is_within_golden_window({pair}) -> {is_valid}")
             if not is_valid:
                 # Hors session optimale - on SKIP
                 return None
@@ -185,19 +209,22 @@ class ForexStrategies:
             current_regime = corridor_info.get('regime', 'STANDARD')
             min_volume_ratio = corridor_params.get('min_volume_ratio', 1.0)
             
-            # RSI adaptatif selon le corridor
-            adaptive_rsi = get_rsi_threshold_adaptive(pair, params.get('rsi_oversold', 40))
-            params = params.copy()
-            params['rsi_oversold'] = adaptive_rsi
+            # RSI adaptatif selon le corridor (DISABLED FOR V5.8 INDICES FIX)
+            # adaptive_rsi = get_rsi_threshold_adaptive(pair, params.get('rsi_oversold', 40))
+            # params = params.copy()
+            # params['rsi_oversold'] = adaptive_rsi
             
             # --- 🛑 V5.1 VETO DE VOLUME (Point 3) ---
             if 'volume' in df.columns:
                 current_volume = float(current.get('volume', 0))
-                avg_volume = float(df['volume'].tail(20).mean()) if len(df) >= 20 else 0
+                # V5.8: Volume check using config parameter (default 0.9x relaxed)
+                min_vol_mult = params.get('min_volume_mult', 1.1)
                 
-                if avg_volume > 0 and current_volume > 0:
-                    volume_veto = check_volume_veto(pair, current_volume, avg_volume)
+                # Check for Volume Veto (if available)
+                if check_volume_veto: # Check if imported function exists
+                    volume_veto = check_volume_veto(pair, df, min_vol_mult)
                     if volume_veto.get('veto', False):
+                        print(f"DEBUG: 🔇 Volume Veto (Vol < {min_vol_mult}x Avg)")
                         return None
 
         # --- 🛡️ V5.1 PREDICTABILITY INDEX (Anti-Erratic Filter) ---
@@ -243,46 +270,48 @@ class ForexStrategies:
                 # En cas d'erreur, on continue avec les paramètres par défaut
                 pass
         
-        # --- STRATÉGIE 1: TREND PULLBACK ---
+        # --- STRATÉGIE 1: TREND PULLBACK (V5.8 OPTIMIZED) ---
         if strategy == 'TREND_PULLBACK':
-            print(f"DEBUG: TREND_PULLBACK Analysis - Close={current['close']:.2f} SMA200={current.get('SMA_200', 'N/A')} EMA50={current.get('EMA_50', 'N/A')} RSI={current.get('RSI', 'N/A')}")
             
             if 'SMA_200' not in df.columns or pd.isna(current['SMA_200']):
-                print("DEBUG: SMA_200 missing or NaN")
                 return None
             
-            # V5.3: Relaxed Trend Condition for Indices
+            # 1. Trend Condition
             sma200 = float(current['SMA_200'])
             close_p = float(current['close'])
             deviation_pct = ((close_p - sma200) / sma200) * 100
             
-            # Allow dip up to 1.5% below SMA200
-            is_bull_trend = (deviation_pct > -1.5)
+            # V5.8: Allow dip up to 4.0% below SMA200 (Very generous)
+            is_bull_trend = (deviation_pct > -4.0)
             
-            # Deep Value Bypass: If RSI < 35, ignore trend condition (Flash Crash)
-            if 'RSI' in current and current['RSI'] < 35:
-                print(f"DEBUG: Trend Bypass (RSI {current['RSI']:.1f} < 35)")
+            # 2. RSI Condition
+            try:
+                rsi_val = float(current.get('RSI', 100))
+                # prev_rsi = float(prev.get('RSI', 100)) # Not strictly needed if relying on current
+                trigger_rsi = float(params.get('rsi_oversold', 58))
+            except Exception:
+                return None
+            
+            # Deep Value Bypass
+            if rsi_val < 35:
                 is_bull_trend = True
             
-            if is_bull_trend:
-                # V5.1 FIX: Check Current OR Previous RSI to catch V-shape bounces
-                rsi_val = float(current['RSI'])
-                prev_rsi = float(prev['RSI'])
-                rsi_trigger = (rsi_val < params['rsi_oversold']) or (prev_rsi < params['rsi_oversold'])
+            # Check Signal (RSI Oversold)
+            # Simplified: Only current RSI matters for clean entry (prev RSI can trigger late)
+            is_rsi_oversold = (rsi_val < trigger_rsi)
+            
+            if is_rsi_oversold and is_bull_trend:
                 
-                if rsi_trigger:
-                    print(f"DEBUG: Bull Trend + RSI Trigger (Cur={rsi_val:.1f}, Prev={prev_rsi:.1f} < {params['rsi_oversold']})")
-                    if atr > 0.0005:
-                         reversal = ForexStrategies.check_reversal(current, 'LONG')
-                         print(f"DEBUG: Reversal Check -> {reversal}")
-                         if reversal:
-                            signal = 'LONG'
-                            sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
-                            tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
-                            stop_loss = entry_price - sl_dist
-                            take_profit = entry_price + tp_dist
-            else:
-                 pass # print("DEBUG: Not in Bull Trend")
+                if atr > 0.0001: # Basic volatility check
+                     # Reversal Check
+                     reversal = ForexStrategies.check_reversal(current, 'LONG')
+                     
+                     if reversal:
+                        signal = 'LONG'
+                        sl_dist = atr * params['sl_atr_mult'] * sl_multiplier
+                        tp_dist = atr * params['tp_atr_mult'] * tp_multiplier
+                        stop_loss = entry_price - sl_dist
+                        take_profit = entry_price + tp_dist
 
         # --- STRATÉGIE 2: BOLLINGER BREAKOUT ---
         elif strategy == 'BOLLINGER_BREAKOUT':

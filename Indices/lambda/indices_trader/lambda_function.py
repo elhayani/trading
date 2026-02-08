@@ -52,11 +52,11 @@ except ImportError:
 
 # ==================== CONFIGURATION ====================
 INITIAL_CAPITAL = float(os.environ.get('INITIAL_CAPITAL', '400'))  # Capital initial total
-CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # Fallback
+CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '2000')) # Default: 2000 per position (0.5% Risk)
 STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-4.0'))   # -4% Stop Loss (Indices are volatile)
 HARD_TP_PCT = float(os.environ.get('HARD_TP', '5.0'))        # +5% Take Profit  
-COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '4')) # 4h between trades per index
-MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '2'))       # Max 2 trades per index
+COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '2')) # OPTIMIZED V5.8: 2h (Was 4h) for re-entries
+MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '5'))       # OPTIMIZED V5.9: 5 simultaneous trades
 DYNAMO_TABLE = os.environ.get('DYNAMO_TABLE', 'EmpireIndicesHistory')
 # ========================================================
 
@@ -310,6 +310,22 @@ def lambda_handler(event, context):
                 signal['news_context'] = news_context
                 
                 if ai_decision['decision'] == 'CONFIRM':
+                    # --- V5.9 SIZING DÉGRESSIF (Risk Management) ---
+                    # Si on a déjà 3 positions ou plus, on réduit la taille de 50%
+                    current_exposure = portfolio['exposure']
+                    trade_allocation = CAPITAL_PER_TRADE
+                    
+                    if current_exposure >= 3:
+                        trade_allocation *= 0.5
+                        logger.info(f"⚠️ High Exposure ({current_exposure}): Sizing reduced to ${trade_allocation} (50%)")
+                    
+                    # Injecter la taille ajustée (Coût en $)
+                    signal['cost'] = trade_allocation
+                    # Recalculer la quantité en unités (Size = Allocation / Entry Price)
+                    entry_p = float(signal.get('entry', df.iloc[-1]['close']))
+                    if entry_p > 0:
+                        signal['size'] = trade_allocation / entry_p
+                    
                     results.append(signal)
                     log_trade_to_dynamo(signal)
                 else:

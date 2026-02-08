@@ -10,9 +10,10 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 60, # ULTRA AGGRESSIVE V5.5
-            'sl_atr_mult': 2.0, 
-            'tp_atr_mult': 4.0  
+            'rsi_oversold': 55, # OPTIMIZED V5.9 (Was 62/58) - Quality Dip Buying
+            'sl_atr_mult': 1.5,
+            'tp_atr_mult': 2.5, # Tighter TP for faster rotation
+            'min_volume_mult': 0.5 
         }
     },
     
