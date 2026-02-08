@@ -50,6 +50,16 @@ try:
 except ImportError:
     PREDICTABILITY_INDEX_AVAILABLE = False
 
+# 📈 V6.0 Trailing Stop Module
+try:
+    import sys
+    sys.path.insert(0, '/opt/python/shared/modules')  # Lambda layer path
+    from trailing_stop import check_trailing_stop, TrailingStopManager
+    TRAILING_STOP_AVAILABLE = True
+except ImportError:
+    TRAILING_STOP_AVAILABLE = False
+    logger.warning("⚠️ Trailing Stop module not available")
+
 # ==================== CONFIGURATION ====================
 INITIAL_CAPITAL = float(os.environ.get('INITIAL_CAPITAL', '400'))  # Capital initial total
 CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '100'))  # Fallback si Position Sizing non dispo
@@ -126,14 +136,63 @@ def manage_exits(pair, current_price, asset_class='Commodities'):
             stored_sl = float(trade.get('SL', 0))
             stored_tp = float(trade.get('TP', 0))
             
-            # Check Dynamic Stop Loss (ATR Based)
-            if stored_sl > 0:
+            # --- 📈 V6.0 TRAILING STOP CHECK ---
+            if TRAILING_STOP_AVAILABLE and pnl_pct > 0:
+                peak_price = float(trade.get('PeakPrice', entry_price))
+                atr = float(trade.get('ATR', 0)) if trade.get('ATR') else None
+                
+                # Use stored SL as current SL if available, else derive from global pct
+                if stored_sl == 0:
+                    if trade_type in ['LONG', 'BUY']:
+                         stored_sl = entry_price * (1 + STOP_LOSS_PCT/100)
+                    else:
+                         stored_sl = entry_price * (1 - STOP_LOSS_PCT/100) # STOP_LOSS_PCT is negative (-3.0) 
+                         # Wait, if STOP_LOSS_PCT is -3.0:
+                         # LONG: entry * (1 - 0.03) = 0.97 * entry (Correct)
+                         # SHORT: entry * (1 - (-0.03)) = 1.03 * entry (Correct)
+                
+                trailing_result = check_trailing_stop(
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    trade_type=trade_type,
+                    current_sl=stored_sl,
+                    asset_class=asset_class,
+                    peak_price=peak_price,
+                    atr=atr
+                )
+                
+                # Update peak price if changed
+                if trailing_result['peak'] != peak_price:
+                    history_table.update_item(
+                        Key={'TradeId': trade['TradeId']},
+                        UpdateExpression="set PeakPrice = :p",
+                        ExpressionAttributeValues={':p': str(trailing_result['peak'])}
+                    )
+                
+                # Update SL if trailing moved it
+                if trailing_result['new_sl'] is not None:
+                    # Update the Stored SL in DynamoDB so next check uses it
+                    history_table.update_item(
+                        Key={'TradeId': trade['TradeId']},
+                        UpdateExpression="set SL = :sl",
+                        ExpressionAttributeValues={':sl': str(trailing_result['new_sl'])}
+                    )
+                    stored_sl = float(trailing_result['new_sl']) # Update local var for next check
+                    logger.info(f"📈 {trailing_result['mode']}: Updated SL to {trailing_result['new_sl']:.5f}")
+                
+                # Check if trailing stop triggered exit
+                if trailing_result['triggered']:
+                    exit_reason = f"TRAILING_{trailing_result['mode']}"
+                    logger.info(f"📈 TRAILING STOP triggered for {pair}: {pnl_pct:.2f}%")
+
+            # Check Dynamic Stop Loss (ATR Based or Updated by Trailing)
+            if not exit_reason and stored_sl > 0:
                 if trade_type in ['LONG', 'BUY'] and current_price <= stored_sl:
                     exit_reason = "STOP_LOSS_ATR"
-                    logger.warning(f"🛑 ATR STOP LOSS HIT for {pair}: {current_price} <= {stored_sl}")
+                    logger.warning(f"🛑 ATR/TRAILING STOP LOSS HIT for {pair}: {current_price} <= {stored_sl}")
                 elif trade_type in ['SHORT', 'SELL'] and current_price >= stored_sl:
                     exit_reason = "STOP_LOSS_ATR"
-                    logger.warning(f"🛑 ATR STOP LOSS HIT for {pair}: {current_price} >= {stored_sl}")
+                    logger.warning(f"🛑 ATR/TRAILING STOP LOSS HIT for {pair}: {current_price} >= {stored_sl}")
 
             # Check Dynamic Take Profit (ATR Based)
             if not exit_reason and stored_tp > 0:
@@ -147,9 +206,7 @@ def manage_exits(pair, current_price, asset_class='Commodities'):
             # Fallback: Global Safety Nets (Circuit Breakers)
             if not exit_reason:
                 if pnl_pct <= STOP_LOSS_PCT: # Default -3% (Safety)
-                    # Only trigger if Stored SL didn't exist or is wider than safety? 
-                    # Actually, if ATR SL is -7%, we don't want this -3% to trigger.
-                    # So we only use this if Stored SL is 0 (not set).
+                    # Only use this if Stored SL is 0 (not set).
                     if stored_sl == 0:
                         exit_reason = "STOP_LOSS_HARD"
                         logger.warning(f"🛑 HARD STOP LOSS HIT for {pair}: {pnl_pct:.2f}%")

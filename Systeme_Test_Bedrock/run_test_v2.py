@@ -76,9 +76,9 @@ class FakeDateTime(datetime):
     def set_time(cls, new_time):
         cls._current_time = new_time
 
-def make_mock_get_portfolio_context(mock_dynamodb):
+def make_mock_get_portfolio_context(mock_dynamodb, table_name):
     def _mock(pair):
-        table = mock_dynamodb.Table('EmpireIndicesHistory') 
+        table = mock_dynamodb.Table(table_name) 
         all_items = table.items
         
         open_trades = [item for item in all_items if item.get('Pair') == pair and item.get('Status') == 'OPEN']
@@ -126,7 +126,14 @@ def run_test_forex_indices_commodities(bot_module, asset_class, symbol, market_d
     else:
         patched_config = original_config
     
-    mock_get_portfolio = make_mock_get_portfolio_context(mock_dynamodb)
+    # Determine table name based on asset class
+    table_name = 'EmpireForexHistory'
+    if asset_class == 'Indices':
+        table_name = 'EmpireIndicesHistory'
+    elif asset_class == 'Commodities':
+        table_name = 'EmpireCommoditiesHistory'
+
+    mock_get_portfolio = make_mock_get_portfolio_context(mock_dynamodb, table_name)
     
     # Mock Bedrock to avoid hanging/cost and ensure deterministic test
     mock_ask_bedrock = MagicMock(return_value={'decision': 'CONFIRM', 'reason': 'Test Mock: Strategy Valid'})
@@ -141,6 +148,7 @@ def run_test_forex_indices_commodities(bot_module, asset_class, symbol, market_d
          patch.object(strategies_module, 'is_within_golden_window', return_value=True) if strategies_module else patch('strategies.is_within_golden_window', return_value=True), \
          patch.object(strategies_module, 'get_session_phase', return_value={'is_tradeable': True, 'aggressiveness': 'HIGH'}) if strategies_module else patch('strategies.get_session_phase', return_value={'is_tradeable': True, 'aggressiveness': 'HIGH'}), \
          patch.object(strategies_module, 'check_volume_veto', return_value={'veto': False, 'reason': 'TEST'}) if strategies_module else patch('strategies.check_volume_veto', return_value={'veto': False}):
+
 
 
         MockDataLoaderPatch.get_latest_data.side_effect = mock_loader.get_latest_data
@@ -178,6 +186,18 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
                 'timestamp': dt.isoformat()
             }
             context = TestContext()
+            
+            # Debug Portfolio State
+            if mock_dynamodb:
+                try:
+                    table_name = 'EmpireForexHistory' if asset_class == 'Forex' else 'EmpireIndicesHistory' if asset_class == 'Indices' else 'EmpireCommoditiesHistory'
+                    if asset_class != 'Crypto':
+                        tbl = mock_dynamodb.Table(table_name)
+                        open_pos = [i for i in tbl.items if i.get('Status') == 'OPEN']
+                        if open_pos:
+                            print(f"   [Portfolio] {len(open_pos)} OPEN positions at {dt}")
+                except:
+                    pass
             
             try:
                 response = bot_module.lambda_handler(event, context)
@@ -261,12 +281,73 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
     logger.info(f"Test complete. CSV Log saved to {log_filename}")
 
 
+def fetch_crypto_from_binance(symbol, days, offset_days=0):
+    """
+    Fetch crypto data directly from Binance API (free, no API key needed for public data)
+    """
+    import requests
+    from datetime import timedelta
+    
+    # Convert symbol format: BTC/USDT -> BTCUSDT, BTC-USD -> BTCUSDT
+    binance_symbol = symbol.replace('/', '').replace('-USD', 'USDT').replace('-', '')
+    
+    end_time = int((datetime.now() - timedelta(days=offset_days)).timestamp() * 1000)
+    start_time = int((datetime.now() - timedelta(days=offset_days + days)).timestamp() * 1000)
+    
+    logger.info(f"📊 Fetching {binance_symbol} from Binance API...")
+    
+    all_data = []
+    current_start = start_time
+    
+    while current_start < end_time:
+        url = f"https://api.binance.com/api/v3/klines"
+        params = {
+            'symbol': binance_symbol,
+            'interval': '1h',
+            'startTime': current_start,
+            'endTime': end_time,
+            'limit': 1000
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            if response.status_code == 200:
+                klines = response.json()
+                if not klines:
+                    break
+                    
+                for k in klines:
+                    # Format: [ts, open, high, low, close, volume]
+                    all_data.append([
+                        int(k[0]),      # timestamp
+                        float(k[1]),    # open
+                        float(k[2]),    # high
+                        float(k[3]),    # low
+                        float(k[4]),    # close
+                        float(k[5])     # volume
+                    ])
+                
+                # Move to next batch
+                current_start = int(klines[-1][0]) + 1
+            else:
+                logger.error(f"Binance API error: {response.status_code}")
+                break
+        except Exception as e:
+            logger.error(f"Binance API request failed: {e}")
+            break
+    
+    logger.info(f"✅ Loaded {len(all_data)} candles from Binance for {binance_symbol}")
+    return all_data
+
 def fetch_market_data_with_fallback(symbol, days, offset_days=0):
     """
-    Tries to fetch from S3Loader, falls back to YFinance if empty or fails.
+    Tries to fetch from S3Loader, falls back to YFinance/Binance if empty or fails.
     """
     loader = S3Loader()
     data = []
+    
+    # Check if this is a crypto symbol
+    is_crypto = '/' in symbol or symbol in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BTCUSDT', 'ETHUSDT']
     
     # 1. Try S3
     try:
@@ -278,7 +359,17 @@ def fetch_market_data_with_fallback(symbol, days, offset_days=0):
     except Exception as e:
         logger.warning(f"S3 Load failed for {symbol}: {e}")
 
-    # 2. Fallback to YFinance
+    # 2. For Crypto: Use Binance API (more reliable than YFinance for crypto)
+    if is_crypto:
+        logger.info(f"🪙 Crypto detected, using Binance API for {symbol}...")
+        try:
+            data = fetch_crypto_from_binance(symbol, days, offset_days)
+            if data:
+                return data
+        except Exception as e:
+            logger.warning(f"Binance fallback failed: {e}")
+
+    # 3. Fallback to YFinance (for stocks, forex, indices)
     logger.info(f"⚠️ S3 Empty/Failed. Falling back to YFinance for {symbol}...")
     try:
         import yfinance as yf
@@ -287,10 +378,19 @@ def fetch_market_data_with_fallback(symbol, days, offset_days=0):
         end_date = datetime.now() - timedelta(days=offset_days)
         start_date = end_date - timedelta(days=days + 5) # Buffer
         
-        # Try 1h first (for recent data)
-        interval = "1h"
-        if days > 730: # YF limit for 1h is 730 days
-             interval = "1d"
+        # Smart interval selection:
+        # - For indices (^GSPC, ^NDX): use 1d if days > 30 (YF 1h limit is ~7 days for indices)
+        # - For forex: 1h works well
+        # - For long periods: use 1d
+        is_index = symbol.startswith('^')
+        
+        if days > 730:
+            interval = "1d"
+        elif is_index and days > 30:
+            interval = "1d"  # Indices have limited 1h history on YF
+            logger.info(f"📈 Index detected, using 1d interval for better coverage")
+        else:
+            interval = "1h"
         
         logger.info(f"Downloading YF data ({interval}) for {symbol}...")
         df = yf.download(symbol, start=start_date, end=end_date, interval=interval, progress=False)
