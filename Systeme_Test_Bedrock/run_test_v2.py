@@ -226,6 +226,34 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
                                 except: pass
                             
                             f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},WAIT,{close_price:.4f},{rsi_val:.1f},0,0,{reason},\n")
+                        
+                        # ✅ NEW: Also log actual BUY/LONG trades from DynamoDB
+                        elif log.get('Status') == 'OPEN' and log.get('Type') in ['BUY', 'LONG', 'SHORT', 'SELL']:
+                            trade_type = log.get('Type')
+                            if trade_type == 'LONG': trade_type = 'BUY'
+                            elif trade_type == 'SHORT': trade_type = 'SELL'
+                            
+                            entry_price = float(log.get('EntryPrice', close_price))
+                            strategy = log.get('Strategy', 'UNKNOWN')
+                            ai_decision = log.get('AI_Decision', 'N/A')
+                            tp_pct = log.get('TP', '0')
+                            sl_pct = log.get('SL', '0')
+                            reason = f"{strategy}|AI:{ai_decision}|TP:{tp_pct}%|SL:{sl_pct}%"
+                            reason = reason.replace(',', ';')
+                            
+                            f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},{trade_type},{entry_price:.4f},0,0,0,{reason},\n")
+                            print(f"📝 Logged {trade_type} at {dt} - {strategy}")
+                        
+                        # ✅ NEW: Log CLOSED trades with PnL
+                        elif log.get('Status') == 'CLOSED':
+                            exit_reason = log.get('ExitReason', 'CLOSED')
+                            pnl = log.get('PnL', '0')
+                            exit_price = float(log.get('ExitPrice', close_price))
+                            reason = f"{exit_reason}"
+                            reason = reason.replace(',', ';')
+                            
+                            f.write(f"{symbol},{dt.strftime('%Y-%m-%d %H:%M')},EXIT,{exit_price:.4f},0,0,0,{reason},{pnl}\n")
+                            print(f"📝 Logged EXIT at {dt} - PnL: ${pnl}")
 
             except Exception as e:
                 logger.error(f"Error at {dt}: {e}")
@@ -233,16 +261,87 @@ def run_loop(bot_module, asset_class, symbol, market_data, mock_data_provider, m
     logger.info(f"Test complete. CSV Log saved to {log_filename}")
 
 
+def fetch_market_data_with_fallback(symbol, days, offset_days=0):
+    """
+    Tries to fetch from S3Loader, falls back to YFinance if empty or fails.
+    """
+    loader = S3Loader()
+    data = []
+    
+    # 1. Try S3
+    try:
+        import pandas as pd
+        data = loader.fetch_historical_data(symbol, days, offset_days)
+        if data:
+            logger.info(f"Loaded {len(data)} candles from S3 for {symbol}")
+            return data
+    except Exception as e:
+        logger.warning(f"S3 Load failed for {symbol}: {e}")
+
+    # 2. Fallback to YFinance
+    logger.info(f"⚠️ S3 Empty/Failed. Falling back to YFinance for {symbol}...")
+    try:
+        import yfinance as yf
+        from datetime import timedelta
+        
+        end_date = datetime.now() - timedelta(days=offset_days)
+        start_date = end_date - timedelta(days=days + 5) # Buffer
+        
+        # Try 1h first (for recent data)
+        interval = "1h"
+        if days > 730: # YF limit for 1h is 730 days
+             interval = "1d"
+        
+        logger.info(f"Downloading YF data ({interval}) for {symbol}...")
+        df = yf.download(symbol, start=start_date, end=end_date, interval=interval, progress=False)
+        
+        if df.empty and interval == "1h":
+             logger.warning("YF 1h Empty, trying 1d...")
+             df = yf.download(symbol, start=start_date, end=end_date, interval="1d", progress=False)
+
+        if not df.empty:
+            # Format: [ts, open, high, low, close, volume]
+            formatted_data = []
+            for index, row in df.iterrows():
+                try:
+                    ts = int(index.timestamp() * 1000)
+                    op = float(row['Open'].iloc[0]) if isinstance(row['Open'], pd.Series) else float(row['Open'])
+                    hi = float(row['High'].iloc[0]) if isinstance(row['High'], pd.Series) else float(row['High'])
+                    lo = float(row['Low'].iloc[0]) if isinstance(row['Low'], pd.Series) else float(row['Low'])
+                    cl = float(row['Close'].iloc[0]) if isinstance(row['Close'], pd.Series) else float(row['Close'])
+                    vo = float(row['Volume'].iloc[0]) if isinstance(row['Volume'], pd.Series) else float(row['Volume'])
+                    
+                    formatted_data.append([ts, op, hi, lo, cl, vo])
+                except Exception as row_err:
+                     # Handle simple float (older pandas/yfinance versions)
+                    ts = int(index.timestamp() * 1000)
+                    op = float(row['Open'])
+                    hi = float(row['High'])
+                    lo = float(row['Low'])
+                    cl = float(row['Close'])
+                    vo = float(row['Volume'])
+                    formatted_data.append([ts, op, hi, lo, cl, vo])
+
+            logger.info(f"Loaded {len(formatted_data)} candles from YFinance for {symbol}")
+            return formatted_data
+            
+    except Exception as e:
+        logger.error(f"YFinance Fallback failed: {e}")
+        
+    return []
+
 def run_test(asset_class, symbol, days, start_date=None, offset_days=0):
     logger.info(f"Starting test for {asset_class} - {symbol} over {days} days")
     
-    loader = S3Loader()
-    market_data = loader.fetch_historical_data(symbol, days, offset_days)
+    # Use Fallback Fetcher
+    market_data = fetch_market_data_with_fallback(symbol, days, offset_days)
+    
+    loader = S3Loader() # Still needed for news/macro
     news_data = loader.fetch_news_data(symbol, days, offset_days)
     macro_map = load_macro_data(loader, days, offset_days)
     
     if not market_data:
-        logger.error("No market data found. Exiting.")
+        logger.error("No market data found (S3 + YF). Exiting.")
         return
 
     logger.info(f"Loaded {len(market_data)} candles and {len(news_data)} news items.")

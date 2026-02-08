@@ -104,8 +104,17 @@ class ForexStrategies:
         close_p = float(current['close'])
         
         if direction == 'LONG':
+            # Exception: Deep Oversold (RSI < 40) -> Catch the knife
+            if 'RSI' in current and current['RSI'] < 40:
+                print(f"DEBUG: Falling Knife Bypass (RSI {current['RSI']:.1f} < 40)")
+                return True
             return close_p >= open_p # Green Candle
+
         if direction == 'SHORT':
+            # Exception: Deep Overbought (RSI > 60) -> Catch the spike
+            if 'RSI' in current and current['RSI'] > 60:
+                print(f"DEBUG: Spiking Knife Bypass (RSI {current['RSI']:.1f} > 60)")
+                return True
             return close_p <= open_p # Red Candle
         return False
 
@@ -201,9 +210,22 @@ class ForexStrategies:
             if 'SMA_200' not in df.columns or pd.isna(current['SMA_200']):
                 return None
             
-            # Condition 1: Tendance Haussière (Prix > SMA 200)
-            # V5 UPDATE: Added EMA_50 > SMA_200 (Momentum Filter)
-            is_bull_trend = (current['close'] > current['SMA_200']) and (current['EMA_50'] > current['SMA_200'])
+            # V5.2: Relaxed trend condition - allow within 0.5% of SMA200
+            # Forex often oscillates around the 200 SMA
+            sma200 = float(current['SMA_200'])
+            close_price = float(current['close'])
+            deviation_pct = ((close_price - sma200) / sma200) * 100
+            
+            # V5.5: Near or above SMA200 (within -1.5% Strict Relaxed)
+            is_bull_trend = deviation_pct > -1.5
+            
+            # V5.2 EXCEPTION: Deep Value (RSI < 30) -> Ignore Trend, catch the bottom
+            if current['RSI'] < 30:
+                print(f"DEBUG: Trend Bypass (RSI {current['RSI']:.1f} < 30)")
+                is_bull_trend = True
+            
+            # Debug logging
+            print(f"DEBUG: TREND_PULLBACK Analysis - Close={close_price:.5f} SMA200={sma200:.5f} Dev={deviation_pct:.2f}% RSI={current['RSI']:.1f}")
             
             if is_bull_trend:
                 # Condition 2: Signal Pullback (RSI < Seuil adaptatif)
@@ -261,7 +283,7 @@ class ForexStrategies:
                 'corridor': corridor_name,
                 'regime': current_regime,
                 'scalping_mode': scalping_mode,
-                'risk_multiplier': risk_multiplier,
+                'risk_multiplier': risk_multiplier * 0.5, # V5.6 Maintenance Mode (Capital Shifter)
                 'tp_multiplier': tp_multiplier,
                 'sl_multiplier': sl_multiplier,
                 # 🛡️ V5.1: Predictability Index

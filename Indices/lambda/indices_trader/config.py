@@ -10,7 +10,7 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 48, # V5.1 Increased flexible threshold for strong trends
+            'rsi_oversold': 60, # ULTRA AGGRESSIVE V5.5
             'sl_atr_mult': 2.0, 
             'tp_atr_mult': 4.0  
         }

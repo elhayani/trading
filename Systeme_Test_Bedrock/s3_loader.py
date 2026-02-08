@@ -32,6 +32,12 @@ class S3Loader:
         
         all_ohlcv = []
         safe_symbol = symbol.replace('/', '_')
+        # Fix for S3 folder naming differences
+        if safe_symbol == 'EURUSD': safe_symbol = 'EUR_USD'
+        if safe_symbol == 'GBPUSD': safe_symbol = 'GBP_USD'
+        if safe_symbol == 'USDJPY': safe_symbol = 'USD_JPY'
+        if safe_symbol == 'BTCUSDT': safe_symbol = 'BTC_USDT'
+        if safe_symbol == 'ETHUSDT': safe_symbol = 'ETH_USDT'
         
         logger.info(f"Downloading historical data for {symbol} ({days} days)...")
         

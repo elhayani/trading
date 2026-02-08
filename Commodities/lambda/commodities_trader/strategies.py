@@ -197,15 +197,34 @@ class ForexStrategies:
                 sma_threshold *= 0.995 # Allow 0.5% below (catch 1932 vs 1934)
             is_bull_trend = (current['close'] > sma_threshold)
             
+            # V5.3: Deep Value Bypass (DISABLE for V5.5 Strict Mode)
+            # if current.get('RSI', 100) < 30:
+            #     print(f"DEBUG: Commodities Trend Bypass (RSI {current['RSI']:.1f} < 30)")
+            #     is_bull_trend = True
+            
             if is_bull_trend:
                 # Buy Dip: RSI < 30/40
                 if current['RSI'] < rsi_buy_threshold:
                     if atr > 0.0005: # Min volatility check
-                        signal = 'LONG'
-                        sl_dist = atr * params['sl_atr_mult']
-                        tp_dist = atr * params['tp_atr_mult']
-                        stop_loss = entry_price - sl_dist
-                        take_profit = entry_price + tp_dist
+                        
+                        # V5.6 FORTRESS: Anti-Wick Filter (Green + Volume)
+                        is_valid_entry = True
+                        if 'GC=F' in pair:
+                            is_green = current['close'] > current['open']
+                            curr_vol = current.get('volume', 0) or 0
+                            prev_vol = prev.get('volume', 0) or 0
+                            is_vol_up = curr_vol > prev_vol if curr_vol > 0 else True
+                            
+                            if not (is_green and is_vol_up):
+                                is_valid_entry = False
+                                # print(f"DEBUG: 🛡️ Anti-Wick blocked {pair} (Green={is_green}, VolUp={is_vol_up})")
+                        
+                        if is_valid_entry:
+                            signal = 'LONG'
+                            sl_dist = atr * params['sl_atr_mult']
+                            tp_dist = atr * params['tp_atr_mult']
+                            stop_loss = entry_price - sl_dist
+                            take_profit = entry_price + tp_dist
 
         # --- STRATÉGIE 2: BOLLINGER BREAKOUT (Oil V4) ---
         # Simple Breakout sans filtre SMA50 strict

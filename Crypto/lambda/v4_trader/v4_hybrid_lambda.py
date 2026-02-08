@@ -41,20 +41,20 @@ empire_table = dynamodb.Table(EMPIRE_TABLE)
 # ==================== CONFIGURATION ====================
 DEFAULT_SYMBOL = os.environ.get('SYMBOL', 'SOL/USDT')
 CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '133'))   # 400€ total / 3 max positions
-RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '40'))  # Increased to 40 (AI Validated)
+RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '45'))  # Relaxed to 45 (V5.1 Bull Market)
 RSI_SELL_THRESHOLD = float(os.environ.get('RSI_SELL_THRESHOLD', '75'))  # Overbought exit
 STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-5.0'))  # -5% Stop Loss
 HARD_TP_PCT = float(os.environ.get('HARD_TP', '5.0'))  # +5% Guaranteed Take Profit
 TRAILING_TP_PCT = float(os.environ.get('TRAILING_TP', '2.0'))  # +2% Trailing activation
 MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '3'))  # Max trades per pair
 COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '4'))  # Hours between trades
-BTC_CRASH_THRESHOLD = float(os.environ.get('BTC_CRASH', '-0.07'))  # -7% BTC crash filter (V4 Fortress Balanced)
+BTC_CRASH_THRESHOLD = float(os.environ.get('BTC_CRASH', '-0.08'))  # Relaxed crash filter (V5.1)
 
 # ==================== NEW OPTIMIZATIONS ====================
 VIX_MAX_THRESHOLD = float(os.environ.get('VIX_MAX', '30'))  # Don't trade if VIX > 30
 VIX_REDUCE_THRESHOLD = float(os.environ.get('VIX_REDUCE', '25'))  # Reduce size if VIX > 25
 MULTI_TF_ENABLED = os.environ.get('MULTI_TF', 'true').lower() == 'true'  # Multi-timeframe confirmation
-RSI_4H_THRESHOLD = float(os.environ.get('RSI_4H_THRESHOLD', '45'))  # 4h RSI must be < 45 to confirm
+RSI_4H_THRESHOLD = float(os.environ.get('RSI_4H_THRESHOLD', '50'))  # Relaxed 4h confirmation to 50
 
 # 🔥 CIRCUIT BREAKER (Leçon 2022 - Protection Anti-Crash à 3 Niveaux)
 CIRCUIT_BREAKER_L1 = float(os.environ.get('CB_L1', '-0.05'))  # -5% BTC 24h = Reduce size 50%
@@ -65,7 +65,7 @@ CB_COOLDOWN_HOURS = float(os.environ.get('CB_COOLDOWN', '48'))  # Hours of tradi
 # 🎯 SOL TURBO MODE (Capture Volatilité 2025)
 SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '10.0'))  # +10% = activate trailing
 SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '3.0'))  # -3% trailing from peak
-VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))  # Volume must be > 1.2x avg (Optimized)
+VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.1'))  # Relaxed volume filter (1.1x)
 
 # 🚀 V5 ADVANCED OPTIMIZATIONS
 MOMENTUM_FILTER_ENABLED = os.environ.get('MOMENTUM_FILTER', 'true').lower() == 'true'

@@ -104,8 +104,17 @@ class ForexStrategies:
         close_p = float(current['close'])
         
         if direction == 'LONG':
+            # Exception: Deep Oversold (RSI < 30) -> Catch the knife
+            if 'RSI' in current and current['RSI'] < 30:
+                print(f"DEBUG: Falling Knife Bypass (RSI {current['RSI']:.1f} < 30)")
+                return True
             return close_p >= open_p # Green Candle
+        
         if direction == 'SHORT':
+            # Exception: Deep Overbought (RSI > 70) -> Catch the spike
+            if 'RSI' in current and current['RSI'] > 70:
+                print(f"DEBUG: Spiking Knife Bypass (RSI {current['RSI']:.1f} > 70)")
+                return True
             return close_p <= open_p # Red Candle
         return False
 
@@ -242,7 +251,18 @@ class ForexStrategies:
                 print("DEBUG: SMA_200 missing or NaN")
                 return None
             
-            is_bull_trend = (current['close'] > current['SMA_200']) and (current['EMA_50'] > current['SMA_200'])
+            # V5.3: Relaxed Trend Condition for Indices
+            sma200 = float(current['SMA_200'])
+            close_p = float(current['close'])
+            deviation_pct = ((close_p - sma200) / sma200) * 100
+            
+            # Allow dip up to 1.5% below SMA200
+            is_bull_trend = (deviation_pct > -1.5)
+            
+            # Deep Value Bypass: If RSI < 35, ignore trend condition (Flash Crash)
+            if 'RSI' in current and current['RSI'] < 35:
+                print(f"DEBUG: Trend Bypass (RSI {current['RSI']:.1f} < 35)")
+                is_bull_trend = True
             
             if is_bull_trend:
                 # V5.1 FIX: Check Current OR Previous RSI to catch V-shape bounces

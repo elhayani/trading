@@ -218,12 +218,23 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.error(f"❌ Macro Context Failed: {e}")
     
+    # V5.6 FORTRESS: Check for DXY Spike (Kill Switch)
+    dxy_kill_switch = False
+    if macro_data and macro_data.get('dxy', {}).get('signal') == 'BULLISH_STRONG':
+        dxy_kill_switch = True
+        logger.warning("🛑 MACRO ALERT: DXY is Pumping (BULLISH_STRONG). enabling Gold Kill-Switch.")
+
     results = []
     
     for pair, config in CONFIGURATION.items():
         if not config['enabled']:
             continue
             
+        # V5.6: Apply DXY Kill-Switch for Gold
+        if dxy_kill_switch and 'GC=F' in pair:
+            logger.info(f"🛑 Skipping {pair} due to DXY Spike (Macro Kill-Switch)")
+            continue
+
         logger.info(f"🔍 Analyzing {pair} with {config['strategy']}...")
         
         # 1. Fetch Data

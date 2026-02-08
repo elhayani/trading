@@ -10,7 +10,7 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 35,  # Entrée Long
+            'rsi_oversold': 55,  # ULTRA AGGRESS V5.5
             'sl_atr_mult': 1.0,
             'tp_atr_mult': 3.0
         }
@@ -24,7 +24,7 @@ CONFIGURATION = {
         'params': {
             'sma_period': 200,
             'rsi_period': 14,
-            'rsi_oversold': 35,
+            'rsi_oversold': 55, # ULTRA AGGRESS V5.5
             'sl_atr_mult': 1.0,
             'tp_atr_mult': 3.0
         }
