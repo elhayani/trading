@@ -141,27 +141,65 @@
     <!-- RECENT ACTIVITY TABLE -->
     <div class="max-w-7xl mx-auto mt-10">
         <div class="glass-panel p-6">
-            <h3 class="text-lg font-bold text-white mb-6">Recent AI Trades</h3>
+            <!-- TABS -->
+            <div class="flex border-b border-slate-700 mb-6">
+                <button onclick="switchTab('live')" id="tab-live"
+                    class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-blue-500 text-blue-400">
+                    🔴 LIVE POSITIONS (Binance)
+                </button>
+                <button onclick="switchTab('history')" id="tab-history"
+                    class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white">
+                    📜 TRADE HISTORY (DynamoDB)
+                </button>
+            </div>
+
+            <!-- FILTERS (Hidden by default, shown in history) -->
+            <div id="history-filters" class="hidden flex gap-3 mb-6">
+                <!-- Bot Filter -->
+                <select id="botFilter" onchange="applyFilters()"
+                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                    <option value="ALL">All Bots</option>
+                    <option value="Crypto">₿ Crypto</option>
+                    <option value="Forex">💱 Forex</option>
+                    <option value="Indices">📈 Indices</option>
+                    <option value="Commodities">🛢️ Commodities</option>
+                </select>
+
+                <!-- Month Filter -->
+                <select id="monthFilter" onchange="applyFilters()"
+                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                    <option value="ALL">All Months</option>
+                    <option value="01">January</option>
+                    <option value="02">February</option>
+                    <option value="03">March</option>
+                    <option value="04">April</option>
+                    <option value="05">May</option>
+                    <option value="06">June</option>
+                    <option value="07">July</option>
+                    <option value="08">August</option>
+                    <option value="09">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                </select>
+
+                <!-- Status Filter -->
+                <select id="statusFilter" onchange="applyFilters()"
+                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                    <option value="ALL">All Status</option>
+                    <option value="CLOSED">CLOSED</option>
+                    <option value="SKIPPED">SKIPPED</option>
+                </select>
+            </div>
+
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse">
-                    <thead>
-                        <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
-                            <th class="p-4">Time</th>
-                            <th class="p-4">Asset</th>
-                            <th class="p-4">Prix</th>
-                            <th class="p-4">Type</th>
-                            <th class="p-4">Qté</th>
-                            <th class="p-4">Prix Achat (Total)</th>
-                            <th class="p-4">Prix Actuel (Total)</th>
-                            <th class="p-4">Status</th>
-                            <th class="p-4 w-64">Reason</th>
-                            <th class="p-4 text-right">PnL %</th>
-                            <th class="p-4 text-right">PnL €</th>
-                        </tr>
+                    <thead id="tradesTableHeader">
+                        <!-- Header will be injected here -->
                     </thead>
                     <tbody id="tradesTableBody" class="text-sm text-slate-300">
                         <tr>
-                            <td colspan="10" class="p-8 text-center text-slate-500">Waiting for data...</td>
+                            <td colspan="11" class="p-8 text-center text-slate-500">Waiting for data...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -175,6 +213,29 @@
         const REFRESH_INTERVAL = 300000; // 5 min
 
         let chartInstance = null;
+        let allTrades = []; // Store all trades for filtering
+        let currentTab = 'live';
+
+        function switchTab(tab) {
+            currentTab = tab;
+
+            // UI Update
+            const liveBtn = document.getElementById('tab-live');
+            const histBtn = document.getElementById('tab-history');
+            const filters = document.getElementById('history-filters');
+
+            if (tab === 'live') {
+                liveBtn.className = "px-6 py-3 font-bold text-sm transition-all border-b-2 border-blue-500 text-blue-400";
+                histBtn.className = "px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white";
+                filters.classList.add('hidden');
+            } else {
+                histBtn.className = "px-6 py-3 font-bold text-sm transition-all border-b-2 border-blue-500 text-blue-400";
+                liveBtn.className = "px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white";
+                filters.classList.remove('hidden');
+            }
+
+            applyFilters(); // Rafraîchit le tableau
+        }
 
         async function fetchData() {
             const year = document.getElementById('yearSelect').value;
@@ -258,6 +319,42 @@
             } catch (e) { alert("Failed to toggle status"); }
         }
 
+        async function closeTrade(symbol, side, qty) {
+            const actionText = side === 'SHORT' ? 'BUY TO CLOSE' : 'SELL TO CLOSE';
+            if (!confirm(`⚠️ Voulez-vous vraiment ${actionText} la position ${symbol} (${qty}) ?\n\nCette action est IRRÉVERSIBLE et sera exécutée immédiatement sur Binance.`)) return;
+
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = "Closing...";
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+
+            try {
+                const response = await fetch(API_URL.replace('/stats', '/close-trade'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, side, qty })
+                });
+
+                const result = await response.json();
+                if (response.ok) {
+                    alert(`✅ Position fermée sur Binance !\n\nSymbol: ${symbol}\nAction: ${actionText}\nQty: ${qty}`);
+                    location.reload();
+                } else {
+                    alert("❌ Erreur: " + (result.error || 'Unknown error'));
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50');
+                }
+            } catch (err) {
+                alert("❌ Erreur réseau: " + err.message);
+                btn.innerText = originalText;
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }
+        }
+
+
         function renderDashboard(data) {
             // 1. Header Stats
             const stats = data.stats || {};
@@ -276,12 +373,60 @@
             // 2. Chart
             updateChart(data.equity_curve || []);
 
-
-            // 3. Table
-            updateTable(data.recent_trades || []);
+            // 3. Store all trades and apply filters
+            allTrades = data.recent_trades || [];
+            applyFilters();
 
             // 4. Allocations
             updateAllocations(data.allocations || {}, stats.current_equity);
+        }
+
+        function applyFilters() {
+            const botFilter = document.getElementById('botFilter').value;
+            const monthFilter = document.getElementById('monthFilter').value;
+            const statusFilter = document.getElementById('statusFilter').value;
+
+            let filteredTrades = [];
+
+            if (currentTab === 'live') {
+                // Affiche uniquement les positions OUVERTES pour le Live
+                filteredTrades = allTrades.filter(t => (t.Status || '').toUpperCase() === 'OPEN');
+                // On garde un tri chronologique inverse pour voir le plus récent en haut
+                filteredTrades.sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp));
+            } else {
+                // Historique complet sans les OPEN (sauf si on les veut aussi dans history)
+                filteredTrades = allTrades.filter(t => (t.Status || '').toUpperCase() !== 'OPEN');
+
+                // Filter by Bot
+                if (botFilter !== 'ALL') {
+                    filteredTrades = filteredTrades.filter(t => t.AssetClass === botFilter);
+                }
+
+                // Filter by Month
+                if (monthFilter !== 'ALL') {
+                    filteredTrades = filteredTrades.filter(t => {
+                        const timestamp = t.Timestamp || '';
+                        return timestamp.substring(5, 7) === monthFilter;
+                    });
+                }
+
+                // Filter by Status
+                if (statusFilter !== 'ALL') {
+                    if (statusFilter === 'SKIPPED') {
+                        filteredTrades = filteredTrades.filter(t => {
+                            const status = (t.Status || '').toUpperCase();
+                            return status !== 'OPEN' && status !== 'CLOSED';
+                        });
+                    } else {
+                        filteredTrades = filteredTrades.filter(t => {
+                            const status = (t.Status || '').toUpperCase();
+                            return status === statusFilter;
+                        });
+                    }
+                }
+            }
+
+            updateTable(filteredTrades);
         }
 
         function updateAllocations(allocations, totalEquity) {
@@ -296,9 +441,10 @@
             ];
 
             assets.forEach(asset => {
-                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0, total: 0, open: 0, closed: 0 };
+                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0, total: 0, open: 0, closed: 0, source: 'CALCULATED' };
                 const pnl = data.pnl;
                 const current = data.current;
+                const source = data.source || 'CALCULATED';
 
                 let valueColor = "text-slate-300";
                 if (pnl > 0) valueColor = "text-green-400";
@@ -307,10 +453,18 @@
                 const percent = (current / totalEquity) * 100;
                 const pnlLabel = pnl >= 0 ? `+${pnl.toFixed(0)}` : `${pnl.toFixed(0)}`;
 
+                // Source badge
+                const sourceBadge = source === 'LIVE'
+                    ? '<span class="text-[8px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold">LIVE</span>'
+                    : '<span class="text-[8px] bg-slate-500/20 text-slate-500 px-1.5 py-0.5 rounded font-bold">CALC</span>';
+
                 const html = `
                     <div>
                         <div class="flex justify-between text-xs mb-1">
-                            <span class="text-slate-400 font-semibold">${asset.id}</span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-slate-400 font-semibold">${asset.id}</span>
+                                ${sourceBadge}
+                            </div>
                             <div class="flex gap-2">
                                 <span class="${valueColor} font-bold">$${current.toFixed(0)}</span>
                                 <span class="text-slate-500">(${pnlLabel})</span>
@@ -405,10 +559,45 @@
 
         function updateTable(trades) {
             const tbody = document.getElementById('tradesTableBody');
+            const thead = document.getElementById('tradesTableHeader');
             tbody.innerHTML = '';
 
+            // Update Header based on Tab
+            if (currentTab === 'live') {
+                thead.innerHTML = `
+                    <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                        <th class="p-4">Time</th>
+                        <th class="p-4">Asset</th>
+                        <th class="p-4">Type</th>
+                        <th class="p-4">Size</th>
+                        <th class="p-4">Entry</th>
+                        <th class="p-4 text-right">PnL %</th>
+                        <th class="p-4 text-right">PnL €</th>
+                        <th class="p-4">Status</th>
+                        <th class="p-4 text-right">Action</th>
+                    </tr>
+                `;
+            } else {
+                thead.innerHTML = `
+                    <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
+                        <th class="p-4">Time</th>
+                        <th class="p-4">Asset</th>
+                        <th class="p-4">Prix</th>
+                        <th class="p-4">Type</th>
+                        <th class="p-4">Qté</th>
+                        <th class="p-4">Prix Achat (Total)</th>
+                        <th class="p-4">Prix Actuel (Total)</th>
+                        <th class="p-4">Status</th>
+                        <th class="p-4 w-64">Reason</th>
+                        <th class="p-4 text-right">PnL %</th>
+                        <th class="p-4 text-right">PnL €</th>
+                    </tr>
+                `;
+            }
+
             if (trades.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>';
+                const colSpan = currentTab === 'live' ? 9 : 11;
+                tbody.innerHTML = `<tr><td colspan="${colSpan}" class="p-8 text-center text-slate-500">No trades recorded yet.</td></tr>`;
                 return;
             }
 
@@ -416,7 +605,9 @@
                 const tr = document.createElement('tr');
                 tr.className = "border-b border-slate-800 hover:bg-slate-800/30 transition-colors";
 
-                // Colorize Side
+                const isLive = trade.Source === 'BINANCE';
+                const status = (trade.Status || 'OPEN').toUpperCase();
+                const isShort = trade.Type === 'SHORT';
                 const sideColor = trade.Type === 'LONG' || trade.Type === 'BUY' ? 'text-green-400' : 'text-red-400';
 
                 // Get quantity and prices
@@ -425,106 +616,85 @@
                 const currentPrice = parseFloat(trade.CurrentPrice || trade.ExitPrice || entryPrice || 0);
                 const marketPrice = parseFloat(trade.MarketPrice || trade.CurrentPrice || currentPrice || 0);
 
-                // Calculate Cost (qty * entry) and Value (qty * current/exit)
-                const cost = parseFloat(trade.Cost || qty * entryPrice || 0);
-                const value = currentPrice > 0 ? (parseFloat(trade.Value || qty * currentPrice)) : 0;
-
                 // Calculate PnL %
                 let pnlPercent = 0;
                 if (entryPrice > 0 && currentPrice > 0) {
-                    if (trade.Type === 'LONG' || trade.Type === 'BUY') {
-                        pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
-                    } else {
+                    if (isShort) {
                         pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100;
-                    }
-                }
-
-                // Format displays
-                const assetClass = trade.AssetClass || 'Unknown';
-                let qtyDisplay = '-';
-                if (qty > 0) {
-                    if (assetClass === 'Crypto') qtyDisplay = qty.toFixed(4);
-                    else if (assetClass === 'Forex') qtyDisplay = qty.toLocaleString('fr-FR', { maximumFractionDigits: 0 });
-                    else qtyDisplay = qty.toFixed(2);
-                }
-
-                // Prix = prix actuel du marché (toujours affiché pour info)
-                const marketPriceDisplay = marketPrice > 0 ? `$${marketPrice.toFixed(2)}` : (entryPrice > 0 ? `$${entryPrice.toFixed(2)}` : '-');
-
-                // Conditions d'affichage des données financières
-                const status = trade.Status || 'OPEN';
-                const isTrade = status === 'OPEN' || status === 'CLOSED' || status === 'TP' || status === 'SL';
-
-                // PRIX ACHAT (TOTAL) = COST
-                const entryDisplay = (isTrade && cost > 0) ? `€${cost.toFixed(2)}` : '-';
-
-                // PRIX ACTUEL (TOTAL) = VALUE
-                const currentDisplay = (isTrade && value > 0) ? `€${value.toFixed(2)}` : '-';
-
-                // Format Status
-                let statusDisplay = '';
-                if (status === 'OPEN') {
-                    statusDisplay = '<span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">OPEN</span>';
-                } else if (status === 'CLOSED') {
-                    const exitReason = trade.ExitReason || '';
-                    if (exitReason === 'STOP_LOSS') {
-                        statusDisplay = '<span class="bg-red-500/20 text-red-400 px-2 py-1 rounded text-xs">SL</span>';
-                    } else if (exitReason === 'TAKE_PROFIT') {
-                        statusDisplay = '<span class="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs">TP</span>';
                     } else {
-                        statusDisplay = '<span class="bg-slate-500/20 text-slate-400 px-2 py-1 rounded text-xs">CLOSED</span>';
-                    }
-                } else {
-                    // SKIPPED, INFO, etc.
-                    statusDisplay = '<span class="bg-slate-500/20 text-slate-500 px-2 py-1 rounded text-xs">SKIP</span>';
-                }
-
-                // Reason Logic
-                let reasonText = trade.ExitReason || trade.AI_Reason || trade.reason || '-';
-                if (reasonText.startsWith('AI_VETO: ')) reasonText = reasonText.substring(9);
-                const fullReason = reasonText;
-                if (reasonText.length > 40) reasonText = reasonText.substring(0, 40) + '...';
-                const reasonDisplay = `<span title="${fullReason}" class="text-xs text-slate-500 block max-w-[250px] truncate">${reasonText}</span>`;
-
-                // Format PnL % et € (seulement si trade réel)
-                let pnlPercentDisplay = '-';
-                let pnlEuroDisplay = '-';
-
-                if (isTrade) {
-                    const pnlPercentColor = pnlPercent >= 0 ? 'text-green-400' : 'text-red-400';
-                    pnlPercentDisplay = (currentPrice > 0 && entryPrice > 0) ? `<span class="${pnlPercentColor} font-bold">${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</span>` : '-';
-
-                    if (trade.Status === 'CLOSED' && trade.PnL) {
-                        const pnlVal = parseFloat(trade.PnL || 0);
-                        const pnlColor = pnlVal >= 0 ? 'text-green-400' : 'text-red-400';
-                        pnlEuroDisplay = `<span class="${pnlColor} font-bold">${pnlVal >= 0 ? '+' : ''}€${pnlVal.toFixed(2)}</span>`;
-                    } else if (trade.Status === 'OPEN' && value > 0 && cost > 0) {
-                        const unrealizedPnl = value - cost;
-                        const pnlColor = unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400';
-                        pnlEuroDisplay = `<span class="${pnlColor}">${unrealizedPnl >= 0 ? '+' : ''}€${unrealizedPnl.toFixed(2)}</span>`;
+                        pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
                     }
                 }
 
-                // Icons
+                // If PnL comes directly from Binance object
+                const pnlVal = parseFloat(trade.PnL || 0);
+                const pnlColor = pnlVal >= 0 ? 'text-green-400' : 'text-red-400';
+
+                // Assets Icon
                 let icon = '📊';
                 if (trade.AssetClass === 'Crypto') icon = '₿';
                 if (trade.AssetClass === 'Forex') icon = '💱';
                 if (trade.AssetClass === 'Indices') icon = '📈';
                 if (trade.AssetClass === 'Commodities') icon = '🛢️';
 
-                tr.innerHTML = `
-                    <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
-                    <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
-                    <td class="p-4 font-mono text-cyan-300">${marketPriceDisplay}</td>
-                    <td class="p-4 ${sideColor} font-bold text-xs uppercase bg-slate-800/40 rounded w-max px-2 py-1">${trade.Type}</td>
-                    <td class="p-4 font-mono text-slate-300">${qtyDisplay}</td>
-                    <td class="p-4 font-mono text-blue-300">${entryDisplay}</td>
-                    <td class="p-4 font-mono text-purple-300">${currentDisplay}</td>
-                    <td class="p-4">${statusDisplay}</td>
-                    <td class="p-4">${reasonDisplay}</td>
-                    <td class="p-4 text-right">${pnlPercentDisplay}</td>
-                    <td class="p-4 text-right">${pnlEuroDisplay}</td>
-                `;
+                if (currentTab === 'live') {
+                    const actionText = isShort ? "BUY TO CLOSE" : "SELL TO CLOSE";
+                    const actionBtnClass = isShort ? "bg-red-500/10 text-red-500 border-red-500/20" : "bg-green-500/10 text-green-500 border-green-500/20";
+
+                    tr.innerHTML = `
+                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
+                        <td class="p-4 ${sideColor} font-bold text-xs uppercase">${trade.Type}</td>
+                        <td class="p-4 font-mono text-slate-300">${qty.toFixed(4)}</td>
+                        <td class="p-4 font-mono text-slate-400">$${entryPrice.toLocaleString()}</td>
+                        <td class="p-4 text-right ${pnlColor} font-bold">${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</td>
+                        <td class="p-4 text-right ${pnlColor} font-bold">${pnlVal >= 0 ? '+' : ''}€${pnlVal.toFixed(2)}</td>
+                        <td class="p-4"><span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">${status}</span></td>
+                        <td class="p-4 text-right">
+                            ${status === 'OPEN'
+                            ? `<button onclick="closeTrade('${trade.Pair}', '${trade.Type}', ${qty})" class="text-[10px] font-bold px-2 py-1 rounded border ${actionBtnClass} hover:bg-opacity-20 transition-all">${actionText}</button>`
+                            : `<span class="opacity-50 text-xs">${status}</span>`
+                        }
+                        </td>
+                    `;
+
+                } else {
+                    // History Layout
+                    const cost = parseFloat(trade.Cost || qty * entryPrice || 0);
+                    const value = currentPrice > 0 ? (parseFloat(trade.Value || qty * currentPrice)) : 0;
+                    const marketPriceDisplay = marketPrice > 0 ? `$${marketPrice.toFixed(2)}` : (entryPrice > 0 ? `$${entryPrice.toFixed(2)}` : '-');
+
+                    // Format displays
+                    let qtyDisplay = '-';
+                    if (qty > 0) {
+                        if (trade.AssetClass === 'Crypto') qtyDisplay = qty.toFixed(4);
+                        else qtyDisplay = qty.toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+                    }
+
+                    let statusDisplay = `<span class="bg-slate-500/20 text-slate-500 px-2 py-1 rounded text-xs">${status}</span>`;
+                    if (status === 'OPEN') statusDisplay = '<span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">OPEN</span>';
+                    else if (status === 'CLOSED' || status === 'TP' || status === 'SL') {
+                        const c = status === 'SL' ? 'text-red-400 bg-red-500/20' : (status === 'TP' ? 'text-green-400 bg-green-500/20' : 'text-slate-400 bg-slate-500/20');
+                        statusDisplay = `<span class="${c} px-2 py-1 rounded text-xs">${status}</span>`;
+                    }
+
+                    const reasonText = trade.ExitReason || trade.AI_Reason || trade.reason || '-';
+                    // No truncation here - allow full text wrapping in CSS
+
+                    tr.innerHTML = `
+                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
+                        <td class="p-4 font-mono text-cyan-300">${marketPriceDisplay}</td>
+                        <td class="p-4 ${sideColor} font-bold text-xs uppercase">${trade.Type}</td>
+                        <td class="p-4 font-mono text-slate-300">${qtyDisplay}</td>
+                        <td class="p-4 font-mono text-blue-300">€${cost.toFixed(2)}</td>
+                        <td class="p-4 font-mono text-purple-300">€${value.toFixed(2)}</td>
+                        <td class="p-4">${statusDisplay}</td>
+                        <td class="p-4" style="max-width: 300px; overflow-wrap: break-word; white-space: normal;">${reasonText}</td>
+                        <td class="p-4 text-right ${pnlColor} font-bold">${pnlPercent.toFixed(2)}%</td>
+                        <td class="p-4 text-right ${pnlColor} font-bold">€${pnlVal.toFixed(2)}</td>
+                    `;
+                }
                 tbody.appendChild(tr);
             });
         }

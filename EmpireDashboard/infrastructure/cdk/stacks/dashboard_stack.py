@@ -9,7 +9,8 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
     CfnOutput,
-    RemovalPolicy
+    RemovalPolicy,
+    Duration
 )
 from constructs import Construct
 
@@ -50,6 +51,16 @@ class EmpireDashboardStack(Stack):
         )
 
         # =====================================================================
+        # Lambda Layer: CCXT for Binance Balance
+        # =====================================================================
+        ccxt_layer = lambda_.LayerVersion(
+            self, "DashboardCCXTLayer",
+            code=lambda_.Code.from_asset("../../lambda/layer"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
+            description="CCXT Library for Dashboard API"
+        )
+
+        # =====================================================================
         # Lambda: Dashboard API (Reader)
         # =====================================================================
         api_lambda = lambda_.Function(
@@ -58,6 +69,9 @@ class EmpireDashboardStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             code=lambda_.Code.from_asset("../../lambda/dashboard_api"),  # Relative to cdk dir
+            layers=[ccxt_layer],
+            timeout=Duration.seconds(30),
+            memory_size=512,  # Increased for CCXT + DynamoDB scans
             environment={
                 "TABLE_NAME": trades_table.table_name,
                 "CONFIG_TABLE": config_table.table_name
@@ -67,6 +81,11 @@ class EmpireDashboardStack(Stack):
         # Grant Permissions
         trades_table.grant_read_data(api_lambda)
         config_table.grant_read_write_data(api_lambda)
+
+        # Grant access to other trading tables
+        for table_name in ["EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]:
+            extra_table = dynamodb.Table.from_table_name(self, f"ExtraTable-{table_name}", table_name)
+            extra_table.grant_read_data(api_lambda)
 
         # =====================================================================
         # API Gateway (HTTP API - Low Cost)
@@ -102,6 +121,17 @@ class EmpireDashboardStack(Stack):
                 api_lambda
             )
         )
+
+        # Add Route (POST /close-trade) - For closing positions from Dashboard
+        http_api.add_routes(
+            path="/close-trade",
+            methods=[apigw.HttpMethod.POST],
+            integration=integrations.HttpLambdaIntegration(
+                "DashboardApiCloseTradeIntegration",
+                api_lambda
+            )
+        )
+
 
         # =====================================================================
         # S3 Frontend Hosting

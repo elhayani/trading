@@ -10,7 +10,7 @@ CONFIGURATION = {
         'params': {
             'sl_atr_mult': 2.5,  # V6.1: Tighter (was 3.0) for better R/R
             'tp_atr_mult': 4.5,  # V6.1: CRITICAL FIX - Increased from 3.0 to match Indices
-            'rsi_oversold': 43,  # V6.1: Slightly tighter (was 45) for quality
+            'rsi_oversold': 55,  # V7: Commodity-Friendly - Relaxed from 43 to catch more dips
             'max_atr': 25.0,
             'momentum_relaxed': True,
             # V6.1 NEW: Trailing Stop Parameters

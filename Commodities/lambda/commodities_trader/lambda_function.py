@@ -89,7 +89,10 @@ def get_portfolio_context(pair):
             FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(pair)
         ).get('Items', [])
         
-        sorted_trades = sorted(all_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)
+        # Filter only actual trades (Status OPEN or CLOSED)
+        actual_trades = [t for t in all_trades if t.get('Status') in ['OPEN', 'CLOSED']]
+        
+        sorted_trades = sorted(actual_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)
         last_trade = sorted_trades[0] if sorted_trades else None
         
         return {

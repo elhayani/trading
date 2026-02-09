@@ -93,6 +93,7 @@ class ForexStrategies:
             std20 = df['close'].rolling(window=20).std()
             df['BBU'] = sma20 + (std20 * 2.0)
             df['BBL'] = sma20 - (std20 * 2.0)
+            df['BB_MID'] = sma20  # V7: Middle band for Commodity-Friendly entries
             
         return df
 
@@ -227,23 +228,24 @@ class ForexStrategies:
                             stop_loss = entry_price - sl_dist
                             take_profit = entry_price + tp_dist
 
-        # --- STRATÉGIE 2: BOLLINGER BREAKOUT (Oil V4) ---
-        # Simple Breakout sans filtre SMA50 strict
+        # --- STRATÉGIE 2: BOLLINGER BREAKOUT (Oil V7 Commodity-Friendly) ---
+        # V7: Enter on MIDDLE BAND crossover instead of extreme band breakout
+        # This gives much more frequent signals while still following trend direction
         elif strategy == 'BOLLINGER_BREAKOUT':
-            if 'BBU' not in df.columns or pd.isna(current['BBU']):
+            if 'BB_MID' not in df.columns or pd.isna(current['BB_MID']):
                 return None
             
-            # Simple Breakout (V4 Strict)
-            # LONG Breakout
-            if current['close'] > current['BBU'] and prev['close'] <= prev['BBU']:
+            # V7 Commodity-Friendly: Middle Band Crossover
+            # LONG: Price crosses ABOVE middle band (bullish momentum starting)
+            if current['close'] > current['BB_MID'] and prev['close'] <= prev['BB_MID']:
                 signal = 'LONG'
                 sl_dist = atr * params['sl_atr_mult']
                 tp_dist = atr * params['tp_atr_mult']
                 stop_loss = entry_price - sl_dist
                 take_profit = entry_price + tp_dist
             
-            # SHORT Breakout
-            elif current['close'] < current['BBL'] and prev['close'] >= prev['BBL']:
+            # SHORT: Price crosses BELOW middle band (bearish momentum starting)
+            elif current['close'] < current['BB_MID'] and prev['close'] >= prev['BB_MID']:
                 signal = 'SHORT'
                 sl_dist = atr * params['sl_atr_mult']
                 tp_dist = atr * params['tp_atr_mult']
