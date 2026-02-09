@@ -75,6 +75,10 @@ dynamodb_client = boto3.resource('dynamodb')
 history_table = dynamodb_client.Table(DYNAMO_TABLE)
 bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 
+def get_paris_time():
+    """Returns current Paris time (UTC+1 for winter)"""
+    return datetime.utcnow() + timedelta(hours=1)
+
 def get_portfolio_context(pair):
     """Get current exposure and last trade info for cooldown"""
     try:
@@ -113,7 +117,7 @@ def manage_exits(pair, current_price, asset_class='Commodities'):
         if not open_trades:
             return None
             
-        exit_time = datetime.utcnow().isoformat()
+        exit_time = get_paris_time().isoformat()
         closed_count = 0
         total_pnl = 0
         
@@ -376,7 +380,7 @@ def lambda_handler(event, context):
             
         if portfolio.get('last_trade'):
             last_time = datetime.fromisoformat(portfolio['last_trade']['Timestamp'])
-            hours_since = (datetime.utcnow() - last_time).total_seconds() / 3600
+            hours_since = (get_paris_time() - last_time).total_seconds() / 3600
             if hours_since < COOLDOWN_HOURS:
                 logger.info(f"⏳ Cooldown active for {pair}. {COOLDOWN_HOURS - hours_since:.1f}h remaining.")
                 continue
@@ -496,7 +500,7 @@ def lambda_handler(event, context):
 def log_skip_to_dynamo(pair, reason, current_price):
     """Log skipped/no-signal events for the Reporter"""
     try:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = get_paris_time().isoformat()
         log_id = f"LOG-{uuid.uuid4().hex[:8]}"
         item = {
             'TradeId': log_id,
@@ -507,7 +511,7 @@ def log_skip_to_dynamo(pair, reason, current_price):
             'Type': 'INFO',
             'ExitReason': reason,
             'EntryPrice': str(current_price),
-            'TTL': int((datetime.utcnow() + timedelta(days=2)).timestamp())
+            'TTL': int((get_paris_time() + timedelta(days=2)).timestamp())
         }
         history_table.put_item(Item=item)
     except Exception as e:
@@ -517,7 +521,7 @@ def log_trade_to_dynamo(signal_data):
     """Log trade to DynamoDB with Size and Cost calculations"""
     try:
         trade_id = f"COMM-{uuid.uuid4().hex[:8]}"
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = get_paris_time().isoformat()
         
         entry_price = float(signal_data.get('entry', 0))
         size = float(signal_data.get('size', 0))

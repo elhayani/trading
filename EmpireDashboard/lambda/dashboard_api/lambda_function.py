@@ -133,13 +133,36 @@ def fetch_oanda_balance():
         print(f"❌ Oanda Balance Error: {e}")
         return None
 
-# Symbols that should be classified as Commodities instead of Crypto
+# Asset classification for multi-broker/multi-asset systems
 COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER']
+FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
+INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30']
 
-def is_commodity_symbol(symbol):
-    """Check if a symbol should be classified as Commodities (Gold/Silver)"""
+def get_paris_time():
+    """Returns current Paris time (UTC+1 for winter)"""
+    return datetime.utcnow() + timedelta(hours=1)
+
+def classify_asset(symbol):
+    """
+    Classify a Binance/Broker symbol into Asset Class.
+    Prioritizes specific prefixes/keywords.
+    """
     symbol_upper = symbol.upper()
-    return any(comm in symbol_upper for comm in COMMODITIES_SYMBOLS)
+    
+    # 1. Commodities
+    if any(comm in symbol_upper for comm in COMMODITIES_SYMBOLS):
+        return "Commodities"
+    
+    # 2. Forex
+    if any(fx in symbol_upper for fx in FOREX_SYMBOLS):
+        return "Forex"
+    
+    # 3. Indices
+    if any(idx in symbol_upper for idx in INDICES_SYMBOLS):
+        return "Indices"
+    
+    # Default
+    return "Crypto"
 
 def fetch_binance_positions(exchange):
     """Récupère les positions REELLES directement depuis l'API Binance"""
@@ -147,6 +170,8 @@ def fetch_binance_positions(exchange):
         if not exchange: return []
         positions = exchange.fetch_positions()
         live_trades = []
+        paris_now = get_paris_time()
+        
         for pos in positions:
             contracts = float(pos.get('contracts', 0) or 0)
             if contracts != 0:
@@ -160,13 +185,13 @@ def fetch_binance_positions(exchange):
                     # Fallback: negative contracts = short
                     trade_type = 'SHORT' if contracts < 0 else 'LONG'
                 
-                # Classify PAXG/XAG as Commodities, rest as Crypto
+                # Dynamic classification
                 symbol = pos['symbol']
-                asset_class = 'Commodities' if is_commodity_symbol(symbol) else 'Crypto'
+                asset_class = classify_asset(symbol)
                 
                 live_trades.append({
                     'TradeId': f"LIVE_{symbol}",
-                    'Timestamp': datetime.utcnow().isoformat(),
+                    'Timestamp': paris_now.isoformat(),
                     'Pair': symbol,
                     'AssetClass': asset_class,
                     'Type': trade_type,
@@ -248,7 +273,7 @@ def reconcile_trades(db_trades, binance_positions, exchange):
                         ':s': 'CLOSED',
                         ':ep': exit_decimal,
                         ':p': pnl_decimal,
-                        ':c': datetime.utcnow().isoformat(),
+                        ':c': get_paris_time().isoformat(),
                         ':r': "Auto-Reconciled: Closed on Binance"
                     }
                 )

@@ -15,6 +15,10 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource('dynamodb')
 ses = boto3.client('ses', region_name='eu-west-3')
 
+def get_paris_time():
+    """Returns current Paris time (UTC+1 for winter)"""
+    return datetime.utcnow() + timedelta(hours=1)
+
 # Tables à scanner (Si tu as plusieurs tables, ajoute-les ici)
 TABLES_TO_SCAN = ["EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]
 RECIPIENT = "zelhayani@gmail.com"
@@ -29,6 +33,27 @@ def fetch_yahoo_price_lite(symbol):
         return float(data['chart']['result'][0]['meta']['regularMarketPrice'])
     except:
         return 0.0
+
+def get_quote_currency(pair, asset_class):
+    if asset_class == 'Forex': 
+        return pair[3:] if len(pair) == 6 else 'USD'
+    if asset_class == 'Crypto':
+        if pair.endswith('USDT') or pair.endswith('USD'): return 'USD'
+        if pair.endswith('EUR'): return 'EUR'
+    if asset_class in ['Indices', 'Commodities']:
+        if pair.startswith('^FCHI'): return 'EUR' # CAC40
+        return 'USD'
+    return 'USD'
+
+def get_eur_rate(quote_currency):
+    if quote_currency == 'EUR': return 1.0
+    try:
+        # Map USDT -> USD
+        sym = 'USD' if quote_currency == 'USDT' else quote_currency
+        rate = fetch_yahoo_price_lite(f"EUR{sym}=X")
+        return rate if rate > 0 else 1.0
+    except:
+        return 1.0
 
 def get_all_trades():
     all_items = []
@@ -128,25 +153,47 @@ def lambda_handler(event, context):
             
             for pair, trades_list in pairs.items():
                 if ac == 'Crypto':
-                    curr_price = float(exchange.fetch_ticker(pair)['last'])
+                    try:
+                        curr_price = float(exchange.fetch_ticker(pair)['last'])
+                    except:
+                        curr_price = 0.0
                 else:
                     curr_price = fetch_yahoo_price_lite(pair)
                     if curr_price == 0 and ac == 'Forex': curr_price = fetch_yahoo_price_lite(pair + "=X")
 
                 total_qty = sum(float(t.get('Size', 0)) for t in trades_list)
-                avg_entry = sum(float(t['EntryPrice']) for t in trades_list) / len(trades_list)
+                avg_entry = sum(float(t['EntryPrice']) for t in trades_list) / len(trades_list) if trades_list else 0
+                direction = trades_list[0].get('Type', 'LONG').upper()
+
+                # Conversion Currency Logic
+                quote_currency = get_quote_currency(pair, ac)
+                eur_rate = get_eur_rate(quote_currency)
                 
-                # Current Value of this position
-                pos_value = total_qty * curr_price
-                pos_cost = sum(float(t.get('Cost', 0)) for t in trades_list)
-                if pos_cost == 0: pos_cost = total_qty * avg_entry
+                # Calculate Notional Values in EUR
+                curr_val_notional = (total_qty * curr_price) / eur_rate
+                entry_val_notional = (total_qty * avg_entry) / eur_rate
                 
-                unrealized_pnl += (pos_value - pos_cost)
+                # Determine PnL (Based on Notional Variation)
+                if direction == 'SHORT':
+                    pnl_eur = entry_val_notional - curr_val_notional
+                else:
+                    pnl_eur = curr_val_notional - entry_val_notional
+
+                # Cost & Display Value
+                # Use DB Cost (Margin) if available, else fallback to Entry Notional
+                db_cost = sum(float(t.get('Cost', 0)) for t in trades_list)
+                if db_cost > 0:
+                    pos_cost = db_cost
+                else:
+                    pos_cost = entry_val_notional
+                
+                # Ensure Arithmetic Consistency: Value = Cost + PnL
+                pos_value = pos_cost + pnl_eur
+                
+                unrealized_pnl += pnl_eur
                 open_positions_value += pos_value
                 
-                direction = trades_list[0].get('Type', 'LONG').upper()
                 pnl_pct = ((curr_price - avg_entry) / avg_entry * 100) if direction == 'LONG' else ((avg_entry - curr_price) / avg_entry * 100)
-                pnl_eur = pos_value - pos_cost
                 
                 if ac == 'Crypto': qty_fmt = f"{total_qty:.4f}"
                 elif ac == 'Forex': qty_fmt = f"{total_qty:,.0f}"
@@ -207,13 +254,13 @@ def lambda_handler(event, context):
             html_sections += "<div style='text-align:center;padding:30px;color:#94a3b8;'>💤 Aucune position active</div>"
 
         # --- TRIGGER & TIME WINDOWS ---
-        now = datetime.utcnow()
+        now = get_paris_time()
         trigger_lookback = now - timedelta(minutes=30)
         
-        # Journal: Use Paris timezone (UTC+1 or UTC+2 DST) for "today" calculation
-        # Simplification: Use UTC+1 (Paris winter time, close enough for daily view)
-        paris_now = now + timedelta(hours=1)
-        daily_lookback = paris_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)  # Convert back to UTC
+        paris_now = now
+        daily_lookback = paris_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)  # Convert back to UTC for scan? Actually Dynamo uses Paris time now.
+        # Wait, if Dynamo stores Paris time, lookback should be in Paris time.
+        daily_lookback = paris_now.replace(hour=0, minute=0, second=0, microsecond=0)
         
         trigger_lookback_iso = trigger_lookback.isoformat()
         daily_lookback_iso = daily_lookback.isoformat()
@@ -339,9 +386,10 @@ def lambda_handler(event, context):
                 else: qty_fmt = f"{qty:.2f}" if qty > 0 else "-"
                 
                 # Cost and Value
-                cost = float(t.get('Cost', 0) or qty * entry_price)
+                cost = float(t.get('Cost', 0) or 0)
+                
                 if status == 'OPEN':
-                    # For open positions, get current price
+                    # For open positions, get current price and calculate on fly
                     if asset_class == 'Crypto':
                         try:
                             current_price = float(exchange.fetch_ticker(pair)['last'])
@@ -351,13 +399,32 @@ def lambda_handler(event, context):
                         current_price = fetch_yahoo_price_lite(pair)
                         if current_price == 0: current_price = fetch_yahoo_price_lite(pair + "=X")
                         if current_price == 0: current_price = entry_price
-                    value = qty * current_price
                     exit_price = current_price
+
+                    # Correct Currency Conversion for OPEN trades
+                    quote_currency = get_quote_currency(pair, asset_class)
+                    eur_rate = get_eur_rate(quote_currency)
+                    
+                    curr_val_notional = (qty * current_price) / eur_rate
+                    entry_val_notional = (qty * entry_price) / eur_rate
+                    
+                    # PnL Calc
+                    if direction == 'SHORT':
+                        pnl_eur = entry_val_notional - curr_val_notional
+                    else:
+                        pnl_eur = curr_val_notional - entry_val_notional
+                    
+                    # Fallback Cost
+                    if cost == 0: cost = entry_val_notional
+                    
+                    # Consistent Value
+                    value = cost + pnl_eur
+
                 else:
-                    value = float(t.get('Value', 0) or qty * exit_price)
-                
-                # Calculate PnL
-                pnl_eur = float(t.get('PnL', 0)) if t.get('PnL') else (value - cost if value > 0 and cost > 0 else 0)
+                    # CLOSED/TP/SL: Trust DB values
+                    value = float(t.get('Value', 0))
+                    if cost == 0: cost = qty * entry_price # Fallback (might be raw, beware)
+                    pnl_eur = float(t.get('PnL', 0)) if t.get('PnL') else (value - cost)
                 pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 and exit_price > 0 else 0
                 if direction == 'SHORT': pnl_pct = -pnl_pct
                 
@@ -427,7 +494,7 @@ def lambda_handler(event, context):
             <div class="container">
                 <div class="header"><h1>🏛️ EMPIRE GLOBAL STATUS</h1></div>
                 <div style="padding: 10px;">{html_sections}</div>
-                <div style="padding: 20px; font-size: 10px; color: #94a3b8; text-align: center;">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+                <div style="padding: 20px; font-size: 10px; color: #94a3b8; text-align: center;">Updated: {get_paris_time().strftime('%Y-%m-%d %H:%M')}</div>
             </div>
         </body></html>
         """

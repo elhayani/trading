@@ -1,0 +1,175 @@
+======================================================================
+🛢️  COMMODITIES TRADING AWS DEPLOYMENT
+======================================================================
+
+📚 Step 1: Building Commodities Dependency Layer...
+----------------------------------------------------------------------
+  → Installing yfinance, pandas_ta...
+Collecting yfinance
+  Using cached yfinance-1.1.0-py2.py3-none-any.whl.metadata (6.1 kB)
+Collecting requests
+  Using cached requests-2.32.5-py3-none-any.whl.metadata (4.9 kB)
+Collecting lxml
+  Using cached lxml-6.0.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (3.6 kB)
+Collecting multitasking
+  Using cached multitasking-0.0.11-py3-none-any.whl.metadata (5.5 kB)
+Collecting beautifulsoup4
+  Using cached beautifulsoup4-4.14.3-py3-none-any.whl.metadata (3.8 kB)
+Collecting frozendict
+  Using cached frozendict-2.4.7-py3-none-any.whl.metadata (23 kB)
+Collecting peewee
+  Using cached peewee-3.19.0-py3-none-any.whl.metadata (7.0 kB)
+Collecting platformdirs
+  Using cached platformdirs-4.5.1-py3-none-any.whl.metadata (12 kB)
+Using cached yfinance-1.1.0-py2.py3-none-any.whl (129 kB)
+Using cached requests-2.32.5-py3-none-any.whl (64 kB)
+Using cached lxml-6.0.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.1 MB)
+Using cached multitasking-0.0.11-py3-none-any.whl (8.5 kB)
+Using cached beautifulsoup4-4.14.3-py3-none-any.whl (107 kB)
+Using cached frozendict-2.4.7-py3-none-any.whl (16 kB)
+Using cached peewee-3.19.0-py3-none-any.whl (411 kB)
+Using cached platformdirs-4.5.1-py3-none-any.whl (18 kB)
+Installing collected packages: yfinance, peewee, multitasking, requests, platformdirs, lxml, frozendict, beautifulsoup4
+
+Successfully installed beautifulsoup4-4.14.3 frozendict-2.4.7 lxml-6.0.2 multitasking-0.0.11 peewee-3.19.0 platformdirs-4.5.1 requests-2.32.5 yfinance-1.1.0
+
+[notice] A new release of pip is available: 25.3 -> 26.0.1
+[notice] To update, run: python3 -m pip install --upgrade pip
+Collecting yfinance
+  Using cached yfinance-1.1.0-py2.py3-none-any.whl.metadata (6.1 kB)
+Collecting pandas>=1.3.0 (from yfinance)
+  Using cached pandas-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (91 kB)
+Collecting numpy>=1.16.5 (from yfinance)
+  Using cached numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (62 kB)
+Collecting requests>=2.31 (from yfinance)
+  Using cached requests-2.32.5-py3-none-any.whl.metadata (4.9 kB)
+Collecting multitasking>=0.0.7 (from yfinance)
+  Using cached multitasking-0.0.11-py3-none-any.whl.metadata (5.5 kB)
+Collecting platformdirs>=2.0.0 (from yfinance)
+  Using cached platformdirs-4.5.1-py3-none-any.whl.metadata (12 kB)
+Collecting pytz>=2022.5 (from yfinance)
+  Using cached pytz-2025.2-py2.py3-none-any.whl.metadata (22 kB)
+Collecting frozendict>=2.3.4 (from yfinance)
+  Using cached frozendict-2.4.7-py3-none-any.whl.metadata (23 kB)
+Collecting peewee>=3.16.2 (from yfinance)
+  Using cached peewee-3.19.0-py3-none-any.whl.metadata (7.0 kB)
+Collecting beautifulsoup4>=4.11.1 (from yfinance)
+  Using cached beautifulsoup4-4.14.3-py3-none-any.whl.metadata (3.8 kB)
+Collecting curl_cffi<0.14,>=0.7 (from yfinance)
+  Using cached curl_cffi-0.13.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (13 kB)
+Collecting protobuf>=3.19.0 (from yfinance)
+  Using cached protobuf-6.33.5-cp39-abi3-manylinux2014_x86_64.whl.metadata (593 bytes)
+Collecting websockets>=13.0 (from yfinance)
+  Using cached websockets-16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
+Collecting cffi>=1.12.0 (from curl_cffi<0.14,>=0.7->yfinance)
+  Using cached cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.6 kB)
+Collecting certifi>=2024.2.2 (from curl_cffi<0.14,>=0.7->yfinance)
+  Using cached certifi-2026.1.4-py3-none-any.whl.metadata (2.5 kB)
+Collecting soupsieve>=1.6.1 (from beautifulsoup4>=4.11.1->yfinance)
+  Using cached soupsieve-2.8.3-py3-none-any.whl.metadata (4.6 kB)
+Collecting typing-extensions>=4.0.0 (from beautifulsoup4>=4.11.1->yfinance)
+  Using cached typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting pycparser (from cffi>=1.12.0->curl_cffi<0.14,>=0.7->yfinance)
+  Using cached pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+Collecting python-dateutil>=2.8.2 (from pandas>=1.3.0->yfinance)
+  Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+Collecting tzdata>=2022.7 (from pandas>=1.3.0->yfinance)
+  Using cached tzdata-2025.3-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting six>=1.5 (from python-dateutil>=2.8.2->pandas>=1.3.0->yfinance)
+  Using cached six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+Collecting charset_normalizer<4,>=2 (from requests>=2.31->yfinance)
+  Using cached charset_normalizer-3.4.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (37 kB)
+Collecting idna<4,>=2.5 (from requests>=2.31->yfinance)
+  Using cached idna-3.11-py3-none-any.whl.metadata (8.4 kB)
+Collecting urllib3<3,>=1.21.1 (from requests>=2.31->yfinance)
+  Using cached urllib3-2.6.3-py3-none-any.whl.metadata (6.9 kB)
+Using cached yfinance-1.1.0-py2.py3-none-any.whl (129 kB)
+Using cached curl_cffi-0.13.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (8.3 MB)
+Using cached beautifulsoup4-4.14.3-py3-none-any.whl (107 kB)
+Using cached certifi-2026.1.4-py3-none-any.whl (152 kB)
+Using cached cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (219 kB)
+Using cached frozendict-2.4.7-py3-none-any.whl (16 kB)
+Using cached multitasking-0.0.11-py3-none-any.whl (8.5 kB)
+Using cached numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (16.5 MB)
+Using cached pandas-2.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (12.0 MB)
+Using cached peewee-3.19.0-py3-none-any.whl (411 kB)
+Using cached platformdirs-4.5.1-py3-none-any.whl (18 kB)
+Using cached protobuf-6.33.5-cp39-abi3-manylinux2014_x86_64.whl (323 kB)
+Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Using cached pytz-2025.2-py2.py3-none-any.whl (509 kB)
+Using cached requests-2.32.5-py3-none-any.whl (64 kB)
+Using cached charset_normalizer-3.4.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (153 kB)
+Using cached idna-3.11-py3-none-any.whl (71 kB)
+Using cached urllib3-2.6.3-py3-none-any.whl (131 kB)
+Using cached six-1.17.0-py2.py3-none-any.whl (11 kB)
+Using cached soupsieve-2.8.3-py3-none-any.whl (37 kB)
+Using cached typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+Using cached tzdata-2025.3-py2.py3-none-any.whl (348 kB)
+Using cached websockets-16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (184 kB)
+Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+Installing collected packages: pytz, peewee, multitasking, websockets, urllib3, tzdata, typing-extensions, soupsieve, six, pycparser, protobuf, platformdirs, numpy, idna, frozendict, charset_normalizer, certifi, requests, python-dateutil, cffi, beautifulsoup4, pandas, curl_cffi, yfinance
+
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+tensorflow 2.16.2 requires numpy<2.0.0,>=1.26.0; python_version >= "3.12", but you have numpy 2.2.6 which is incompatible.
+tensorflow 2.16.2 requires protobuf!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<5.0.0dev,>=3.20.3, but you have protobuf 6.33.5 which is incompatible.
+matplotlib 3.8.2 requires numpy<2,>=1.21, but you have numpy 2.2.6 which is incompatible.
+Successfully installed beautifulsoup4-4.14.3 certifi-2026.1.4 cffi-2.0.0 charset_normalizer-3.4.4 curl_cffi-0.13.0 frozendict-2.4.7 idna-3.11 multitasking-0.0.11 numpy-2.2.6 pandas-2.3.2 peewee-3.19.0 platformdirs-4.5.1 protobuf-6.33.5 pycparser-3.0 python-dateutil-2.9.0.post0 pytz-2025.2 requests-2.32.5 six-1.17.0 soupsieve-2.8.3 typing-extensions-4.15.0 tzdata-2025.3 urllib3-2.6.3 websockets-16.0 yfinance-1.1.0
+
+[notice] A new release of pip is available: 25.3 -> 26.0.1
+[notice] To update, run: python3 -m pip install --upgrade pip
+[0;32m✅ Layer prepared in lambda/layer_commodities[0m
+
+🚀 Step 2: Deploying to AWS...
+----------------------------------------------------------------------
+[WARNING] aws-cdk-lib.aws_lambda.FunctionOptions#logRetention is deprecated.
+  use `logGroup` instead
+  This API will be removed in the next major release.
+
+✨  Synthesis time: 33.29s
+
+CommoditiesTradingStack: start: Building CommoditiesTradingStack Template
+CommoditiesTradingStack: success: Built CommoditiesTradingStack Template
+CommoditiesTradingStack: start: Publishing CommoditiesTradingStack Template (946179054632-eu-west-3-f70dbd22)
+CommoditiesTradingStack: success: Published CommoditiesTradingStack Template (946179054632-eu-west-3-f70dbd22)
+CommoditiesTradingStack: deploying... [1/1]
+CommoditiesTradingStack: creating CloudFormation changeset...
+CommoditiesTradingStack | 0/5 | 11:52:34 PM | UPDATE_IN_PROGRESS   | AWS::CloudFormation::Stack | CommoditiesTradingStack User Initiated
+CommoditiesTradingStack | 0/5 | 11:52:38 PM | UPDATE_IN_PROGRESS   | AWS::Lambda::Function      | CommoditiesTrader (CommoditiesTrader5A0FAB95) 
+CommoditiesTradingStack | 1/5 | 11:52:46 PM | UPDATE_COMPLETE      | AWS::Lambda::Function      | CommoditiesTrader (CommoditiesTrader5A0FAB95) 
+CommoditiesTradingStack | 2/5 | 11:52:48 PM | UPDATE_COMPLETE_CLEA | AWS::CloudFormation::Stack | CommoditiesTradingStack 
+CommoditiesTradingStack | 3/5 | 11:52:49 PM | UPDATE_COMPLETE      | AWS::CloudFormation::Stack | CommoditiesTradingStack 
+
+ ✅  CommoditiesTradingStack
+
+✨  Deployment time: 21.86s
+
+Outputs:
+CommoditiesTradingStack.CommoditiesLambdaArn = arn:aws:lambda:eu-west-3:946179054632:function:CommoditiesLiveTrader
+Stack ARN:
+arn:aws:cloudformation:eu-west-3:946179054632:stack/CommoditiesTradingStack/369db840-0130-11f1-9f17-06f693d15df1
+
+✨  Total time: 55.15s
+
+
+NOTICES         (What's this? https://github.com/aws/aws-cdk/wiki/CLI-Notices)
+
+34892	CDK CLI collects telemetry data on command usage starting at version 2.1100.0 (unless opted out)
+
+	Overview: We do not collect customer content and we anonymize the
+	          telemetry we do collect. See the attached issue for more
+	          information on what data is collected, why, and how to
+	          opt-out. Telemetry will NOT be collected for any CDK CLI
+	          version prior to version 2.1100.0 - regardless of
+	          opt-in/out. You can also view the telemetry we collect by
+	          logging it to a local file, by adding
+	          `--telemetry-file=my/local/file` to any `cdk` command.
+
+	Affected versions: cli: ^2.1100.0
+
+	More information at: https://github.com/aws/aws-cdk/issues/34892
+
+
+If you don’t want to see a notice anymore, use "cdk acknowledge <id>". For example, "cdk acknowledge 34892".
+
+[0;32m✅ Deployment Complete![0m
+

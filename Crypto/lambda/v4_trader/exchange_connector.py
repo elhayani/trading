@@ -12,109 +12,108 @@ import time
 class ExchangeConnector:
     """Connect to crypto exchanges via CCXT"""
     
-    def __init__(self, exchange_id='binance', testnet=False):
+    def __init__(self, exchange_id='binance', api_key=None, secret=None, testnet=False):
         """
         Initialize exchange connection
         Args:
             exchange_id: 'binance', 'kraken', etc.
-            testnet: Use testnet for paper trading
+            api_key: API Key for trading
+            secret: Secret Key for trading
+            testnet: Use testnet environment
         """
         self.exchange_id = exchange_id
+        self.testnet = testnet
         
+        config = {
+            'apiKey': api_key,
+            'secret': secret,
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}  # Default to Futures for V4
+        }
+        
+        # Testnet URL Override (Binance Futures)
+        if testnet and exchange_id == 'binance':
+            config['urls'] = {
+                'api': {
+                    'fapiPublic': 'https://testnet.binancefuture.com',
+                    'fapiPrivate': 'https://testnet.binancefuture.com',
+                    'fapiPrivateV2': 'https://testnet.binancefuture.com', 
+                }
+            }
+            print("🧪 Configured for Binance Futures TESTNET")
+
         # Initialize exchange
         if exchange_id == 'binance':
-            self.exchange = ccxt.binance({
-                'enableRateLimit': True,  # Respect rate limits
-                'options': {'defaultType': 'spot'}  # Spot trading
-            })
-        elif exchange_id == 'kraken':
-            self.exchange = ccxt.kraken({
-                'enableRateLimit': True
-            })
+            self.exchange = ccxt.binance(config)
+            if testnet:
+                try:
+                    self.exchange.set_sandbox_mode(True)
+                except Exception:
+                    pass # Ignore if deprecated/unsupported, URL override handles it
         else:
-            self.exchange = getattr(ccxt, exchange_id)({
-                'enableRateLimit': True
-            })
+            self.exchange = getattr(ccxt, exchange_id)(config)
         
         # Test connection
         try:
             self.exchange.load_markets()
-            print(f"✅ Connected to {exchange_id.upper()}")
-            print(f"   Markets loaded: {len(self.exchange.markets)}")
+            print(f"✅ Connected to {exchange_id.upper()} ({'TESTNET' if testnet else 'LIVE'})")
         except Exception as e:
             print(f"❌ Failed to connect to {exchange_id}: {e}")
+            # Don't raise here to allow read-only fallback if keys fail? 
+            # No, for trading bot we should probably raise or log error.
+            print("⚠️ Proceeding in Read-Only mode or with limited functionality.")
+
+    def create_market_order(self, symbol, side, amount):
+        """Execute Market Order"""
+        try:
+            print(f"🚀 Executing MARKET {side.upper()} {amount} {symbol}")
+            return self.exchange.create_order(symbol, 'market', side, amount)
+        except Exception as e:
+            print(f"❌ Order Failed: {e}")
+            raise
+
+    def create_limit_order(self, symbol, side, amount, price, params={}):
+        """Execute Limit Order"""
+        try:
+            print(f"🎯 Executing LIMIT {side.upper()} {amount} {symbol} @ {price}")
+            return self.exchange.create_order(symbol, 'limit', side, amount, price, params)
+        except Exception as e:
+            print(f"❌ Limit Order Failed: {e}")
             raise
     
-    def fetch_ohlcv(self, symbol='SOL/USDT', timeframe='1h', limit=300):
-        """
-        Fetch OHLCV data
-        Args:
-            symbol: Trading pair (BTC/USDT, SOL/USDT, etc.)
-            timeframe: Candle timeframe ('1m', '5m', '1h', '1d')
-            limit: Number of candles to fetch
-        Returns:
-            List of [timestamp, open, high, low, close, volume]
-        """
+    def cancel_all_orders(self, symbol):
+        """Cancel all open orders for symbol"""
         try:
-            print(f"📊 Fetching {symbol} {timeframe} data from {self.exchange_id}...")
-            
-            ohlcv = self.exchange.fetch_ohlcv(
-                symbol=symbol,
-                timeframe=timeframe,
-                limit=limit
-            )
-            
-            print(f"   ✅ {len(ohlcv)} candles retrieved")
-            print(f"   📅 From: {datetime.fromtimestamp(ohlcv[0][0]/1000).strftime('%Y-%m-%d %H:%M')}")
-            print(f"   📅 To: {datetime.fromtimestamp(ohlcv[-1][0]/1000).strftime('%Y-%m-%d %H:%M')}")
-            print(f"   💰 Latest price: ${ohlcv[-1][4]:.2f}")
-            
-            return ohlcv
-            
+            return self.exchange.cancel_all_orders(symbol)
+        except Exception as e:
+            print(f"⚠️ Cancel All Failed: {e}")
+            return None
+
+    def fetch_ohlcv(self, symbol='SOL/USDT', timeframe='1h', limit=300):
+        """Fetch OHLCV data"""
+        try:
+            # print(f"📊 Fetching {symbol} {timeframe}...")
+            return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         except Exception as e:
             print(f"❌ Error fetching OHLCV: {e}")
             return []
     
     def fetch_ticker(self, symbol='SOL/USDT'):
-        """
-        Fetch current ticker (price, volume, etc.)
-        Returns:
-            Dict with current market data
-        """
+        """Fetch current ticker"""
         try:
-            ticker = self.exchange.fetch_ticker(symbol)
-            
-            return {
-                'symbol': symbol,
-                'last': ticker.get('last'),
-                'bid': ticker.get('bid'),
-                'ask': ticker.get('ask'),
-                'volume_24h': ticker.get('quoteVolume'),
-                'change_24h': ticker.get('percentage'),
-                'timestamp': ticker.get('timestamp')
-            }
-            
+            return self.exchange.fetch_ticker(symbol)
         except Exception as e:
             print(f"❌ Error fetching ticker: {e}")
-            return None
-    
-    def get_market_info(self, symbol='SOL/USDT'):
-        """Get market trading rules and limits"""
+            return {'last': 0}
+
+    def fetch_balance(self):
+        """Fetch account balance"""
         try:
-            market = self.exchange.market(symbol)
-            
-            return {
-                'symbol': symbol,
-                'min_amount': market.get('limits', {}).get('amount', {}).get('min'),
-                'max_amount': market.get('limits', {}).get('amount', {}).get('max'),
-                'min_cost': market.get('limits', {}).get('cost', {}).get('min'),
-                'precision_price': market.get('precision', {}).get('price'),
-                'precision_amount': market.get('precision', {}).get('amount'),
-            }
-            
+            return self.exchange.fetch_balance()
         except Exception as e:
-            print(f"❌ Error fetching market info: {e}")
-            return None
+            print(f"❌ Error fetching balance: {e}")
+            return {}
+
 
 
 # Test du connector

@@ -35,7 +35,8 @@ class CommoditiesTradingStack(Stack):
             timeout=Duration.minutes(5),
             memory_size=512,
             environment={
-                "TRADING_MODE": "live"
+                "TRADING_MODE": "live",
+                "DYNAMO_TABLE": "EmpireTradesHistory"
             },
             log_retention=logs.RetentionDays.ONE_MONTH
         )
@@ -44,21 +45,21 @@ class CommoditiesTradingStack(Stack):
         # LAYERS (Dependencies)
         # =====================================================================
         
-        # 1. AWS Managed Pandas Layer (Pandas, Numpy)
-        pandas_layer = lambda_.LayerVersion.from_layer_version_arn(
-            self, "AWSPandasLayer",
-            layer_version_arn=f"arn:aws:lambda:{self.region}:336392948345:layer:AWSSDKPandas-Python312:8"
-        )
+        # 1. AWS Managed Pandas Layer (Pandas, Numpy) -> DISABLED (Too big, we bundle deps directly)
+        # pandas_layer = lambda_.LayerVersion.from_layer_version_arn(
+        #     self, "AWSPandasLayer",
+        #     layer_version_arn=f"arn:aws:lambda:{self.region}:336392948345:layer:AWSSDKPandas-Python312:8"
+        # )
         
         # 2. Custom Layer (yfinance, pandas_ta)
         dependency_layer = lambda_.LayerVersion(
             self, "CommoditiesDependencyLayer",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "layer_commodities")),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
-            description="Dependencies: yfinance, pandas_ta"
+            description="Dependencies: yfinance, pandas_ta, numpy, pandas"
         )
         
-        commodities_lambda.add_layers(pandas_layer)
+        # commodities_lambda.add_layers(pandas_layer)
         commodities_lambda.add_layers(dependency_layer)
         
         # Grant Bedrock Permissions
@@ -69,10 +70,10 @@ class CommoditiesTradingStack(Stack):
             )
         )
 
-        # Grant Permission to EmpireCommoditiesHistory (Dedicated Table)
+        # Grant Permission to EmpireTradesHistory (Shared Table)
         history_table = dynamodb.Table.from_table_name(
             self, "HistoryTable",
-            table_name="EmpireCommoditiesHistory"
+            table_name="EmpireTradesHistory"
         )
         history_table.grant_read_write_data(commodities_lambda)
         

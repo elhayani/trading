@@ -11,6 +11,13 @@ echo "🛢️  COMMODITIES TRADING AWS DEPLOYMENT"
 echo "======================================================================"
 echo ""
 
+# Set working directory to project root
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR/.." || exit 1
+
+echo "📂 Working directory set to: $(pwd)"
+echo ""
+
 # Configuration
 STACK_NAME="CommoditiesTradingStack"
 REGION="eu-west-3"
@@ -50,8 +57,8 @@ pip3 install \
     --upgrade \
     yfinance
 
-# Remove heavy libs provided by AWS Layer
-rm -rf $LAYER_DIR/numpy $LAYER_DIR/pandas $LAYER_DIR/dateutil $LAYER_DIR/pytz
+# Remove heavy libs provided by AWS Layer (DISABLED: We bundle them now to fit size limits)
+# rm -rf $LAYER_DIR/numpy $LAYER_DIR/pandas $LAYER_DIR/dateutil $LAYER_DIR/pytz
 
 # Remove optional/heavy dependencies
 rm -rf $LAYER_DIR/numba $LAYER_DIR/llvmlite $LAYER_DIR/scipy

@@ -38,6 +38,37 @@ bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 EMPIRE_TABLE = "EmpireCryptoV4"
 empire_table = dynamodb.Table(EMPIRE_TABLE)
 
+def get_paris_time():
+    """Returns current Paris time (UTC+1 for winter)"""
+    return datetime.utcnow() + timedelta(hours=1)
+
+# Asset classification for multi-broker/multi-asset systems
+COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER']
+FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
+INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30']
+
+def classify_asset(symbol):
+    """
+    Classify a Binance/Broker symbol into Asset Class.
+    Prioritizes specific prefixes/keywords.
+    """
+    symbol_upper = symbol.upper()
+    
+    # 1. Commodities
+    if any(comm in symbol_upper for comm in COMMODITIES_SYMBOLS):
+        return "Commodities"
+    
+    # 2. Forex
+    if any(fx in symbol_upper for fx in FOREX_SYMBOLS):
+        return "Forex"
+    
+    # 3. Indices
+    if any(idx in symbol_upper for idx in INDICES_SYMBOLS):
+        return "Indices"
+    
+    # Default
+    return "Crypto"
+
 # ==================== CONFIGURATION V6.1 OPTIMIZED ====================
 DEFAULT_SYMBOL = os.environ.get('SYMBOL', 'SOL/USDT')
 CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '200'))   # 400€ total / 2 max positions (V6.1: reduced concentration)
@@ -75,16 +106,43 @@ REVERSAL_TRIGGER_ENABLED = os.environ.get('REVERSAL_TRIGGER', 'true').lower() ==
 MAX_CRYPTO_EXPOSURE = int(os.environ.get('MAX_CRYPTO_EXPOSURE', '2'))  # Max crypto trades when correlated
 # ========================================================
 
-def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0):
+def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0, exchange=None):
     try:
         trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = get_paris_time().isoformat()
         
-        # Calculate Position Size based on Capital (Default $1000 per trade)
+        # Calculate Position Size based on Capital
         capital = float(os.environ.get('CAPITAL', '1000'))
         price_float = float(price)
-        # Only Crypto Logic
         size = round(capital / price_float, 4) if price_float > 0 else 0
+        
+        # 🚀 EXECUTE TRADE ON EXCHANGE (If exchange provided)
+        execution_info = "PAPER_TRADE"
+        real_entry_price = price
+        real_size = size
+        
+        if exchange:
+            try:
+                # 1. Market Buy
+                order = exchange.create_market_order(symbol, 'buy', size)
+                real_entry_price = order.get('average', order.get('price', price))
+                real_size = order.get('amount', size) # Get filled amount
+                execution_info = f"EXECUTED_ID_{order['id']}"
+                logger.info(f"✅ MARKET BUY EXECUTED: {real_size} {symbol} @ {real_entry_price}")
+                
+                # 2. Limit TP (Best Practice for Testnet & Live)
+                if tp_pct > 0:
+                    tp_price = float(real_entry_price) * (1 + tp_pct/100)
+                    exchange.create_limit_order(symbol, 'sell', real_size, tp_price, params={'reduceOnly': True})
+                    logger.info(f"🎯 LIMIT TP PLACED @ {tp_price}")
+                    
+            except Exception as trade_err:
+                logger.error(f"❌ TRADE EXECUTION FAILED: {trade_err}")
+                execution_info = f"FAILED: {trade_err}"
+                # If trade failed, maybe we shouldn't log as OPEN? 
+                # For safety, we log it with status ERROR or skip logging?
+                # Let's log but mark as FAILED execution
+                return # Abort logging if execution failed to prevent phantom trades
         
         item = {
             'TradeId': trade_id,
@@ -93,26 +151,27 @@ def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset
             'Pair': symbol,
             'Type': action, # 'BUY'
             'Strategy': strategy,
-            'EntryPrice': str(price),
-            'Size': str(size),       # Save Quantity
-            'Cost': str(capital),    # Save Cost Basis
-            'Value': str(capital),   # Initial Value = Cost
-            'SL': str(sl_pct),       # Save Dynamic SL %
-            'TP': str(tp_pct),       # Save Dynamic TP %
+            'EntryPrice': str(real_entry_price),
+            'Size': str(real_size),       
+            'Cost': str(capital),    
+            'Value': str(capital),   
+            'SL': str(sl_pct),       
+            'TP': str(tp_pct),       
             'ATR': '0',
             'AI_Decision': decision,
             'AI_Reason': reason,
-            'Status': 'OPEN'
+            'Status': 'OPEN',
+            'Execution': execution_info
         }
         empire_table.put_item(Item=item)
-        logger.info(f"✅ Trade logged: {trade_id} | Size: {size:.4f} {symbol}")
+        logger.info(f"✅ Trade logged: {trade_id} | Size: {real_size} {symbol}")
     except Exception as e:
         logger.error(f"❌ Failed to log to Empire: {e}")
 
 def log_skip_to_empire(symbol, reason, price, asset_class='Crypto'):
     """Log skipped/no-signal events for the Reporter"""
     try:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = get_paris_time().isoformat()
         log_id = f"LOG-{uuid.uuid4().hex[:8]}"
         item = {
             'TradeId': log_id,
@@ -123,7 +182,7 @@ def log_skip_to_empire(symbol, reason, price, asset_class='Crypto'):
             'Type': 'INFO',
             'ExitReason': reason,
             'EntryPrice': str(price),
-            'TTL': int((datetime.utcnow() + timedelta(days=2)).timestamp())
+            'TTL': int((get_paris_time() + timedelta(days=2)).timestamp())
         }
         empire_table.put_item(Item=item)
     except Exception as e:
@@ -144,7 +203,7 @@ def is_golden_window(timestamp_iso=None):
             dt = datetime.fromisoformat(timestamp_iso)
             hour = dt.hour
         else:
-            hour = datetime.utcnow().hour
+            hour = get_paris_time().hour
             
         is_eu = 7 <= hour <= 10
         is_us = 13 <= hour <= 16
@@ -625,9 +684,9 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication news
         logger.error(f"Bedrock Error: {e}")
         return {"decision": "CANCEL", "reason": "Bedrock AI Error - Safety default", "confidence": 0}
 
-def close_all_positions(open_trades, current_price, reason):
+def close_all_positions(open_trades, current_price, reason, exchange=None):
     """Helper to close all open positions with proper PnL calculation"""
-    exit_time = datetime.utcnow().isoformat()
+    exit_time = get_paris_time().isoformat()
     total_pnl = 0
     
     for trade in open_trades:
@@ -638,6 +697,24 @@ def close_all_positions(open_trades, current_price, reason):
         pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
         trade_pnl = (pnl_pct / 100) * position_value
         total_pnl += trade_pnl
+        
+        # 🚀 EXECUTE CLOSE ON EXCHANGE
+        if exchange:
+            try:
+                symbol = trade['Pair']
+                size = float(trade['Size'])
+                logger.info(f"📉 CLOSING POSITION: {size} {symbol} ({reason})")
+                
+                # 1. Market Sell
+                exchange.create_market_order(symbol, 'sell', size)
+                
+                # 2. Cancel Open Orders (TP/SL)
+                exchange.cancel_all_orders(symbol)
+                logger.info("✅ Position Closed & Orders Cancelled")
+                
+            except Exception as close_err:
+                logger.error(f"❌ CLOSE EXECUTION FAILED: {close_err}")
+                # We still mark as closed in DB to avoid infinite retry loop, but log error
         
         empire_table.update_item(
             Key={'TradeId': trade['TradeId']},
@@ -699,16 +776,16 @@ def manage_exits(symbol, asset_class, exchange=None):
         # 🛑 STOP LOSS CHECK (Priority 1)
         if pnl_pct <= stop_loss_limit:
             logger.warning(f"🛑 STOP LOSS HIT at {pnl_pct:.2f}% (Limit: {stop_loss_limit:.2f}%)! Closing all positions.")
-            total_pnl = close_all_positions(open_trades, current_price, "STOP_LOSS")
+            total_pnl = close_all_positions(open_trades, current_price, "STOP_LOSS", exchange)
             return f"STOP_LOSS_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
-        
+            
         # 💎 HARD TAKE PROFIT CHECK (Priority 2 - Guaranteed exit)
         if pnl_pct >= take_profit_limit:
             logger.info(f"💎 HARD TAKE PROFIT at {pnl_pct:.2f}% (Limit: {take_profit_limit:.2f}%)! Securing profits.")
-            total_pnl = close_all_positions(open_trades, current_price, "HARD_TP")
+            total_pnl = close_all_positions(open_trades, current_price, "HARD_TP", exchange)
             return f"HARD_TP_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
-        
-        # � SOL TURBO TRAILING (Priority 2.5 - For high-momentum SOL trades)
+            
+        #  SOL TURBO TRAILING (Priority 2.5 - For high-momentum SOL trades)
         if 'SOL' in symbol and pnl_pct >= SOL_TRAILING_ACTIVATION:
             # Track peak profit and apply trailing stop
             # Store peak in trade metadata if not exists
@@ -727,23 +804,23 @@ def manage_exits(symbol, asset_class, exchange=None):
                 trailing_trigger = peak_pnl - SOL_TRAILING_STOP
                 if pnl_pct <= trailing_trigger and trailing_trigger > 0:
                     logger.info(f"🚀 SOL TURBO TRAILING triggered! Peak: +{peak_pnl:.2f}% | Current: +{pnl_pct:.2f}%")
-                    total_pnl = close_all_positions(open_trades, current_price, "SOL_TURBO_TRAILING")
+                    total_pnl = close_all_positions(open_trades, current_price, "SOL_TURBO_TRAILING", exchange)
                     return f"SOL_TURBO_TRAILING_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
             
             logger.info(f"🚀 SOL in Turbo Zone +{pnl_pct:.2f}%. Trailing active, riding the wave...")
         
-        # �📈 TRAILING STOP CHECK (Priority 3 - RSI confirmation required)
+        # 📈 TRAILING STOP CHECK (Priority 3 - RSI confirmation required)
         if pnl_pct >= TRAILING_TP_PCT:
             target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=14)
             rsi = analyze_market(target_ohlcv)['indicators']['rsi']
             
             if rsi > RSI_SELL_THRESHOLD:
                 logger.info(f"📈 TRAILING TP ACTIVATED (RSI {rsi:.1f} > {RSI_SELL_THRESHOLD}). Closing at {current_price:.2f}")
-                total_pnl = close_all_positions(open_trades, current_price, "TRAILING_TP")
+                total_pnl = close_all_positions(open_trades, current_price, "TRAILING_TP", exchange)
                 return f"TRAILING_TP_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
-            else:
-                logger.info(f"📊 In profit +{pnl_pct:.2f}% but RSI={rsi:.1f} < {RSI_SELL_THRESHOLD}. Holding for more gains.")
-        
+        else:
+            logger.info(f"📊 In profit +{pnl_pct:.2f}% but RSI={rsi:.1f} < {RSI_SELL_THRESHOLD}. Holding for more gains.")
+    
         return "HOLD"
         
     except Exception as e:
@@ -765,244 +842,194 @@ def get_portfolio_context(symbol):
 
 def lambda_handler(event, context):
     # Determine Context from Event Payload (Priority) or Env
-    symbol = event.get('symbol', DEFAULT_SYMBOL)
-    asset_class = event.get('asset_class', 'Crypto') # 'Crypto', 'Indices', 'Commodities', 'Forex'
+    # Symbols can be a single symbol or a comma-separated list
+    symbols_env = os.environ.get('SYMBOLS', DEFAULT_SYMBOL)
+    symbols_to_check = event.get('symbols', event.get('symbol', symbols_env)).split(',')
     
-    logger.info(f"🚀 Empire V4 Hybrid | Target: {symbol} | Class: {asset_class}")
+    results = []
     
-    # ENFORCE CRYPTO ONLY
-    if asset_class != 'Crypto':
-        logger.warning(f"⛔ SKIPPED: Asset Class {asset_class} not allowed. Only Crypto.")
-        return {"status": "SKIPPED_NOT_CRYPTO"}
-
     try:
-        exchange = ExchangeConnector('binance')
+        # Initialize Exchange with Keys
+        api_key = os.environ.get('API_KEY')
+        secret = os.environ.get('SECRET_KEY')
+        trading_mode = os.environ.get('TRADING_MODE', 'test')
+        testnet = (trading_mode == 'test' or trading_mode == 'paper')
         
-        # 1. GESTION DES SORTIES (Priorité)
-        exit_status = manage_exits(symbol, asset_class, exchange)
-        if exit_status and "CLOSED" in exit_status:
-            return {"status": "EXIT_SUCCESS", "details": exit_status}
+        exchange = ExchangeConnector('binance', api_key=api_key, secret=secret, testnet=testnet)
+        
+        for raw_symbol in symbols_to_check:
+            symbol = raw_symbol.strip()
+            if not symbol: continue
+            
+            # Dynamic classification (similar to Dashboard API)
+            asset_class = classify_asset(symbol)
+            logger.info(f"🚀 Empire V4 Hybrid | Target: {symbol} | Class: {asset_class}")
+            
+            try:
+                # 1. GESTION DES SORTIES (Priorité)
+                exit_status = manage_exits(symbol, asset_class, exchange)
+                if exit_status and "CLOSED" in exit_status:
+                    results.append({"symbol": symbol, "status": "EXIT_SUCCESS", "details": exit_status})
+                    continue
 
-        # 2. 🛡️ CIRCUIT BREAKER CHECK (Leçon 2022 - 3 niveaux)
-        cb_can_trade, cb_size_mult, cb_level, btc_24h, btc_7d = check_circuit_breaker(exchange)
-        
-        if not cb_can_trade:
-            if cb_level == "L3_SURVIVAL":
-                # TODO: Implement auto-liquidation of SOL positions in survival mode
-                logger.critical(f"🚨 SURVIVAL MODE - Consider liquidating risky positions!")
-            return {
-                "status": f"BLOCKED_CIRCUIT_BREAKER_{cb_level}", 
-                "btc_24h": f"{btc_24h:.2%}",
-                "btc_7d": f"{btc_7d:.2%}"
-            }
-        
-        # 2.5 FILTRE DE CORRÉLATION BTC (Crash horaire)
-        btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
-        current_close = btc_ohlcv[-1][4]
-        prev_close = btc_ohlcv[-2][4] 
-        btc_change = (current_close - prev_close) / prev_close
-        
-        if btc_change < BTC_CRASH_THRESHOLD:
-            logger.warning(f"🚨 BTC CRASH ({btc_change:.2%}). Buys blocked.")
-            return {"status": "SKIPPED_BTC_CRASH", "btc_change": f"{btc_change:.2%}"}
-
-        # 3. CONTEXTE & LIMITES (Configurable)
-        portfolio_stats, history = get_portfolio_context(symbol)
-        if portfolio_stats['current_pair_exposure'] >= MAX_EXPOSURE:
-            logger.info(f"⏸️ Max exposure ({MAX_EXPOSURE}) reached for {symbol}")
-            return {"status": "SKIPPED_MAX_EXPOSURE", "current": portfolio_stats['current_pair_exposure']}
-        
-        if portfolio_stats.get('last_trade'):
-            last_time = datetime.fromisoformat(portfolio_stats['last_trade']['Timestamp'])
-            hours_since = (datetime.utcnow() - last_time).total_seconds() / 3600
-            if hours_since < COOLDOWN_HOURS:
-                logger.info(f"⏳ Cooldown active. {COOLDOWN_HOURS - hours_since:.1f}h remaining.")
-                return {"status": "SKIPPED_COOLDOWN", "hours_remaining": round(COOLDOWN_HOURS - hours_since, 1)}
-
-        # 🔥 NEW: 3.5 VIX FILTER (Don't trade in extreme volatility)
-        can_trade, size_multiplier, vix_value = check_vix_filter()
-        if not can_trade:
-            return {"status": "SKIPPED_VIX_HIGH", "vix": vix_value, "threshold": VIX_MAX_THRESHOLD}
-
-        # 4. ANALYSE & SIGNAL
-        target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
-        if not target_ohlcv or len(target_ohlcv) < 14:
-            return {"status": "SKIPPED_NO_DATA"}
-             
-        analysis = analyze_market(target_ohlcv)
-        rsi = analysis['indicators']['rsi']
-        current_price = analysis['current_price']
-
-        # 5. 🎯 DYNAMIC RSI THRESHOLD (based on market regime) - V4 Fortress Balanced
-        dynamic_rsi_threshold, market_regime = get_dynamic_rsi_threshold(cb_level, btc_7d, symbol)
-        
-        # 🎯 V5.1 Micro-Corridors Override (Time-Based Optimization)
-        corridor_risk_mult = 1.0
-        corridor_tp_mult = 1.0
-        corridor_sl_mult = 1.0
-        corridor_name = "Standard"
-        
-        if MICRO_CORRIDORS_AVAILABLE:
-            c_params = get_corridor_params(symbol)
-            if c_params:
-                p = c_params.get('params', {})
-                corridor_risk_mult = p.get('risk_multiplier', 1.0)
-                corridor_tp_mult = p.get('tp_multiplier', 1.0)
-                corridor_sl_mult = p.get('sl_multiplier', 1.0)
-                corridor_name = c_params.get('name', 'Standard')
+                # 2. 🛡️ CIRCUIT BREAKER CHECK (Leçon 2022 - 3 niveaux)
+                cb_can_trade, cb_size_mult, cb_level, btc_24h, btc_7d = check_circuit_breaker(exchange)
                 
-                # Adapt RSI based on corridor
-                dynamic_rsi_threshold = p.get('rsi_threshold', dynamic_rsi_threshold)
+                if not cb_can_trade:
+                    if cb_level == "L3_SURVIVAL":
+                        logger.critical(f"🚨 SURVIVAL MODE - Consider liquidating risky positions!")
+                    results.append({"symbol": symbol, "status": f"BLOCKED_CB_{cb_level}", "btc_24h": f"{btc_24h:.2%}", "btc_7d": f"{btc_7d:.2%}"})
+                    continue
                 
-        logger.info(f"📈 Analysis {symbol}: RSI={rsi:.2f} | Dynamic Threshold={dynamic_rsi_threshold} ({market_regime}/{corridor_name})")
-        
-        # 🦁 GOLDEN WINDOW Check (Run BEFORE threshold check)
-        timestamp_iso = event.get('timestamp')
-        in_golden_window = is_golden_window(timestamp_iso)
-        required_volume = VOLUME_CONFIRMATION
-        
-        if in_golden_window:
-            required_volume = 1.0 # Aggressive Volume in Golden Window
-            dynamic_rsi_threshold = max(dynamic_rsi_threshold, 45) # Allow up to 45
-            logger.info(f"🦁 GOLDEN WINDOW ACTIVE: RSI Thresh -> {dynamic_rsi_threshold}, Vol -> {required_volume}x")
+                # 2.5 FILTRE DE CORRÉLATION BTC (Crash horaire)
+                btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
+                current_close = btc_ohlcv[-1][4]
+                prev_close = btc_ohlcv[-2][4] 
+                btc_change = (current_close - prev_close) / prev_close
+                
+                if btc_change < BTC_CRASH_THRESHOLD:
+                    logger.warning(f"🚨 BTC CRASH ({btc_change:.2%}). Buys blocked.")
+                    results.append({"symbol": symbol, "status": "SKIPPED_BTC_CRASH", "btc_change": f"{btc_change:.2%}"})
+                    continue
 
-        if rsi < dynamic_rsi_threshold:
-            
-            # 5.1 VOLUME CONFIRMATION (SOL Turbo Mode)
-            vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume)
-            if not vol_confirmed:
-                log_skip_to_empire(symbol, f"LOW_VOLUME: {vol_ratio:.2f}x (need {required_volume}x)", current_price, asset_class)
-                return {"status": "SKIPPED_LOW_VOLUME", "vol_ratio": round(vol_ratio, 2), "rsi": round(rsi, 2)}
-            
-            # 5.2 🚀 REVERSAL TRIGGER (Final Optimization)
-            reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
-            if not reversal_ok:
-                logger.info(f"🔪 Falling Knife blocked: {reversal_reason}")
-                return {"status": "SKIPPED_FALLING_KNIFE", "reason": reversal_reason, "rsi": round(rsi, 2)}
-            
-            # 5.5 MULTI-TIMEFRAME CONFIRMATION
-            signal_strength, rsi_4h = check_multi_timeframe(symbol, exchange, rsi)
-            
-            if signal_strength == "WEAK":
-                # Weak signal - add to AI context for extra scrutiny
-                logger.info(f"⚠️ Weak multi-TF signal. AI will apply extra scrutiny.")
-            elif signal_strength == "NO_SIGNAL":
-                logger.info(f"📊 No signal on multi-TF analysis.")
-                log_skip_to_empire(symbol, f"NO_SIGNAL: RSI_4H={rsi_4h:.1f} (Multi-TF filter)", current_price, asset_class)
-                return {"status": "IDLE", "rsi": round(rsi, 2), "rsi_4h": round(rsi_4h, 2), "asset": symbol}
-            
-            # 5.6 🚀 MOMENTUM FILTER (V5 Optimization)
-            momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
-            if not momentum_ok:
-                log_skip_to_empire(symbol, f"BEARISH_MOMENTUM: EMA diff {ema_diff:.2f}%", current_price, asset_class)
-                return {"status": "SKIPPED_BEARISH_MOMENTUM", "ema_diff": round(ema_diff, 2), "rsi": round(rsi, 2)}
-            
-            # 5.7 🚀 CORRELATION CHECK (V5 Optimization)
-            correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
-            if not correlation_ok:
-                log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
-                return {"status": "SKIPPED_CORRELATION_RISK", "exposure": crypto_exposure, "reason": correlation_reason}
-            
-            # 5.8 🛡️ PREDICTABILITY INDEX (V5.1 Anti-Erratic Filter)
-            predictability_score = None
-            predictability_grade = None
-            if PREDICTABILITY_INDEX_AVAILABLE and len(target_ohlcv) >= 50:
-                try:
-                    import pandas as pd
-                    # Convertir OHLCV en DataFrame pour le calcul
-                    ohlcv_df = pd.DataFrame(target_ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-                    pred_result = calculate_predictability_score(ohlcv_df)
-                    predictability_score = pred_result.get('score', 50)
-                    predictability_grade = pred_result.get('grade', 'MODERATE')
-                    
-                    logger.info(f"🛡️ Predictability: {predictability_score:.1f}/100 ({predictability_grade})")
-                    
-                    # 🚫 QUARANTINE pour actifs très erratiques
-                    if pred_result.get('is_erratic', False) and predictability_score < 25:
-                        log_skip_to_empire(symbol, f"ERRATIC_ASSET: Score {predictability_score:.1f}/100", current_price, asset_class)
-                        return {"status": "SKIPPED_ERRATIC_ASSET", "predictability_score": round(predictability_score, 1)}
-                    
-                    # Ajustements pour actifs POOR
-                    if predictability_grade == 'POOR':
-                        pred_adj = get_predictability_adjustment(ohlcv_df)
-                        corridor_risk_mult *= pred_adj.get('position_multiplier', 1.0)
-                        corridor_tp_mult *= pred_adj.get('tp_multiplier', 1.0)
-                        corridor_sl_mult *= pred_adj.get('sl_multiplier', 1.0)
-                        logger.info(f"⚠️ Asset POOR - Adjusting: Risk x{corridor_risk_mult:.2f}, TP x{corridor_tp_mult:.2f}")
+                # 3. CONTEXTE & LIMITES
+                portfolio_stats, history = get_portfolio_context(symbol)
+                if portfolio_stats['current_pair_exposure'] >= MAX_EXPOSURE:
+                    logger.info(f"⏸️ Max exposure ({MAX_EXPOSURE}) reached for {symbol}")
+                    results.append({"symbol": symbol, "status": "SKIPPED_MAX_EXPOSURE"})
+                    continue
+                
+                if portfolio_stats.get('last_trade'):
+                    last_time = datetime.fromisoformat(portfolio_stats['last_trade']['Timestamp'])
+                    hours_since = (get_paris_time() - last_time).total_seconds() / 3600
+                    if hours_since < COOLDOWN_HOURS:
+                        logger.info(f"⏳ Cooldown active. {COOLDOWN_HOURS - hours_since:.1f}h remaining.")
+                        results.append({"symbol": symbol, "status": "SKIPPED_COOLDOWN"})
+                        continue
+
+                # 🔥 3.5 VIX FILTER (Don't trade in extreme volatility)
+                can_trade, size_multiplier, vix_value = check_vix_filter()
+                if not can_trade:
+                    results.append({"symbol": symbol, "status": "SKIPPED_VIX_HIGH", "vix": vix_value})
+                    continue
+
+                # 4. ANALYSE & SIGNAL
+                target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
+                if not target_ohlcv or len(target_ohlcv) < 14:
+                    results.append({"symbol": symbol, "status": "SKIPPED_NO_DATA"})
+                    continue
+                     
+                analysis = analyze_market(target_ohlcv)
+                rsi = analysis['indicators']['rsi']
+                current_price = analysis['current_price']
+
+                # 5. 🎯 DYNAMIC RSI THRESHOLD (based on market regime)
+                dynamic_rsi_threshold, market_regime = get_dynamic_rsi_threshold(cb_level, btc_7d, symbol)
+                
+                # 🎯 V5.1 Micro-Corridors Override (Time-Based Optimization)
+                corridor_risk_mult = 1.0
+                corridor_tp_mult = 1.0
+                corridor_sl_mult = 1.0
+                corridor_name = "Standard"
+                
+                if MICRO_CORRIDORS_AVAILABLE:
+                    c_params = get_corridor_params(symbol)
+                    if c_params:
+                        p = c_params.get('params', {})
+                        corridor_risk_mult = p.get('risk_multiplier', 1.0)
+                        corridor_tp_mult = p.get('tp_multiplier', 1.0)
+                        corridor_sl_mult = p.get('sl_multiplier', 1.0)
+                        corridor_name = c_params.get('name', 'Standard')
+                        dynamic_rsi_threshold = p.get('rsi_threshold', dynamic_rsi_threshold)
                         
-                except Exception as e:
-                    logger.warning(f"Predictability check error: {e}")
-            
-            # 6. IA AVOCAT DU DIABLE (Bedrock)
-            news_symbol = symbol.split('=')[0].split('/')[0]  # 'SOL/USDT' -> 'SOL', 'GC=F' -> 'GC'
-            news_ctx = get_news_context(news_symbol)
-            
-            # Add multi-TF context to AI decision
-            portfolio_stats['signal_strength'] = signal_strength
-            portfolio_stats['rsi_4h'] = rsi_4h
-            portfolio_stats['vix'] = vix_value
-            portfolio_stats['dynamic_threshold'] = dynamic_rsi_threshold
-            
-            decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
-            
-            logger.info(f"🤖 AI Decision: {decision.get('decision')} | Confidence: {decision.get('confidence', 0)}%")
-            
-            if decision.get('decision') == "CONFIRM":
-                # 🔥 Apply size multiplier from VIX, Circuit Breaker AND Micro-Corridors
-                final_size_mult = size_multiplier * cb_size_mult * corridor_risk_mult
-                base_capital = CAPITAL_PER_TRADE * final_size_mult
+                # 🦁 GOLDEN WINDOW Check
+                timestamp_iso = event.get('timestamp') or get_paris_time().isoformat()
+                in_golden_window = is_golden_window(timestamp_iso)
+                required_volume = VOLUME_CONFIRMATION
                 
-                # 🚀 V5: Dynamic Position Sizing based on signal quality
-                adjusted_capital, confidence = calculate_dynamic_position_size(
-                    base_capital, rsi, signal_strength, vol_ratio, momentum_trend
-                )
+                if in_golden_window:
+                    required_volume = 1.0 # Aggressive Volume in Golden Window
+                    dynamic_rsi_threshold = max(dynamic_rsi_threshold, 45) # Allow up to 45
                 
-                logger.info(f"💰 Final Trade Size: {adjusted_capital:.2f}$ (VIX: {size_multiplier}, CB: {cb_size_mult}, Confidence: {confidence:.2f})")
-                
-                # Add V5 context to trade log
-                portfolio_stats['momentum_trend'] = momentum_trend
-                portfolio_stats['confidence_score'] = confidence
-                portfolio_stats['crypto_exposure'] = crypto_exposure
-                
-                # Calculate Dynamic TP/SL
-                calc_tp = HARD_TP_PCT * corridor_tp_mult
-                calc_sl = STOP_LOSS_PCT * corridor_sl_mult
-                
-                log_trade_to_empire(
-                    symbol, 
-                    "LONG", 
-                    f"V5_{signal_strength}_{corridor_name}",
-                    current_price, 
-                    "CONFIRM", 
-                    decision.get('reason'),
-                    asset_class,
-                    tp_pct=round(calc_tp, 2),
-                    sl_pct=round(calc_sl, 2)
-                )
-                return {
-                    "status": "TRADE_EXECUTED", 
-                    "asset": symbol, 
-                    "price": current_price,
-                    "rsi_1h": rsi,
-                    "rsi_4h": rsi_4h,
-                    "signal_strength": signal_strength,
-                    "vix": vix_value,
-                    "size_multiplier": size_multiplier,
-                    "ai_confidence": decision.get('confidence', 0)
-                }
-            else:
-                log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
-                return {
-                    "status": "SKIPPED_AI_VETO", 
-                    "reason": decision.get('reason'),
-                    "rsi_1h": rsi,
-                    "rsi_4h": rsi_4h,
-                    "signal_strength": signal_strength
-                }
+                if rsi < dynamic_rsi_threshold:
+                    # 5.1 VOLUME CONFIRMATION
+                    vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume)
+                    if not vol_confirmed:
+                        log_skip_to_empire(symbol, f"LOW_VOLUME: {vol_ratio:.2f}x", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_LOW_VOLUME", "vol": vol_ratio})
+                        continue
+                    
+                    # 5.2 🚀 REVERSAL TRIGGER
+                    reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
+                    if not reversal_ok:
+                        results.append({"symbol": symbol, "status": "SKIPPED_FALLING_KNIFE", "reason": reversal_reason})
+                        continue
+                    
+                    # 5.5 MULTI-TIMEFRAME CONFIRMATION
+                    signal_strength, rsi_4h = check_multi_timeframe(symbol, exchange, rsi)
+                    if signal_strength == "NO_SIGNAL":
+                        log_skip_to_empire(symbol, f"NO_SIGNAL: RSI_4H={rsi_4h:.1f}", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "IDLE_MULTI_TF", "rsi_4h": rsi_4h})
+                        continue
+                    
+                    # 5.6 🚀 MOMENTUM FILTER
+                    momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
+                    if not momentum_ok:
+                        log_skip_to_empire(symbol, f"BEARISH_MOMENTUM: {ema_diff:.1f}%", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_MOMENTUM", "ema_diff": ema_diff})
+                        continue
+                    
+                    # 5.7 🚀 CORRELATION CHECK
+                    correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
+                    if not correlation_ok:
+                        log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_CORRELATION", "reason": correlation_reason})
+                        continue
+                    
+                    # 6. IA AVOCAT DU DIABLE (Bedrock)
+                    news_symbol = symbol.split('=')[0].split('/')[0]
+                    news_ctx = get_news_context(news_symbol)
+                    
+                    portfolio_stats.update({
+                        'signal_strength': signal_strength,
+                        'rsi_4h': rsi_4h,
+                        'vix': vix_value,
+                        'dynamic_threshold': dynamic_rsi_threshold
+                    })
+                    
+                    decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
+                    if decision.get('decision') == "CONFIRM":
+                        final_size_mult = size_multiplier * cb_size_mult * corridor_risk_mult
+                        base_capital = CAPITAL_PER_TRADE * final_size_mult
+                        adjusted_capital, confidence = calculate_dynamic_position_size(
+                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend
+                        )
+                        
+                        calc_tp = HARD_TP_PCT * corridor_tp_mult
+                        calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                        
+                        log_trade_to_empire(
+                            symbol, "LONG", f"V5_{signal_strength}_{corridor_name}",
+                            current_price, "CONFIRM", decision.get('reason'),
+                            asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
+                            exchange=exchange
+                        )
+                        results.append({"symbol": symbol, "status": "TRADE_EXECUTED", "price": current_price})
+                    else:
+                        log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": decision.get('reason')})
+                else:
+                    log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {dynamic_rsi_threshold}", current_price, asset_class)
+                    results.append({"symbol": symbol, "status": "IDLE", "rsi": rsi})
+                    
+            except Exception as item_err:
+                logger.error(f"Error processing {symbol}: {item_err}")
+                results.append({"symbol": symbol, "status": "ERROR", "msg": str(item_err)})
 
-        log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {dynamic_rsi_threshold} (Threshold)", current_price, asset_class)
-        return {"status": "IDLE", "rsi": round(rsi, 2), "threshold": RSI_BUY_THRESHOLD, "asset": symbol}
+        return {"status": "SUCCESS", "results": results}
+        
     except Exception as e:
         logger.error(f"Global Error: {e}")
         return {"status": "ERROR", "msg": str(e)}
+
 

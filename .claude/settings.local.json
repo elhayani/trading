@@ -30,7 +30,8 @@
       "Bash(__NEW_LINE_54b19204a6890d55__ python3 run_test_force_yfinance.py)",
       "Bash(if pgrep:*)",
       "Bash(then echo '⏳ Backtest en cours...' tail -20 /private/tmp/claude-502/-Users-zakaria-Trading/tasks/b542c5d.output)",
-      "Bash(pgrep:*)"
+      "Bash(pgrep:*)",
+      "Bash(cdk deploy:*)"
     ]
   }
 }
