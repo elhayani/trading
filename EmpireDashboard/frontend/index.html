@@ -642,7 +642,7 @@
                     const actionBtnClass = isShort ? "bg-red-500/10 text-red-500 border-red-500/20" : "bg-green-500/10 text-green-500 border-green-500/20";
 
                     tr.innerHTML = `
-                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 text-slate-400 font-mono text-xs">(UTC) ${new Date(trade.Timestamp).toLocaleString()}</td>
                         <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
                         <td class="p-4 ${sideColor} font-bold text-xs uppercase">${trade.Type}</td>
                         <td class="p-4 font-mono text-slate-300">${qty.toFixed(4)}</td>
@@ -682,7 +682,7 @@
                     // No truncation here - allow full text wrapping in CSS
 
                     tr.innerHTML = `
-                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 text-slate-400 font-mono text-xs">(UTC) ${new Date(trade.Timestamp).toLocaleString()}</td>
                         <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
                         <td class="p-4 font-mono text-cyan-300">${marketPriceDisplay}</td>
                         <td class="p-4 ${sideColor} font-bold text-xs uppercase">${trade.Type}</td>
