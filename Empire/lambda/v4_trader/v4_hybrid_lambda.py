@@ -1119,21 +1119,12 @@ def lambda_handler(event, context):
                     results.append({"symbol": symbol, "status": "SKIPPED_BTC_CRASH", "btc_change": f"{g_ctx['btc_1h']:.2%}"})
                     continue
 
-                # 3. CONTEXTE & LIMITES
+                # 3. CONTEXTE (V8: No longer blockers, only scorers)
                 portfolio_stats, history = get_portfolio_context(symbol, asset_class)
-                
+                hours_since = 999
                 if portfolio_stats.get('last_trade'):
                     last_time = datetime.fromisoformat(portfolio_stats['last_trade']['Timestamp'])
                     hours_since = (get_paris_time() - last_time).total_seconds() / 3600
-                    if hours_since < COOLDOWN_HOURS:
-                        logger.info(f"⏳ Cooldown active. {COOLDOWN_HOURS - hours_since:.1f}h remaining.")
-                        results.append({"symbol": symbol, "status": "SKIPPED_COOLDOWN"})
-                        continue
-
-                # 🔥 3.5 VIX FILTER (V8: From Cache)
-                if not g_ctx['vix']['can_trade']:
-                    results.append({"symbol": symbol, "status": "SKIPPED_VIX_HIGH", "vix": g_ctx['vix']['value']})
-                    continue
 
                 # 4. ANALYSE & SIGNAL
                 target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)  # V7: 200 candles for SMA200
@@ -1178,8 +1169,29 @@ def lambda_handler(event, context):
                 sma200 = calculate_sma(target_ohlcv, SMA_PERIOD)
                 
                 # ======================== V8: SCORING PIPELINE ========================
+                # 🛠️ V8.2: Integrated Context Scoring (Less Over-Filtering)
                 score = 0
                 scoring_details = []
+                
+                # 🛡️ 0. CONTEXT PENALTIES (Size Modulators moved to Score)
+                # VIX Penalty
+                if not g_ctx['vix']['can_trade']: # If VIX > 30
+                    score -= 15
+                    scoring_details.append(f"VIX_HIGH_PENALTY (-15) [VIX:{g_ctx['vix']['value']}]")
+                elif g_ctx['vix']['value'] > 25:
+                    score -= 5
+                    scoring_details.append("VIX_NORMALHOOD_PENALTY (-5)")
+                
+                # Cooldown Penalty
+                if hours_since < COOLDOWN_HOURS:
+                    score -= 20
+                    scoring_details.append(f"COOLDOWN_PENALTY (-20) [{hours_since:.1f}h < {COOLDOWN_HOURS}h]")
+                
+                # Check Correlation (Early check as scorer)
+                correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
+                if not correlation_ok:
+                    score -= 20
+                    scoring_details.append(f"CORRELATION_PENALTY (-20) [{correlation_reason}]")
 
                 # 🎯 1. RSI SCORER (Max 40 pts)
                 if rsi < dynamic_rsi_threshold:
@@ -1231,13 +1243,6 @@ def lambda_handler(event, context):
                 logger.info(f"⚖️ Final Scoring for {symbol}: {final_score}/100 | Details: {', '.join(scoring_details)}")
 
                 if final_score >= 70:
-                    # Check final Correlation Blocker
-                    correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
-                    if not correlation_ok:
-                        log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_CORRELATION", "reason": correlation_reason})
-                        continue
-
                     # Final AI confirmation
                     news_symbol = symbol.split('=')[0].split('/')[0]
                     news_ctx = get_news_context(news_symbol)
