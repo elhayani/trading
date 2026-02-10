@@ -90,8 +90,8 @@ class TradingConfig:
     tp_split_ratio: float = 0.60  # 60% for first TP, 40% for runner
     runner_enabled: bool = True
     
-    # SMA proximity (Audit #V10.4)
-    sma_proximity_threshold: float = 0.005 # 0.5% buffer around SMAs
+    # SMA proximity (Audit #V10.7: Relaxed to 0.1% to prevent paralysis)
+    sma_proximity_threshold: float = 0.001 
     
     # ATR Multiplier for SL
     atr_sl_mult: float = 2.0
@@ -1406,7 +1406,7 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
         
         # Logging
         self.persistence.log_trade_open(
-            trade_id=trade_id, symbol=symbol, asset_class=AssetClass.CRYPTO.value, side="buy",
+            trade_id=trade_id, symbol=symbol, asset_class=classify_asset(symbol).lower(), side="buy",
             entry_price=real_entry, size=real_size, capital=base_capital,
             strategy=f"V10_{context.regime.value}", 
             tp_pct=context.dynamic_tp_pct, sl_pct=final_sl,
@@ -1427,9 +1427,10 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
         """Adaptive volume confirmation (Audit #V10.7)"""
         if len(ohlcv) < 20: return True, 1.0
         
-        # 💡 FIX: Bypass volume pour indices/forex (données API instables)
-        if any(idx in symbol.upper() for idx in ["SPX", "NDX", "EUR", "GBP", "AUD"]):
-            logger.info(f"ℹ️ Volume check bypassed for {symbol} (Index/Forex)")
+        # 💡 FIX: Bypass volume pour indices/commodities/forex (données API instables)
+        # XAG, PAXG for Commodities; SPX, NDX for Indices; EUR, GBP, AUD for Forex
+        if any(idx in symbol.upper() for idx in ["SPX", "NDX", "EUR", "GBP", "AUD", "XAG", "PAXG", "OIL"]):
+            logger.info(f"ℹ️ Volume check bypassed for {symbol}")
             return True, 1.0
 
         current_vol = ohlcv[-1][5]
