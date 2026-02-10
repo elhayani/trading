@@ -1042,42 +1042,68 @@ def lambda_handler(event, context):
                 # 📊 V7: Calculate SMA200 for Trend Following
                 sma200 = calculate_sma(target_ohlcv, SMA_PERIOD)
                 
+                # ======================== V8: SCORING PIPELINE ========================
+                score = 0
+                scoring_details = []
+
+                # 🎯 1. RSI SCORER (Max 40 pts)
                 if rsi < dynamic_rsi_threshold:
-                    # 5.1 VOLUME CONFIRMATION (V7: Adaptive per asset class)
-                    vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume, asset_class=asset_class)
-                    if not vol_confirmed:
-                        log_skip_to_empire(symbol, f"LOW_VOLUME: {vol_ratio:.2f}x", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_LOW_VOLUME", "vol": vol_ratio})
-                        continue
-                    
-                    # 5.2 🚀 REVERSAL TRIGGER
-                    reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
-                    if not reversal_ok:
-                        results.append({"symbol": symbol, "status": "SKIPPED_FALLING_KNIFE", "reason": reversal_reason})
-                        continue
-                    
-                    # 5.5 MULTI-TIMEFRAME CONFIRMATION
-                    signal_strength, rsi_4h = check_multi_timeframe(symbol, exchange, rsi)
-                    if signal_strength == "NO_SIGNAL":
-                        log_skip_to_empire(symbol, f"NO_SIGNAL: RSI_4H={rsi_4h:.1f}", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "IDLE_MULTI_TF", "rsi_4h": rsi_4h})
-                        continue
-                    
-                    # 5.6 🚀 MOMENTUM FILTER
-                    momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
-                    if not momentum_ok:
-                        log_skip_to_empire(symbol, f"BEARISH_MOMENTUM: {ema_diff:.1f}%", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_MOMENTUM", "ema_diff": ema_diff})
-                        continue
-                    
-                    # 5.7 🚀 CORRELATION CHECK
+                    score += 30
+                    scoring_details.append(f"RSI_UNDER_LIMIT (+30) [RSI:{rsi:.1f}<{dynamic_rsi_threshold}]")
+                    if rsi < 25:
+                        score += 10
+                        scoring_details.append("EXTREME_OVERSOLD (+10)")
+                    elif rsi < 30:
+                        score += 5
+                        scoring_details.append("STRONG_OVERSOLD (+5)")
+
+                # 📊 2. VOLUME SCORER (Max 20 pts)
+                vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume, asset_class=asset_class)
+                if vol_confirmed:
+                    score += 10
+                    scoring_details.append(f"VOL_CONFIRMED (+10) [{vol_ratio:.2f}x]")
+                    if vol_ratio > required_volume * 1.5:
+                        score += 10
+                        scoring_details.append("HIGH_VOL_SURGE (+10)")
+
+                # 🚀 3. MOMENTUM SCORER (Max 15 pts)
+                momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
+                if momentum_ok:
+                    score += 15
+                    scoring_details.append(f"MOMENTUM_OK (+15) [{momentum_trend}]")
+                elif rsi < 28:
+                    # Counter-trend dip buying allowed if RSI is low
+                    score += 5
+                    scoring_details.append("MOMENTUM_FAIL_BUT_RSI_DIP (+5)")
+
+                # 🎯 4. MULTI-TF SCORER (Max 15 pts)
+                signal_strength, rsi_4h = check_multi_timeframe(symbol, exchange, rsi)
+                if signal_strength == "STRONG":
+                    score += 15
+                    scoring_details.append(f"MULTI_TF_STRONG (+15) [RSI4H:{rsi_4h:.1f}]")
+                elif signal_strength == "NORMAL" or signal_strength == "WEAK":
+                    score += 5
+                    scoring_details.append(f"MULTI_TF_CONFRIM (+5)")
+
+                # 📈 5. REVERSAL SCORER (Max 10 pts)
+                reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
+                if reversal_ok:
+                    score += 10
+                    scoring_details.append(f"REVERSAL_OK (+10)")
+
+                # ======================== DECISION ========================
+                final_score = min(100, score)
+                logger.info(f"⚖️ Final Scoring for {symbol}: {final_score}/100 | Details: {', '.join(scoring_details)}")
+
+                if final_score >= 70:
+                    # Check final Correlation Blocker
                     correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
                     if not correlation_ok:
                         log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_CORRELATION", "reason": correlation_reason})
                         continue
-                    
-                    # 6. IA AVOCAT DU DIABLE (Bedrock)
+
+                    # Final AI confirmation
                     news_symbol = symbol.split('=')[0].split('/')[0]
                     news_ctx = get_news_context(news_symbol)
                     
@@ -1085,7 +1111,8 @@ def lambda_handler(event, context):
                         'signal_strength': signal_strength,
                         'rsi_4h': rsi_4h,
                         'vix': g_ctx['vix']['value'],
-                        'dynamic_threshold': dynamic_rsi_threshold
+                        'dynamic_threshold': dynamic_rsi_threshold,
+                        'trading_score': final_score
                     })
                     
                     decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
@@ -1100,16 +1127,17 @@ def lambda_handler(event, context):
                         calc_sl = STOP_LOSS_PCT * corridor_sl_mult
                         
                         log_trade_to_empire(
-                            symbol, "LONG", f"V5_{signal_strength}_{corridor_name}",
-                            current_price, "CONFIRM", decision.get('reason'),
+                            symbol, "LONG", f"V8_SCORE_{final_score}_CONF_{confidence:.1f}",
+                            current_price, "CONFIRM", f"Score: {final_score}/100. {decision.get('reason')}",
                             asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
                             exchange=exchange
                         )
-                        results.append({"symbol": symbol, "status": "TRADE_EXECUTED", "price": current_price})
+                        results.append({"symbol": symbol, "status": "TRADE_EXECUTED", "score": final_score})
                     else:
                         log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": decision.get('reason')})
-                # ======================== V7: TREND FOLLOWING MODE ========================
+                
+                # ======================== TREND FOLLOWING (V7 MODE) ========================
                 elif TREND_FOLLOWING_ENABLED and sma200 is not None and current_price > sma200 and rsi > TREND_RSI_MIN:
                     logger.info(f"📈 TREND SIGNAL: {symbol} | Price={current_price:.2f} > SMA200={sma200:.2f} | RSI={rsi:.1f}")
                     
