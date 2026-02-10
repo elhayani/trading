@@ -8,6 +8,7 @@ from aws_cdk import (
     aws_apigatewayv2_integrations as integrations,
     aws_s3 as s3,
     aws_s3_deployment as s3deploy,
+    aws_iam as iam,
     CfnOutput,
     RemovalPolicy,
     Duration
@@ -81,6 +82,12 @@ class EmpireDashboardStack(Stack):
         # Grant Permissions
         trades_table.grant_read_data(api_lambda)
         config_table.grant_read_write_data(api_lambda)
+        
+        # Grant CloudWatch Logs permissions
+        api_lambda.add_to_role_policy(iam.PolicyStatement(
+            actions=["logs:DescribeLogStreams", "logs:GetLogEvents"],
+            resources=["arn:aws:logs:*:*:log-group:/aws/lambda/V4*:*", "arn:aws:logs:*:*:log-group:/aws/lambda/Empire*:*"]
+        ))
 
         # Grant access to other trading tables
         for table_name in ["EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]:
@@ -122,12 +129,21 @@ class EmpireDashboardStack(Stack):
             )
         )
 
-        # Add Route (POST /close-trade) - For closing positions from Dashboard
         http_api.add_routes(
             path="/close-trade",
             methods=[apigw.HttpMethod.POST],
             integration=integrations.HttpLambdaIntegration(
                 "DashboardApiCloseTradeIntegration",
+                api_lambda
+            )
+        )
+
+        # Add Route (GET /lambda-logs) - For System Logs
+        http_api.add_routes(
+            path="/lambda-logs",
+            methods=[apigw.HttpMethod.GET],
+            integration=integrations.HttpLambdaIntegration(
+                "DashboardApiLogsIntegration",
                 api_lambda
             )
         )

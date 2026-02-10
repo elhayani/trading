@@ -5,7 +5,7 @@ import traceback
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Initialize DynamoDB Client
 dynamodb = boto3.resource('dynamodb')
@@ -84,55 +84,6 @@ def fetch_binance_balance(exchange):
         print(f"❌ Erreur Balance Binance: {e}")
         return None
 
-def fetch_oanda_balance():
-    """Récupère le solde du compte Oanda via REST API v20"""
-    try:
-        resp = config_table.get_item(Key={'ConfigKey': 'OANDA_CREDENTIALS'})
-        if 'Item' not in resp:
-            print("ℹ️ Oanda: Aucune clé API configurée dans EmpireConfig")
-            return None
-        creds = resp['Item']
-        token = creds.get('ApiToken') or creds.get('ApiKey')
-        account_id = creds.get('AccountId')
-        environment = creds.get('Environment', 'practice')  # 'practice' ou 'live'
-        
-        if not token or not account_id:
-            print("⚠️ Oanda: Token ou AccountId manquant")
-            return None
-        
-        # Oanda API endpoint
-        if environment == 'live':
-            base_url = 'https://api-fxtrade.oanda.com'
-        else:
-            base_url = 'https://api-fxpractice.oanda.com'
-        
-        url = f"{base_url}/v3/accounts/{account_id}/summary"
-        req = Request(url, headers={
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json'
-        })
-        
-        with urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            account = data.get('account', {})
-            # NAV = Net Asset Value (balance + unrealized PnL)
-            balance = float(account.get('balance', 0))
-            nav = float(account.get('NAV', balance))
-            unrealized_pnl = float(account.get('unrealizedPL', 0))
-            
-            print(f"✅ Oanda connecté: Balance=${balance:.2f}, NAV=${nav:.2f}, uPnL=${unrealized_pnl:.2f}")
-            return {
-                'balance': balance,
-                'nav': nav,
-                'unrealized_pnl': unrealized_pnl
-            }
-    except URLError as e:
-        print(f"❌ Oanda API Error: {e}")
-        return None
-    except Exception as e:
-        print(f"❌ Oanda Balance Error: {e}")
-        return None
-
 # Asset classification for multi-broker/multi-asset systems
 COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER']
 FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
@@ -165,7 +116,7 @@ def classify_asset(symbol):
     return "Crypto"
 
 def fetch_binance_positions(exchange):
-    """Récupère les positions REELLES directement depuis l'API Binance"""
+    """Récupère les positions RÉELLES directement depuis l'API Binance"""
     try:
         if not exchange: return []
         positions = exchange.fetch_positions()
@@ -173,34 +124,82 @@ def fetch_binance_positions(exchange):
         paris_now = get_paris_time()
         
         for pos in positions:
+            # On vérifie plusieurs champs pour la taille (binance peut varier selon l'asset)
+            # 1. 'contracts' (standard CCXT)
+            # 2. 'amount' (alternatif CCXT)
+            # 3. 'info.positionAmt' (Donnée brute Binance)
             contracts = float(pos.get('contracts', 0) or 0)
-            if contracts != 0:
-                # Binance CCXT returns 'side' as 'long' or 'short'
+            amount = float(pos.get('amount', 0) or 0)
+            info_amt = float(pos.get('info', {}).get('positionAmt', 0))
+            
+            # La taille réelle est le premier qui n'est pas nul
+            size = contracts or amount or info_amt
+            
+            if size != 0:
+                # Type de trade : basé sur le signe de la taille ou le champ 'side'
                 side = pos.get('side', '').lower()
-                if side == 'short':
+                if side == 'short' or size < 0:
                     trade_type = 'SHORT'
-                elif side == 'long':
-                    trade_type = 'LONG'
                 else:
-                    # Fallback: negative contracts = short
-                    trade_type = 'SHORT' if contracts < 0 else 'LONG'
+                    trade_type = 'LONG'
                 
-                # Dynamic classification
+                # Dynamic classification (Crypto, Forex, Indices, Commodities)
                 symbol = pos['symbol']
                 asset_class = classify_asset(symbol)
                 
+                # Levier et Marge (Crucial pour Binance Futures)
+                info = pos.get('info', {})
+                
+                # 1. Notionnel (Poids total sur le marché)
+                notional = abs(float(pos.get('notional') or 0))
+                if notional == 0:
+                    entry_price = float(pos.get('entryPrice', 0) or 0)
+                    notional = abs(size) * (entry_price or float(pos.get('currentPrice', 0) or 0))
+
+                # 2. Marge / Mise (Ticket d'entrée)
+                # Binance peut envoyer la marge dans plein de champs différents selon le mode
+                raw_margin = float(
+                    info.get('initialMargin') or 
+                    info.get('isolatedMargin') or 
+                    info.get('positionInitialMargin') or 
+                    info.get('posMargin') or
+                    0
+                )
+                
+                # 3. Levier (Extraction et Recalcul)
+                # On essaie de lire le levier rapporté
+                leverage = float(pos.get('leverage') or info.get('leverage') or 0)
+                
+                # SÉCURITÉ : Si on a le notionnel et la marge, on calcule le levier réel
+                # (Car Binance rapporte souvent '1' si le mode n'est pas explicitement setté par l'API)
+                if notional > 0 and raw_margin > 0:
+                    calculated_leverage = round(notional / raw_margin)
+                    # Si le levier rapporté est 1 mais que le calcul donne > 1.5, on fait confiance au calcul
+                    if leverage <= 1.1 and calculated_leverage > 1.5:
+                        leverage = calculated_leverage
+                elif leverage > 0 and raw_margin == 0:
+                    # Fallback si on a le levier mais pas la marge
+                    raw_margin = notional / leverage
+                
+                # Valeur par défaut si tout échoue (peu probable maintenant)
+                if leverage == 0: leverage = 1.0
+                if raw_margin == 0: raw_margin = notional
+
                 live_trades.append({
                     'TradeId': f"LIVE_{symbol}",
                     'Timestamp': paris_now.isoformat(),
                     'Pair': symbol,
                     'AssetClass': asset_class,
                     'Type': trade_type,
-                    'Size': abs(contracts),
+                    'Size': abs(size),
                     'EntryPrice': float(pos.get('entryPrice', 0) or 0),
                     'CurrentPrice': float(pos.get('markPrice', 0) or 0),
                     'Status': 'OPEN',
                     'Source': 'BINANCE',
                     'PnL': float(pos.get('unrealizedPnl', 0) or 0),
+                    'Notional': notional,
+                    'Margin': raw_margin,
+                    'Leverage': leverage,
                     'AI_Reason': f'POSITION RÉELLE SUR BINANCE ({asset_class})'
                 })
         return live_trades
@@ -346,8 +345,7 @@ def get_all_trades():
 
 
 
-def calculate_equity_curve(trades):
-    initial_capital = 1000.0
+def calculate_equity_curve(trades, initial_capital=1000.0):
     current_equity = initial_capital
     equity_curve = []
 
@@ -401,9 +399,11 @@ def lambda_handler(event, context):
         'Access-Control-Allow-Headers': 'Content-Type, X-Amz-Date, Authorization, X-Api-Key, X-Amz-Security-Token'
     }
 
+    # Initialize CloudWatch Logs client
+    logs_client = boto3.client('logs', region_name='eu-west-3')
+
     try:
         # Determine Route
-        # In HTTP API, path is event['rawPath'] or event['requestContext']['http']['path']
         path = event.get('rawPath') or event.get('path', '/')
         method = event.get('requestContext', {}).get('http', {}).get('method', 'GET')
 
@@ -468,9 +468,7 @@ def lambda_handler(event, context):
                     }
                 
                 # Inversion de l'ordre pour fermer
-                # Si on est SHORT, on BUY. Si on est LONG, on SELL.
                 order_side = 'buy' if side.upper() == 'SHORT' else 'sell'
-                
                 print(f"⚡ Fermeture forcée : {order_side} {qty} {symbol}")
                 
                 order = exchange.create_order(
@@ -478,7 +476,7 @@ def lambda_handler(event, context):
                     type='market',
                     side=order_side,
                     amount=qty,
-                    params={'reduceOnly': True}  # Sécurité critique
+                    params={'reduceOnly': True}
                 )
                 
                 return {
@@ -500,190 +498,157 @@ def lambda_handler(event, context):
                     'body': json.dumps({'error': str(e)})
                 }
 
+        # --- LAMBDA CLOUDWATCH LOGS (/lambda-logs) ---
+        if '/lambda-logs' in path:
+            try:
+                log_groups = [
+                    '/aws/lambda/V4HybridLiveTrader',
+                    '/aws/lambda/V4StatusReporter'
+                ]
+                
+                all_logs = []
+                for lg in log_groups:
+                    try:
+                        streams = logs_client.describe_log_streams(
+                            logGroupName=lg,
+                            orderBy='LastEventTime',
+                            descending=True,
+                            limit=3
+                        ).get('logStreams', [])
+                        
+                        for s in streams:
+                            events = logs_client.get_log_events(
+                                logGroupName=lg,
+                                logStreamName=s['logStreamName'],
+                                limit=50,
+                                startFromHead=False
+                            ).get('events', [])
+                            
+                            for ev in events:
+                                message = ev['message']
+                                is_error = any(kw in message.upper() for kw in ['ERROR', 'EXCEPTION', 'FAIL', 'CRITICAL', '500'])
+                                
+                                all_logs.append({
+                                    'Timestamp': datetime.fromtimestamp(ev['timestamp']/1000).isoformat(),
+                                    'Source': lg.split('/')[-1],
+                                    'Type': 'ERROR' if is_error else 'INFO',
+                                    'Message': message,
+                                    'Stream': s['logStreamName']
+                                })
+                    except Exception as le:
+                        print(f"⚠️ Error fetching logs for {lg}: {le}")
+                
+                all_logs.sort(key=lambda x: x['Timestamp'], reverse=True)
+                return {
+                    'statusCode': 200,
+                    'headers': cors_headers,
+                    'body': json.dumps({'logs': all_logs[:100]})
+                }
+            except Exception as e:
+                print(f"🔥 CloudWatch Logs Error: {e}")
+                return {
+                    'statusCode': 500,
+                    'headers': cors_headers,
+                    'body': json.dumps({'error': str(e)})
+                }
+
 
         # --- STATS LOGIC (/stats or default) ---
         query_params = event.get('queryStringParameters') or {}
         year_filter = query_params.get('year')
 
-        all_trades = get_all_trades()
+        # 1. Fetch All Trades from DDB
+        all_trades_from_db = get_all_trades()
 
-        if year_filter and year_filter != 'ALL':
-            trades = [t for t in all_trades if t.get('Timestamp', '').startswith(year_filter)]
-
-            # Start Balance (Cumulative from before the year) - only actual trades
-            trades_before = [t for t in all_trades if t.get('Timestamp', '') < f"{year_filter}-01-01"]
-            actual_trades_before = [t for t in trades_before if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
-            pnl_before = sum(float(t.get('PnL', 0.0)) for t in actual_trades_before)
-            start_equity = 1000.0 + pnl_before
-
-            # Curve for target year - only actual trades
-            actual_trades_year = [t for t in trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
-            actual_trades_year.sort(key=lambda x: x.get('Timestamp', ''))
-            run_equity = start_equity
-            equity_data = [{'x': f"{year_filter}-01-01T00:00:00Z", 'y': start_equity}]
-
-            for trade in actual_trades_year:
-                pnl = float(trade.get('PnL', 0.0))
-                run_equity += pnl
-                equity_data.append({
-                    'x': trade.get('Timestamp'),
-                    'y': run_equity,
-                    'details': f"{trade.get('Pair')} ({trade.get('Type')}) PnL: {pnl}"
-                })
-            current_display_equity = run_equity
-        else:
-            trades = all_trades
-            equity_data = calculate_equity_curve(trades)
-            # Calculate current equity from actual trades only
-            actual_all_trades = [t for t in all_trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
-            current_display_equity = 1000.0 + sum(float(t.get('PnL', 0.0)) for t in actual_all_trades)
-
-        # Recent Trades & Key Stats
-        # On filtre l'historique : on retire les 'OPEN' de DynamoDB pour la Crypto
-        # car on va utiliser les LIVE de Binance à la place
-        trades_for_table = [t for t in trades if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
-        raw_recent_trades = sorted(trades_for_table, key=lambda x: x.get('Timestamp', ''), reverse=True)[:50]
-        
-        # LIVE POSITIONS FROM BINANCE
+        # 2. Get Real-time Data from Binance
         binance_ex = get_binance_exchange()
         live_positions = fetch_binance_positions(binance_ex)
-        
+        binance_balance = fetch_binance_balance(binance_ex)
+
         # AUTO-RECONCILIATION
         if binance_ex:
             try:
-                reconcile_trades(all_trades, live_positions, binance_ex)
+                reconcile_trades(all_trades_from_db, live_positions, binance_ex)
             except Exception as e:
                 print(f"⚠️ Reconciliation Error: {e}")
 
-        recent_trades = live_positions + raw_recent_trades
-
-        # Enrich OPEN positions with current price
-        for trade in recent_trades:
-            if trade.get('Status') == 'OPEN':
-                symbol = trade.get('Pair')
-                asset_class = trade.get('AssetClass', 'Unknown')
-                current_price = fetch_current_price(symbol, asset_class)
-                if current_price > 0:
-                    trade['CurrentPrice'] = current_price
-                    # Calculate current Value
-                    qty = float(trade.get('Size', 0) or 0)
-                    trade['Value'] = qty * current_price
-
-        # Filter actual trades (exclude SKIPPED/INFO and DB OPEN Crypto)
-        clean_db_actual = [t for t in trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
-        clean_db_actual = [t for t in clean_db_actual if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
-        
-        # Merge with live positions for statistics
-        all_stats_trades = live_positions + clean_db_actual
-        
-        total_pnl = sum(float(t.get('PnL', 0.0)) for t in all_stats_trades)
-        win_count = sum(1 for t in all_stats_trades if float(t.get('PnL', 0.0)) > 0)
-        total_count = len(all_stats_trades)
-        win_rate = (win_count / total_count * 100) if total_count > 0 else 0
-
-        # Allocation Breakdown (End of year state)
+        # 3. Allocation Breakdown Logic
         if year_filter and year_filter != 'ALL':
             cutoff = f"{int(year_filter)+1}-01-01"
-            cum_trades = [t for t in all_trades if t.get('Timestamp', '') < cutoff]
+            cum_trades = [t for t in all_trades_from_db if t.get('Timestamp', '') < cutoff]
         else:
-            cum_trades = all_trades
+            cum_trades = all_trades_from_db
 
-        # =====================================================================
-        # FETCH REAL BALANCES FROM BROKERS
-        # =====================================================================
-        binance_balance = fetch_binance_balance(binance_ex)
-        print(f"DEBUG: Binance Balance = {binance_balance}")
-        
-        oanda_data = fetch_oanda_balance()  # Returns {balance, nav, unrealized_pnl} or None
-        oanda_balance = oanda_data['balance'] if oanda_data else None
-        oanda_unrealized = oanda_data['unrealized_pnl'] if oanda_data else 0
-        print(f"DEBUG: Oanda Balance = {oanda_balance}")
-
-        # =====================================================================
-        # =====================================================================
-        # ALLOCATION LOGIC (UNIFIED BINANCE ACCOUNT)
-        # =====================================================================
-        
-        # Split ratios for Unified Account (Total = 1.0)
         CRYPTO_SHARE = 0.40
         COMMODITIES_SHARE = 0.20
         FOREX_SHARE = 0.20
         INDICES_SHARE = 0.20
-        
-        # Fallback allocations (only if broker not connected)
-        FOREX_FALLBACK = 200.0
-        INDICES_FALLBACK = 200.0
-        
-        # Separate live Binance positions by asset class
-        crypto_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Crypto']
-        commodities_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Commodities']
-        forex_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Forex']
-        indices_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Indices']
+
+        # Dynamic Fallbacks based on typical ~5k budget
+        CRYPTO_FALLBACK = 2000.0
+        COMMODITIES_FALLBACK = 1000.0
+        FOREX_FALLBACK = 1000.0
+        INDICES_FALLBACK = 1000.0
+
+        crypto_live = [p for p in live_positions if p.get('AssetClass') == 'Crypto']
+        commo_live = [p for p in live_positions if p.get('AssetClass') == 'Commodities']
+        forex_live = [p for p in live_positions if p.get('AssetClass') == 'Forex']
+        indices_live = [p for p in live_positions if p.get('AssetClass') == 'Indices']
 
         allocations = {}
         for asset_class in ['Crypto', 'Forex', 'Indices', 'Commodities']:
-
-            # Data from DynamoDB (trade history)
             asset_trades = [t for t in cum_trades if t.get('AssetClass') == asset_class]
             db_actual = [t for t in asset_trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
             db_closed = [t for t in db_actual if t.get('Status', '').upper() != 'OPEN']
             
             closed_pnl = sum(float(t.get('PnL', 0.0)) for t in db_closed)
             closed_count = len(db_closed)
-            open_count = sum(1 for t in db_actual if t.get('Status', '').upper() == 'OPEN')
             
-            # Default Calculation (Calculated)
-            pnl = sum(float(t.get('PnL', 0.0)) for t in db_actual)
+            pnl = closed_pnl
             current = 0
+            open_count = 0
             source = 'CALCULATED'
 
-            # ── BINANCE: Crypto (40%) ──
-            if asset_class == 'Crypto' and binance_balance is not None:
-                unrealized_live = sum(float(p.get('PnL', 0)) for p in crypto_live_positions)
-                pnl = closed_pnl + unrealized_live
-                current = (binance_balance * CRYPTO_SHARE) + unrealized_live
-                open_count = len(crypto_live_positions)
-                source = 'LIVE'
-            
-            # ── BINANCE: Commodities (20%) ──
-            elif asset_class == 'Commodities' and binance_balance is not None:
-                unrealized_live = sum(float(p.get('PnL', 0)) for p in commodities_live_positions)
-                pnl = closed_pnl + unrealized_live
-                current = (binance_balance * COMMODITIES_SHARE) + unrealized_live
-                open_count = len(commodities_live_positions)
-                source = 'LIVE'
-            
-            # ── BINANCE: Forex (20%) ──
-            elif asset_class == 'Forex' and binance_balance is not None:
-                unrealized_live = sum(float(p.get('PnL', 0)) for p in forex_live_positions)
-                pnl = closed_pnl + unrealized_live
-                current = (binance_balance * FOREX_SHARE) + unrealized_live
-                open_count = len(forex_live_positions)
-                source = 'LIVE'
-            
-            # ── BINANCE: Indices (20%) ──
-            elif asset_class == 'Indices' and binance_balance is not None:
-                unrealized_live = sum(float(p.get('PnL', 0)) for p in indices_live_positions)
-                pnl = closed_pnl + unrealized_live
-                current = (binance_balance * INDICES_SHARE) + unrealized_live
-                open_count = len(indices_live_positions)
-                source = 'LIVE'
-            
-            # ── FALLBACK: Oanda or Calculator ──
+            if asset_class == 'Crypto':
+                unrealized = sum(float(p.get('PnL', 0)) for p in crypto_live)
+                pnl = closed_pnl + unrealized
+                open_count = len(crypto_live)
+                if binance_balance is not None:
+                    current = (binance_balance * CRYPTO_SHARE) + unrealized
+                    source = 'LIVE'
+                else:
+                    current = CRYPTO_FALLBACK + pnl
+
+            elif asset_class == 'Commodities':
+                unrealized = sum(float(p.get('PnL', 0)) for p in commo_live)
+                pnl = closed_pnl + unrealized
+                open_count = len(commo_live)
+                if binance_balance is not None:
+                    current = (binance_balance * COMMODITIES_SHARE) + unrealized
+                    source = 'LIVE'
+                else:
+                    current = COMMODITIES_FALLBACK + pnl
+
             elif asset_class == 'Forex':
-                if oanda_balance is not None:
-                    current = oanda_balance * 0.5 # Old Logic Fallback
-                    source = 'LIVE (OANDA)'
+                unrealized = sum(float(p.get('PnL', 0)) for p in forex_live)
+                pnl = closed_pnl + unrealized
+                open_count = len(forex_live)
+                if binance_balance is not None:
+                    current = (binance_balance * FOREX_SHARE) + unrealized
+                    source = 'LIVE'
                 else:
                     current = FOREX_FALLBACK + pnl
+
             elif asset_class == 'Indices':
-                if oanda_balance is not None:
-                    current = oanda_balance * 0.5 # Old Logic Fallback
-                    source = 'LIVE (OANDA)'
+                unrealized = sum(float(p.get('PnL', 0)) for p in indices_live)
+                pnl = closed_pnl + unrealized
+                open_count = len(indices_live)
+                if binance_balance is not None:
+                    current = (binance_balance * INDICES_SHARE) + unrealized
+                    source = 'LIVE'
                 else: 
                     current = INDICES_FALLBACK + pnl
 
-            # V7: Dynamic allocation percentage
             share_pct = {'Crypto': CRYPTO_SHARE, 'Commodities': COMMODITIES_SHARE, 'Forex': FOREX_SHARE, 'Indices': INDICES_SHARE}.get(asset_class, 0.25) * 100
             
             allocations[asset_class] = {
@@ -697,9 +662,45 @@ def lambda_handler(event, context):
                 'share_pct': share_pct
             }
 
-        # RECALCUL TOTAL EQUITY (Dynamic sum of all allocations)
+        # 4. Global Stats
         total_current_equity = sum(a['current'] for a in allocations.values())
+        
+        # Consistent logic for 'Total PnL' (Sum of all individual asset PnLs)
+        total_pnl = sum(a['pnl'] for a in allocations.values())
+        
+        # List of all trades used for stats (Live + DDB)
+        clean_db_actual = [t for t in all_trades_from_db if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
+        clean_db_actual = [t for t in clean_db_actual if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
+        all_stats_trades = live_positions + clean_db_actual
+        
+        win_count = sum(1 for t in all_stats_trades if float(t.get('PnL', 0.0)) > 0)
+        total_count = len(all_stats_trades)
+        win_rate = (win_count / total_count * 100) if total_count > 0 else 0
 
+        # 5. Equity Curve Generation
+        base_capital_for_graph = total_current_equity - total_pnl
+
+        if year_filter and year_filter != 'ALL':
+            trades_year = [t for t in all_trades_from_db if t.get('Timestamp', '').startswith(year_filter)]
+            trades_before = [t for t in all_trades_from_db if t.get('Timestamp', '') < f"{year_filter}-01-01"]
+            pnl_before = sum(float(t.get('PnL', 0.0)) for t in trades_before if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL'])
+            equity_data = calculate_equity_curve(trades_year, base_capital_for_graph + pnl_before)
+        else:
+            equity_data = calculate_equity_curve(all_trades_from_db, base_capital_for_graph)
+
+        # 6. Recent Trades with Price Enrichment
+        trades_filtered = [t for t in all_trades_from_db if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
+        raw_recent = sorted(trades_filtered, key=lambda x: x.get('Timestamp', ''), reverse=True)[:50]
+        recent_trades = live_positions + raw_recent
+
+        for trade in recent_trades:
+            if trade.get('Status') == 'OPEN':
+                current_price = fetch_current_price(trade.get('Pair'), trade.get('AssetClass', 'Unknown'))
+                if current_price > 0:
+                    trade['CurrentPrice'] = current_price
+                    trade['Value'] = float(trade.get('Size', 0) or 0) * current_price
+
+        # 7. Final Response
         response_body = {
             'stats': {
                 'total_pnl': round(total_pnl, 2),
@@ -715,9 +716,8 @@ def lambda_handler(event, context):
                 'ccxt_available': CCXT_AVAILABLE,
                 'binance_connected': binance_ex is not None,
                 'binance_balance': binance_balance,
-                'oanda_connected': oanda_balance is not None,
-                'oanda_balance': oanda_balance,
-                'live_pos_count': len(live_positions)
+                'live_pos_count': len(live_positions),
+                'graph_base_capital': round(base_capital_for_graph, 2)
             }
         }
 
