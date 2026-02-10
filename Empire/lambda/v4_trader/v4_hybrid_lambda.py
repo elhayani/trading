@@ -35,6 +35,13 @@ def get_paris_time():
     # Use timezone-aware UTC to fix deprecation warning
     return datetime.now(timezone.utc) + timedelta(hours=1)
 
+# --- SÉCURITÉ DYNAMIQUE EMPIRE V7 ---
+def get_max_slots(balance):
+    """Allocate 1 slot ($1000 capacity) per $1000 of real balance"""
+    if balance < 1000:
+        return 1 # Minimum safety
+    return int(balance / 1000)
+
 # Asset classification 
 COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER', 'USOIL', 'OIL']
 FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
@@ -887,6 +894,13 @@ def lambda_handler(event, context):
         
         exchange = ExchangeConnector('binance', api_key=api_key, secret=secret, testnet=testnet)
         
+        # 🔥 V7 DYNAMIC SLOTS
+        balance_usdt = exchange.get_balance_usdt()
+        current_trades = exchange.get_open_positions_count()
+        max_slots = get_max_slots(balance_usdt)
+        
+        logger.info(f"🏛️ EMPIRE V7 | Capital: ${balance_usdt:.2f} | Slots Active: {current_trades}/{max_slots}")
+        
         for raw_symbol in symbols_to_check:
             symbol = raw_symbol.strip()
             if not symbol: continue
@@ -896,10 +910,17 @@ def lambda_handler(event, context):
             logger.info(f"🚀 Empire V4 Hybrid | Target: {symbol} | Class: {asset_class}")
             
             try:
-                # 1. GESTION DES SORTIES (Priorité)
+                # 1. GESTION DES SORTIES (Priorité Absolue)
                 exit_status = manage_exits(symbol, asset_class, exchange)
                 if exit_status and "CLOSED" in exit_status:
                     results.append({"symbol": symbol, "status": "EXIT_SUCCESS", "details": exit_status})
+                    current_trades = max(0, current_trades - 1) # Free a slot immediately
+                    continue
+
+                # 🚀 V7 DYNAMIC SLOTS CHECK: If full, only manage exits (already done above)
+                if current_trades >= max_slots:
+                    logger.info(f"⏸️ Slots Full ({current_trades}/{max_slots}). Skipping BUY analysis for {symbol}.")
+                    results.append({"symbol": symbol, "status": "SLOTS_FULL", "slots": f"{current_trades}/{max_slots}"})
                     continue
 
                 # 2. 🛡️ CIRCUIT BREAKER CHECK (Leçon 2022 - 3 niveaux)
@@ -932,10 +953,6 @@ def lambda_handler(event, context):
 
                 # 3. CONTEXTE & LIMITES
                 portfolio_stats, history = get_portfolio_context(symbol, asset_class)
-                if portfolio_stats['current_pair_exposure'] >= MAX_EXPOSURE:
-                    logger.info(f"⏸️ Max exposure ({MAX_EXPOSURE}) reached for {symbol}")
-                    results.append({"symbol": symbol, "status": "SKIPPED_MAX_EXPOSURE"})
-                    continue
                 
                 if portfolio_stats.get('last_trade'):
                     last_time = datetime.fromisoformat(portfolio_stats['last_trade']['Timestamp'])

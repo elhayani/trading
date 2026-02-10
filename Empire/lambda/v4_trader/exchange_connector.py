@@ -142,6 +142,30 @@ class ExchangeConnector:
             print(f"❌ Error fetching balance: {e}")
             return {}
 
+    def get_balance_usdt(self):
+        """Helper to get total USDT balance for Futures"""
+        try:
+            balance = self.fetch_balance()
+            # For Futures, looking for USDT total or free balance
+            if 'USDT' in balance:
+                return float(balance['USDT']['total'])
+            return 0.0
+        except Exception as e:
+            print(f"❌ Error getting USDT balance: {e}")
+            return 0.0
+
+    def get_open_positions_count(self):
+        """Count active positions on the account (where size > 0)"""
+        try:
+            # fetch_positions is a standard CCXT method for Futures
+            positions = self.exchange.fetch_positions()
+            active_positions = [p for p in positions if float(p.get('contracts', 0)) > 0 or float(p.get('entryPrice', 0)) > 0]
+            return len(active_positions)
+        except Exception as e:
+            print(f"❌ Error getting positions: {e}")
+            # Fallback: check open orders if positions fails (less accurate)
+            return 0
+
 
 
 # Test du connector
