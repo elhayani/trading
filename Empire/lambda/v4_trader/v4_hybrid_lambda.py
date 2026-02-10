@@ -28,6 +28,20 @@ import micro_corridors as corridors
 from models import MarketRegime, AssetClass
 from decision_engine import DecisionEngine
 
+# ==================== HELPERS ====================
+
+def classify_asset(symbol: str) -> str:
+    """Classify symbol into AssetClass string (Audit #V10.7)"""
+    s = symbol.upper()
+    if any(k in s for k in ['EUR', 'GBP', 'AUD', 'JPY', 'USD']):
+        if '/' in s or s.endswith('USDT'): # Handle EURUSDT or EUR/USDT
+            # Exceptions for Crypto like 'USDT' itself or 'USD' in some crypto
+            if any(c in s for c in ['BTC', 'ETH', 'SOL']): return "Crypto"
+            return "Forex"
+    if any(k in s for k in ['SPX', 'NDX', 'US30', 'GSPC', 'IXIC']): return "Indices"
+    if any(k in s for k in ['PAXG', 'XAG', 'OIL', 'WTI', 'USOIL', 'GOLD', 'SILVER']): return "Commodities"
+    return "Crypto"
+
 # ==================== CONFIGURATION ====================
 
 @dataclass
@@ -1272,10 +1286,15 @@ class TradingEngine:
         if rsi >= adaptive_rsi:
             return {"symbol": symbol, "status": "NO_SIGNAL", "rsi": rsi}
         
-        # 2. Volume Confirmation
-        if self.config.volume_confirmation_enabled and not self._check_volume(ohlcv):
-            return {"symbol": symbol, "status": "LOW_VOLUME"}
-
+        # 2. Volume Analysis (Audit #V10.7: Bonus instead of Veto)
+        volume_ok, vol_ratio = (True, 1.0)
+        if self.config.volume_confirmation_enabled:
+            volume_ok, vol_ratio = self._check_volume(ohlcv, symbol)
+            
+        # Hard veto only if volume is critically low for non-indices/forex
+        if not volume_ok:
+            return {"symbol": symbol, "status": "LOW_VOLUME", "ratio": vol_ratio}
+            
         # 3. SMA Neutral Zone Filter (Optimization N°4)
         for sma_val in [context.sma_50, context.sma_200]:
             if sma_val > 0:
@@ -1284,7 +1303,14 @@ class TradingEngine:
                     logger.warning(f"🚫 Gray Zone Block: Price too close to SMA ({dist:.2%})")
                     return {"symbol": symbol, "status": "SMA_GRAY_ZONE"}
             
-        return {"status": "SIGNAL", "rsi": rsi, "price": price, "score": analysis['indicators']['signal_score']}
+        # 4. Final Scoring with Volume Bonus
+        final_score = analysis['indicators']['signal_score']
+        
+        # Volume Bonus: +15 if ratio > 1.2, +20 if ratio > 1.5
+        if vol_ratio > 1.5: final_score += 20
+        elif vol_ratio > 1.2: final_score += 15
+        
+        return {"status": "SIGNAL", "rsi": rsi, "price": price, "score": final_score}
 
     def _check_ai_advisory(self, symbol: str, rsi: float) -> Dict:
         """Isolated AI Consultation"""
@@ -1397,13 +1423,29 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
             "confidence": context.confidence_score
         }
 
-    def _check_volume(self, ohlcv: List) -> bool:
-        if len(ohlcv) < 20: return True
+    def _check_volume(self, ohlcv: List, symbol: str) -> Tuple[bool, float]:
+        """Adaptive volume confirmation (Audit #V10.7)"""
+        if len(ohlcv) < 20: return True, 1.0
+        
+        asset_class = classify_asset(symbol)
         current_vol = ohlcv[-1][5]
         avg_vol = sum(c[5] for c in ohlcv[-21:-1]) / 20
-        ratio = current_vol / avg_vol if avg_vol > 0 else 1.0
-        logger.info(f"📊 Volume Ratio: {ratio:.2f}x")
-        return ratio > 1.1
+        
+        if avg_vol == 0: return True, 1.0
+        
+        ratio = current_vol / avg_vol
+        logger.info(f"📊 Volume Ratio for {symbol}: {ratio:.2f}x")
+        
+        # Veto only for Crypto/Commodities if ratio < 0.8
+        is_valid = True
+        if asset_class in ["Crypto", "Commodities"] and ratio < 0.8:
+            is_valid = False
+            
+        # Indices and Forex never veto based on volume (Audit #V10.7)
+        if asset_class in ["Indices", "Forex"]:
+            is_valid = True
+            
+        return is_valid, ratio
 
 
 # ==================== LAMBDA HANDLER ====================
