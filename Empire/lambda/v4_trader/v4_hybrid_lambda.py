@@ -26,6 +26,7 @@ from exchange_connector import ExchangeConnector
 import macro_context
 import micro_corridors as corridors
 from models import MarketRegime, AssetClass
+from decision_engine import DecisionEngine
 
 # ==================== CONFIGURATION ====================
 
@@ -355,12 +356,17 @@ class MarketStateBuilder:
         regime = self._determine_regime(btc_24h, btc_7d, btc_1h, vix_value, cb_level)
         daily_pnl, daily_pnl_pct = self._get_daily_performance(balance)
         
+        # B. Macro Context (Audit #V10.5: Macro Veto support)
+        macro_ctx = macro_context.get_macro_context()
+        macro_can_trade = macro_ctx.get('can_trade', True)
+        
         diversified_protection = (open_positions >= 2 and daily_pnl_pct > -0.02)
         can_trade = (
             cb_level != "L3_SURVIVAL" and
             (cb_level != "L2_HALT" or diversified_protection) and
             vix_value < self.config.vix_max and
-            daily_pnl_pct > -self.config.max_daily_loss_pct
+            daily_pnl_pct > -self.config.max_daily_loss_pct and
+            macro_can_trade
         )
         risk_blocked = daily_pnl_pct <= -self.config.max_daily_loss_pct
 
@@ -371,7 +377,6 @@ class MarketStateBuilder:
         time_edge = 1.0 if corridor_regime in [corridors.MarketRegime.AGGRESSIVE_BREAKOUT, corridors.MarketRegime.TREND_FOLLOWING] else 0.4
         
         # B. Macro Edge
-        macro_ctx = macro_context.get_macro_context()
         macro_edge = 1.0 if macro_ctx.get('regime') == 'RISK_ON' else 0.5 if macro_ctx.get('regime') == 'MIXED' else 0.2
         
         # C. Volatility Edge (Normalized VIX)
@@ -389,8 +394,15 @@ class MarketStateBuilder:
             vix_edge * self.config.weight_volatility +
             structure_edge * self.config.weight_structure
         )
+        
+        # Incorporate Technical Signal Score (Level 2 impact on Level 4)
+        # technical_mult: 0.6 if score 60, 1.0 if score 100
+        ta_score = analysis['indicators']['signal_score']
+        technical_mult = 0.6 + (max(0, ta_score - 60) / 40) * 0.4 if ta_score >= 60 else 0.5
+        
         # Scale to 0.5 to 2.0 range (Level 4)
-        scaled_conf = 0.5 + (raw_conf * 1.5)
+        scaled_conf = (0.5 + (raw_conf * 1.5)) * technical_mult
+        scaled_conf = max(0.5, min(2.0, scaled_conf))
         
         # 6. Build final context
         context = MarketContext(
@@ -414,14 +426,14 @@ class MarketStateBuilder:
             dynamic_tp_pct=round(dyn_tp, 2),
             dynamic_sl_pct=round(dyn_sl, 2),
             confidence_score=round(scaled_conf, 2),
-            signal_score=analysis['indicators']['signal_score'],
+            signal_score=ta_score,
             atr_value=analysis['indicators']['atr'],
             sma_50=analysis['indicators']['sma_50'],
             sma_200=analysis['indicators']['sma_200'],
             is_high_liquidity=is_golden
         )
         
-        logger.info(f"✅ Context: {regime.value} | Conf: {conf_score:.2f} | TP: {dyn_tp:.1f}% | SL: {dyn_sl:.1f}%")
+        logger.info(f"✅ Context: {regime.value} | Conf: {scaled_conf:.2f} | Score: {ta_score}/100 | TP: {dyn_tp:.1f}%")
         return context
     
     def _get_balance_safe(self) -> float:
@@ -1191,26 +1203,19 @@ class TradingEngine:
             logger.error(f"❌ Direct slot release failed: {e}")
 
     def _evaluate_entry(self, symbol: str, context: MarketContext) -> Dict:
-        """Evaluate entry (Audit #V9.5: Refactored into 4-Level Architecture)"""
+        """Evaluate entry (Audit #V10.5: Using DecisionEngine)"""
         
-        # --- Level 2: TECHNICAL VALIDATION ---
+        # 1. Technical Analysis (Data Gathering)
         ta_result = self._check_technical_entry(symbol, context)
         if ta_result['status'] != "SIGNAL":
             return ta_result
             
-        # Refusal if signal quality is poor (Optimization #V10.2)
-        if ta_result.get('score', 0) < 60:
-            logger.warning(f"🚫 Technical Veto: Signal score too low ({ta_result.get('score')}/100)")
-            return {"symbol": symbol, "status": "LOW_CONFIDENCE_TECHNICAL"}
+        # 2. Hierarchical Decision Check (Levels 1-3)
+        proceed, reason, size_mult = DecisionEngine.evaluate(context, ta_result, symbol)
+        if not proceed:
+            return {"symbol": symbol, "status": "DECISION_VETO", "reason": reason}
 
-        # --- Level 3: MICRO TIMING ---
-        current_corridor = corridors.get_corridor_params(symbol)
-        corridor_regime = current_corridor.get('regime')
-        if corridor_regime in [corridors.MarketRegime.LOW_LIQUIDITY, corridors.MarketRegime.CLOSED]:
-            logger.info(f"⏳ Timing Block: Corridor {corridor_regime} - Waiting for better liquidity")
-            return {"symbol": symbol, "status": "WAIT_FOR_LIQUIDITY"}
-
-        # 2. Slot Manager
+        # 3. Slot Manager
         slot_manager = SlotManager(self.aws, context.max_slots, self.execution_id)
         if not slot_manager.acquire():
             return {"symbol": symbol, "status": "SKIPPED_SLOTS_FULL"}
