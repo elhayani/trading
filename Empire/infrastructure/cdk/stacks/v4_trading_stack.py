@@ -105,7 +105,7 @@ class V4TradingStack(Stack):
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
             timeout=Duration.minutes(5),
             memory_size=1024,  # 🚀 Optimization: 1GB for CCXT/Pandas/AI
-            reserved_concurrent_executions=1, # 🔒 Safety: Prevent double trades
+            # reserved_concurrent_executions=1, # 🔒 Safety: Prevent double trades (Temporarily disabled due to env limit)
             environment={
                 "STATE_TABLE": state_table.table_name,
                 "HISTORY_TABLE": "EmpireTradesHistory",
