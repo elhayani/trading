@@ -19,8 +19,9 @@ def get_paris_time():
     """Returns current Paris time (UTC+1 for winter)"""
     return datetime.utcnow() + timedelta(hours=1)
 
-# Tables à scanner (Si tu as plusieurs tables, ajoute-les ici)
-TABLES_TO_SCAN = ["EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]
+# Tables à scanner
+MAIN_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireTradesHistory')
+TABLES_TO_SCAN = [MAIN_TABLE, "EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]
 RECIPIENT = "zelhayani@gmail.com"
 
 def fetch_yahoo_price_lite(symbol):

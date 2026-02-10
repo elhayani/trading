@@ -45,11 +45,25 @@ class ExchangeConnector:
         # Initialize exchange
         if exchange_id == 'binance':
             self.exchange = ccxt.binance(config)
+            
+            # 1. Attempt Demo/VAPI mode if testnet is True
             if testnet:
                 try:
-                    self.exchange.set_sandbox_mode(True)
-                except Exception:
-                    pass # Ignore if deprecated/unsupported, URL override handles it
+                    # Some versions of ccxt have this helper
+                    if hasattr(self.exchange, 'enable_demo_trading'):
+                        self.exchange.enable_demo_trading(True)
+                        print("🧪 Binance Demo Trading ENABLED")
+                    else:
+                        # Manual URL override for VAPI
+                        self.exchange.urls['api']['fapiPublic'] = 'https://vapi.binance.com'
+                        self.exchange.urls['api']['fapiPrivate'] = 'https://vapi.binance.com'
+                        print("🧪 Binance VAPI URL override active")
+                except Exception as e:
+                    print(f"⚠️ Failed to enable demo/vapi: {e}")
+                    # Fallback to standard testnet
+                    self.exchange.urls['api']['fapiPublic'] = 'https://testnet.binancefuture.com'
+                    self.exchange.urls['api']['fapiPrivate'] = 'https://testnet.binancefuture.com'
+                    print("🧪 Falling back to legacy binancefuture testnet")
         else:
             self.exchange = getattr(ccxt, exchange_id)(config)
         
@@ -58,9 +72,23 @@ class ExchangeConnector:
             self.exchange.load_markets()
             print(f"✅ Connected to {exchange_id.upper()} ({'TESTNET' if testnet else 'LIVE'})")
         except Exception as e:
+            # Fallback to Demo/VAPI if Live fails with Invalid API Key (likely paper trading keys)
+            if not testnet and exchange_id == 'binance' and "Invalid Api-Key" in str(e):
+                print(f"⚠️ Live connection failed ({e}). Attempting Binance Demo Trading...")
+                try:
+                    if hasattr(self.exchange, 'enable_demo_trading'):
+                        self.exchange.enable_demo_trading(True)
+                    else:
+                        self.exchange.urls['api']['fapiPublic'] = 'https://vapi.binance.com'
+                        self.exchange.urls['api']['fapiPrivate'] = 'https://vapi.binance.com'
+                    
+                    self.exchange.load_markets()
+                    print("✅ Connected to BINANCE DEMO (VAPI)")
+                    return
+                except Exception as demo_err:
+                    print(f"❌ Demo fallback failed: {demo_err}")
+            
             print(f"❌ Failed to connect to {exchange_id}: {e}")
-            # Don't raise here to allow read-only fallback if keys fail? 
-            # No, for trading bot we should probably raise or log error.
             print("⚠️ Proceeding in Read-Only mode or with limited functionality.")
 
     def create_market_order(self, symbol, side, amount):
@@ -138,14 +166,16 @@ if __name__ == "__main__":
     print("\nTEST 2: Fetch SOL/USDT Ticker")
     print("-" * 70)
     
-    ticker = exchange.fetch_ticker('SOL/USDT')
+    ticker = exchange.fetch_ticker('DEFI/USDT')
     if ticker:
         print(f"✅ Ticker retrieved:")
         print(f"   Last Price: ${ticker['last']:.2f}")
-        print(f"   Bid: ${ticker['bid']:.2f}")
-        print(f"   Ask: ${ticker['ask']:.2f}")
-        print(f"   24h Volume: ${ticker['volume_24h']:,.0f}")
-        print(f"   24h Change: {ticker['change_24h']:.2f}%")
+        bid = ticker.get('bid') or 0
+        ask = ticker.get('ask') or 0
+        print(f"   Bid: ${bid:.2f}")
+        print(f"   Ask: ${ask:.2f}")
+        print(f"   24h Volume: ${ticker.get('quoteVolume', 0):,.0f}")
+        print(f"   24h Change: {ticker.get('percentage', 0):.2f}%")
     
     # Test 3: Fetch OHLCV
     print("\n\nTEST 3: Fetch OHLCV Data (1h, 300 candles)")
