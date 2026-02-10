@@ -153,17 +153,33 @@
                 </button>
             </div>
 
+            <!-- SUB-TABS (Asset Class) -->
+            <div class="flex gap-2 mb-6 overflow-x-auto pb-2">
+                <button onclick="switchSubTab('ALL')" id="subtab-ALL"
+                    class="px-4 py-2 text-xs font-bold rounded-full bg-blue-600 text-white transition-all shadow-lg shadow-blue-500/20 hover:bg-blue-500">
+                    ALL
+                </button>
+                <button onclick="switchSubTab('Crypto')" id="subtab-Crypto"
+                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
+                    ₿ Crypto
+                </button>
+                <button onclick="switchSubTab('Forex')" id="subtab-Forex"
+                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
+                    💱 Forex
+                </button>
+                <button onclick="switchSubTab('Indices')" id="subtab-Indices"
+                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
+                    📈 Indices
+                </button>
+                <button onclick="switchSubTab('Commodities')" id="subtab-Commodities"
+                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
+                    🛢️ Commodities
+                </button>
+            </div>
+
             <!-- FILTERS (Hidden by default, shown in history) -->
             <div id="history-filters" class="hidden flex gap-3 mb-6">
-                <!-- Bot Filter -->
-                <select id="botFilter" onchange="applyFilters()"
-                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1.5 focus:outline-none focus:border-blue-500">
-                    <option value="ALL">All Bots</option>
-                    <option value="Crypto">₿ Crypto</option>
-                    <option value="Forex">💱 Forex</option>
-                    <option value="Indices">📈 Indices</option>
-                    <option value="Commodities">🛢️ Commodities</option>
-                </select>
+                <!-- Bot Filter Removed (Replaced by Sub-Tabs) -->
 
                 <!-- Month Filter -->
                 <select id="monthFilter" onchange="applyFilters()"
@@ -215,6 +231,7 @@
         let chartInstance = null;
         let allTrades = []; // Store all trades for filtering
         let currentTab = 'live';
+        let currentSubTab = 'ALL';
 
         function switchTab(tab) {
             currentTab = tab;
@@ -235,6 +252,23 @@
             }
 
             applyFilters(); // Rafraîchit le tableau
+        }
+
+        function switchSubTab(subTab) {
+            currentSubTab = subTab;
+
+            // Update UI for sub-tabs
+            const tabs = ['ALL', 'Crypto', 'Forex', 'Indices', 'Commodities'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`subtab-${t}`);
+                if (t === subTab) {
+                    btn.className = "px-4 py-2 text-xs font-bold rounded-full bg-blue-600 text-white transition-all shadow-lg shadow-blue-500/20 hover:bg-blue-500";
+                } else {
+                    btn.className = "px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all";
+                }
+            });
+
+            applyFilters();
         }
 
         async function fetchData() {
@@ -382,7 +416,7 @@
         }
 
         function applyFilters() {
-            const botFilter = document.getElementById('botFilter').value;
+            // const botFilter = document.getElementById('botFilter').value; // Removed (Replaced by Sub-Tabs)
             const monthFilter = document.getElementById('monthFilter').value;
             const statusFilter = document.getElementById('statusFilter').value;
 
@@ -391,15 +425,21 @@
             if (currentTab === 'live') {
                 // Affiche uniquement les positions OUVERTES pour le Live
                 filteredTrades = allTrades.filter(t => (t.Status || '').toUpperCase() === 'OPEN');
+
+                // Filter by Bot (Sub-Tab) also for Live!
+                if (currentSubTab !== 'ALL') {
+                    filteredTrades = filteredTrades.filter(t => t.AssetClass === currentSubTab);
+                }
+
                 // On garde un tri chronologique inverse pour voir le plus récent en haut
                 filteredTrades.sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp));
             } else {
                 // Historique complet sans les OPEN (sauf si on les veut aussi dans history)
                 filteredTrades = allTrades.filter(t => (t.Status || '').toUpperCase() !== 'OPEN');
 
-                // Filter by Bot
-                if (botFilter !== 'ALL') {
-                    filteredTrades = filteredTrades.filter(t => t.AssetClass === botFilter);
+                // Filter by Bot (Sub-Tab)
+                if (currentSubTab !== 'ALL') {
+                    filteredTrades = filteredTrades.filter(t => t.AssetClass === currentSubTab);
                 }
 
                 // Filter by Month
