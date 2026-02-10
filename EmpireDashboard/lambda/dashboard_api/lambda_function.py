@@ -236,11 +236,17 @@ def reconcile_trades(db_trades, binance_positions, exchange):
     # binance_positions = list of dicts with 'Pair' (e.g. BTC/USDT)
     active_symbols = [p['Pair'] for p in binance_positions]
     
-    # 2. Filter DB trades that are supposedly OPEN for Crypto
-    db_open_crypto = [t for t in db_trades if t.get('Status') == 'OPEN' and t.get('AssetClass') == 'Crypto']
+    # 2. Filter DB trades that are supposedly OPEN for ALL asset classes
+    db_open_trades = [t for t in db_trades if t.get('Status', '').upper() == 'OPEN']
     
-    for trade in db_open_crypto:
-        if trade['Pair'] not in active_symbols:
+    for trade in db_open_trades:
+        # Normalize DB pair name for comparison
+        db_pair_norm = normalize_symbol(trade.get('Pair'))
+        
+        # Check if normalized symbol exists in live active symbols
+        is_active = any(normalize_symbol(ap) == db_pair_norm for ap in active_symbols)
+
+        if not is_active:
             print(f"🔍 Auto-Sync: Closing detected for {trade['Pair']} (TradeId: {trade.get('TradeId')})")
             
             # Fetch current price as exit price
@@ -715,7 +721,9 @@ def lambda_handler(event, context):
             equity_data = calculate_equity_curve(all_trades_from_db, base_capital_for_graph)
 
         # 6. Recent Trades with Price Enrichment (Limited to last 48h for the table)
-        trades_filtered = [t for t in all_trades_from_db if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
+        # CRITICAL: We EXCLUDE all 'OPEN' trades from the database to avoid ghost positions (0$ x1).
+        # Live positions are exclusively handled by the 'live_positions' list from Binance.
+        trades_filtered = [t for t in all_trades_from_db if t.get('Status', '').upper() != 'OPEN']
         
         cutoff_48h = (datetime.now() - timedelta(hours=48)).isoformat()
         raw_recent = [t for t in trades_filtered if t.get('Timestamp', '') > cutoff_48h]

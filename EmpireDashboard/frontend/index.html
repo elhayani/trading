@@ -551,20 +551,44 @@
 
             if (currentTab === 'live') {
                 thead.innerHTML = `
-                    <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
-                        <th class="p-4">Time</th><th class="p-4">Asset</th><th class="p-4">Type</th><th class="p-4">Size</th><th class="p-4">Entry</th><th class="p-4">Margin (xLev)</th><th class="p-4 text-right">PnL %</th><th class="p-4 text-right">PnL €</th><th class="p-4">Status</th><th class="p-4">Reason</th><th class="p-4 text-right">Action</th>
+                    <tr class="text-slate-500 text-[10px] uppercase tracking-wider border-b border-white/5 bg-white/2">
+                        <th class="p-4 text-left font-semibold">Time</th>
+                        <th class="p-4 text-left font-semibold">Asset</th>
+                        <th class="p-4 text-left font-semibold">Type</th>
+                        <th class="p-4 text-left font-semibold">Size</th>
+                        <th class="p-4 text-left font-semibold">Entry</th>
+                        <th class="p-4 text-left font-semibold">Margin (xLev)</th>
+                        <th class="p-4 text-right font-semibold">PnL %</th>
+                        <th class="p-4 text-right font-semibold">PnL €</th>
+                        <th class="p-4 text-center font-semibold">Status</th>
+                        <th class="p-4 text-left font-semibold">Reason</th>
+                        <th class="p-4 text-right font-semibold">Action</th>
                     </tr>
                 `;
             } else if (currentTab === 'cloudwatch') {
                 thead.innerHTML = `
-                    <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
-                        <th class="p-4">Time</th><th class="p-4">Source</th><th class="p-4">Level</th><th class="p-4 w-[600px]">Message</th><th class="p-4 text-right">Stream</th>
+                    <tr class="text-slate-500 text-[10px] uppercase tracking-wider border-b border-white/5 bg-white/2">
+                        <th class="p-4 text-left font-semibold">Time</th>
+                        <th class="p-4 text-left font-semibold">Source</th>
+                        <th class="p-4 text-left font-semibold">Level</th>
+                        <th class="p-4 text-left font-semibold w-[600px]">Message</th>
+                        <th class="p-4 text-right font-semibold">Stream</th>
                     </tr>
                 `;
             } else {
                 thead.innerHTML = `
-                    <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
-                        <th class="p-4">Time</th><th class="p-4">Asset</th><th class="p-4">Market</th><th class="p-4">Type</th><th class="p-4">Qty</th><th class="p-4">Cost</th><th class="p-4">Value</th><th class="p-4">Status</th><th class="p-4 w-64">Reason</th><th class="p-4 text-right">PnL %</th><th class="p-4 text-right">PnL €</th>
+                    <tr class="text-slate-500 text-[10px] uppercase tracking-wider border-b border-white/5 bg-white/2">
+                        <th class="p-4 text-left font-semibold">Time</th>
+                        <th class="p-4 text-left font-semibold">Asset</th>
+                        <th class="p-4 text-left font-semibold">Price</th>
+                        <th class="p-4 text-left font-semibold">Type</th>
+                        <th class="p-4 text-left font-semibold">Qty</th>
+                        <th class="p-4 text-left font-semibold">Cost</th>
+                        <th class="p-4 text-left font-semibold">Value</th>
+                        <th class="p-4 text-center font-semibold">Status</th>
+                        <th class="p-4 text-left font-semibold w-64">Reason</th>
+                        <th class="p-4 text-right font-semibold">PnL %</th>
+                        <th class="p-4 text-right font-semibold">PnL €</th>
                     </tr>
                 `;
             }
@@ -595,28 +619,46 @@
                     const reason = trade.AI_Reason || "Position réelle sur Binance";
 
                     tr.innerHTML = `
-                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
-                        <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
-                        <td class="p-4 ${sideColor} font-bold text-xs uppercase">${trade.Type}</td>
-                        <td class="p-4 font-mono text-slate-300">${qty.toFixed(4)}</td>
-                        <td class="p-4 font-mono text-slate-400">$${entryPrice.toLocaleString()}</td>
-                        <td class="p-4 font-mono text-blue-300">$${margin.toFixed(2)} <span class="text-slate-500 text-[10px]">x${leverage}</span></td>
-                        <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">${pnlPercent.toFixed(2)}%</td>
-                        <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">€${pnlVal.toFixed(2)}</td>
-                        <td class="p-4"><span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">${status}</span></td>
-                        <td class="p-4"><div class="text-[10px] text-slate-400" style="max-width: 250px; overflow-wrap: break-word;">${reason}</div></td>
-                        <td class="p-4 text-right">
-                            ${status === 'OPEN' ? `<button onclick="closeTrade('${trade.Pair}', '${trade.Type}', ${qty})" class="text-[10px] font-bold px-2 py-1 rounded border border-blue-500/20 text-blue-400 hover:bg-blue-500/10">CLOSE</button>` : ''}
+                        <td class="p-4 align-top text-slate-500 font-mono text-[10px] whitespace-nowrap">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 align-top font-bold text-white">
+                            <div class="flex items-center gap-2">
+                                <span class="bg-white/5 w-6 h-6 flex items-center justify-center rounded text-xs">${icon}</span>
+                                <span class="tracking-tight">${trade.Pair}</span>
+                            </div>
+                        </td>
+                        <td class="p-4 align-top">
+                            <span class="${trade.Type === 'LONG' || trade.Type === 'BUY' ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'} border px-2 py-0.5 rounded-full text-[9px] font-black tracking-tighter uppercase italic">
+                                ${trade.Type}
+                            </span>
+                        </td>
+                        <td class="p-4 align-top font-mono text-slate-300 text-sm tracking-tighter">${qty.toFixed(4)}</td>
+                        <td class="p-4 align-top font-mono text-slate-400 text-sm tracking-tighter">$${entryPrice.toLocaleString()}</td>
+                        <td class="p-4 align-top">
+                             <div class="font-mono text-blue-300 text-sm tracking-tighter font-bold">$${margin.toFixed(2)}</div>
+                             <div class="text-[9px] text-slate-500 font-black uppercase tracking-widest leading-none">LEV X${leverage}</div>
+                        </td>
+                        <td class="p-4 align-top text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-mono font-bold text-sm tracking-tighter">${pnlPercent.toFixed(2)}%</td>
+                        <td class="p-4 align-top text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-mono font-bold text-sm tracking-tighter">€${pnlVal.toFixed(2)}</td>
+                        <td class="p-4 align-top text-center">
+                            <span class="bg-blue-500/10 text-blue-300 border border-blue-500/20 px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest leading-none">${status}</span>
+                        </td>
+                        <td class="p-4 align-top">
+                            <div class="text-[10px] text-slate-400 leading-relaxed italic border-l-2 border-white/5 pl-3" style="max-width: 250px; overflow-wrap: break-word;">
+                                ${reason}
+                            </div>
+                        </td>
+                        <td class="p-4 align-top text-right">
+                            ${status === 'OPEN' ? `<button onclick="closeTrade('${trade.Pair}', '${trade.Type}', ${qty})" class="bg-blue-500 hover:bg-blue-400 text-white text-[9px] font-black px-3 py-1 rounded-sm shadow-lg shadow-blue-500/20 transition-all uppercase tracking-widest">CLOSE</button>` : ''}
                         </td>
                     `;
                 } else if (currentTab === 'cloudwatch') {
                     const levelClass = trade.Type === 'ERROR' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400';
                     tr.innerHTML = `
-                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
-                        <td class="p-4 font-bold text-white">${trade.Source}</td>
-                        <td class="p-4"><span class="${levelClass} px-2 py-1 rounded text-[10px] font-bold">${trade.Type}</span></td>
-                        <td class="p-4 font-mono text-xs text-slate-300" style="max-width: 600px; overflow-wrap: break-word;">${trade.Message}</td>
-                        <td class="p-4 text-right text-[10px] text-slate-600 font-mono">${(trade.Stream || '').substring(0, 20)}</td>
+                        <td class="p-4 align-top text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 align-top font-bold text-white">${trade.Source}</td>
+                        <td class="p-4 align-top"><span class="${levelClass} px-2 py-1 rounded text-[10px] font-bold">${trade.Type}</span></td>
+                        <td class="p-4 align-top font-mono text-xs text-slate-300" style="max-width: 600px; overflow-wrap: break-word;">${trade.Message}</td>
+                        <td class="p-4 align-top text-right text-[10px] text-slate-600 font-mono">${(trade.Stream || '').substring(0, 20)}</td>
                     `;
                 } else {
                     const status = (trade.Status || 'CLOSED').toUpperCase();
@@ -630,17 +672,32 @@
                     const reason = trade.ExitReason || trade.AI_Reason || trade.reason || '-';
 
                     tr.innerHTML = `
-                        <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
-                        <td class="p-4 font-bold text-white flex items-center gap-2"><span>${icon}</span> ${trade.Pair}</td>
-                        <td class="p-4 font-mono text-cyan-300">$${currentPrice.toFixed(2)}</td>
-                        <td class="p-4 ${trade.Type === 'SHORT' ? 'text-red-400' : 'text-green-400'} font-bold text-xs uppercase">${trade.Type}</td>
-                        <td class="p-4 font-mono text-slate-300">${qty.toFixed(2)}</td>
-                        <td class="p-4 font-mono text-blue-300">€${cost.toFixed(2)}</td>
-                        <td class="p-4 font-mono text-purple-300">€${value.toFixed(2)}</td>
-                        <td class="p-4"><span class="px-2 py-1 rounded text-xs ${status === 'CLOSED' ? 'bg-slate-500/20 text-slate-400' : 'bg-blue-500/20 text-blue-400'}">${status}</span></td>
-                        <td class="p-4"><div class="text-[10px] text-slate-400" style="max-width: 300px; overflow-wrap: break-word;">${reason}</div></td>
-                        <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">${pnlPercent.toFixed(2)}%</td>
-                        <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">€${pnlVal.toFixed(2)}</td>
+                        <td class="p-4 align-top text-slate-500 font-mono text-[10px] whitespace-nowrap">${new Date(trade.Timestamp).toLocaleString()}</td>
+                        <td class="p-4 align-top font-bold text-white">
+                             <div class="flex items-center gap-2">
+                                <span class="bg-white/5 w-6 h-6 flex items-center justify-center rounded text-xs">${icon}</span>
+                                <span class="tracking-tight">${trade.Pair}</span>
+                            </div>
+                        </td>
+                        <td class="p-4 align-top font-mono text-cyan-300 text-sm tracking-tighter">$${currentPrice.toFixed(2)}</td>
+                        <td class="p-4 align-top">
+                             <span class="${trade.Type === 'SHORT' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-green-500/10 text-green-400 border-green-500/20'} border px-2 py-0.5 rounded-full text-[9px] font-black tracking-tighter uppercase italic">
+                                ${trade.Type}
+                            </span>
+                        </td>
+                        <td class="p-4 align-top font-mono text-slate-300 text-sm tracking-tighter">${qty.toFixed(2)}</td>
+                        <td class="p-4 align-top font-mono text-blue-300 text-sm tracking-tighter">€${cost.toFixed(2)}</td>
+                        <td class="p-4 align-top font-mono text-purple-300 text-sm tracking-tighter">€${value.toFixed(2)}</td>
+                        <td class="p-4 align-top text-center">
+                            <span class="px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest leading-none ${status === 'CLOSED' ? 'bg-slate-500/10 text-slate-400 border border-white/5' : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'}">${status}</span>
+                        </td>
+                        <td class="p-4 align-top">
+                            <div class="text-[10px] text-slate-400 leading-relaxed italic border-l-2 border-white/5 pl-3" style="max-width: 300px; overflow-wrap: break-word;">
+                                ${reason}
+                            </div>
+                        </td>
+                        <td class="p-4 align-top text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-mono font-bold text-sm tracking-tighter">${pnlPercent.toFixed(2)}%</td>
+                        <td class="p-4 align-top text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-mono font-bold text-sm tracking-tighter">€${pnlVal.toFixed(2)}</td>
                     `;
                 }
                 tbody.appendChild(tr);
