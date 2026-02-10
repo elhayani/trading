@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
-"""
-EXCHANGE CONNECTOR - Real-time Data with CCXT
-==============================================
-Fetch real OHLCV and prices from exchanges
-"""
-
 import ccxt
+import logging
 from datetime import datetime, timedelta
 import time
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 class ExchangeConnector:
     """Connect to crypto exchanges via CCXT"""
@@ -31,82 +28,64 @@ class ExchangeConnector:
             'options': {'defaultType': 'future'}  # Default to Futures for V4
         }
         
-        # Testnet URL Override (Binance Futures)
-        if testnet and exchange_id == 'binance':
-            config['urls'] = {
-                'api': {
-                    'fapiPublic': 'https://testnet.binancefuture.com',
-                    'fapiPrivate': 'https://testnet.binancefuture.com',
-                    'fapiPrivateV2': 'https://testnet.binancefuture.com', 
-                }
-            }
-            print("🧪 Configured for Binance Futures TESTNET")
-
         # Initialize exchange
-        if exchange_id == 'binance':
-            self.exchange = ccxt.binance(config)
-            
-            # 1. Attempt Demo/VAPI mode if testnet is True
-            if testnet:
-                try:
-                    # Some versions of ccxt have this helper
-                    if hasattr(self.exchange, 'enable_demo_trading'):
-                        self.exchange.enable_demo_trading(True)
-                        print("🧪 Binance Demo Trading ENABLED")
-                    else:
-                        # Manual URL override for VAPI
-                        self.exchange.urls['api']['fapiPublic'] = 'https://vapi.binance.com'
-                        self.exchange.urls['api']['fapiPrivate'] = 'https://vapi.binance.com'
-                        print("🧪 Binance VAPI URL override active")
-                except Exception as e:
-                    print(f"⚠️ Failed to enable demo/vapi: {e}")
-                    # Fallback to standard testnet
-                    self.exchange.urls['api']['fapiPublic'] = 'https://testnet.binancefuture.com'
-                    self.exchange.urls['api']['fapiPrivate'] = 'https://testnet.binancefuture.com'
-                    print("🧪 Falling back to legacy binancefuture testnet")
-        else:
-            self.exchange = getattr(ccxt, exchange_id)(config)
-        
-        # Test connection
         try:
+            if exchange_id == 'binance':
+                self.exchange = ccxt.binance(config)
+                if testnet:
+                    self._setup_binance_demo()
+            else:
+                self.exchange = getattr(ccxt, exchange_id)(config)
+            
             self.exchange.load_markets()
-            print(f"✅ Connected to {exchange_id.upper()} ({'TESTNET' if testnet else 'LIVE'})")
+            logger.info(f"✅ Connected to {exchange_id.upper()} ({'TESTNET' if testnet else 'LIVE'})")
+            
         except Exception as e:
-            # Fallback to Demo/VAPI if Live fails with Invalid API Key (likely paper trading keys)
+            # Fallback for Binance: if live fails with API key error, try demo
             if not testnet and exchange_id == 'binance' and "Invalid Api-Key" in str(e):
-                print(f"⚠️ Live connection failed ({e}). Attempting Binance Demo Trading...")
+                logger.warning(f"⚠️ Live connection failed ({e}). Attempting Binance Demo...")
                 try:
-                    if hasattr(self.exchange, 'enable_demo_trading'):
-                        self.exchange.enable_demo_trading(True)
-                    else:
-                        self.exchange.urls['api']['fapiPublic'] = 'https://vapi.binance.com'
-                        self.exchange.urls['api']['fapiPrivate'] = 'https://vapi.binance.com'
-                    
+                    self._setup_binance_demo()
                     self.exchange.load_markets()
-                    print("✅ Connected to BINANCE DEMO (VAPI)")
+                    logger.info("✅ Connected to BINANCE DEMO (VAPI)")
                     return
                 except Exception as demo_err:
-                    print(f"❌ Demo fallback failed: {demo_err}")
+                    logger.error(f"❌ Demo fallback failed: {demo_err}")
             
-            print(f"❌ Failed to connect to {exchange_id}: {e}")
-            print("⚠️ Proceeding in Read-Only mode or with limited functionality.")
+            logger.error(f"❌ Failed to connect to {exchange_id}: {e}")
+            logger.warning("⚠️ Proceeding in Read-Only mode or with limited functionality.")
+
+    def _setup_binance_demo(self):
+        """Helper to configure Binance Demo/Testnet (Audit #V10.2)"""
+        if hasattr(self.exchange, 'set_sandbox_mode'):
+            self.exchange.set_sandbox_mode(True)
+            logger.info("🧪 Binance Sandbox Mode enabled")
+        elif hasattr(self.exchange, 'enable_demo_trading'):
+            self.exchange.enable_demo_trading(True)
+            logger.info("🧪 Binance Demo Trading enabled")
+        else:
+            # Manual URL override for VAPI/Testnet
+            target = 'https://vapi.binance.com' if not self.testnet else 'https://testnet.binancefuture.com'
+            self.exchange.urls['api']['fapiPublic'] = target
+            self.exchange.urls['api']['fapiPrivate'] = target
+            logger.info(f"🧪 Binance URL override: {target}")
 
     def create_market_order(self, symbol, side, amount):
         """Execute Market Order"""
         try:
-            print(f"🚀 Executing MARKET {side.upper()} {amount} {symbol}")
+            logger.info(f"🚀 Executing MARKET {side.upper()} {amount} {symbol}")
             return self.exchange.create_order(symbol, 'market', side, amount)
         except Exception as e:
-            print(f"❌ Order Failed: {e}")
+            logger.error(f"❌ Order Failed: {e}")
             raise
 
     def create_limit_order(self, symbol, side, amount, price, params={}):
         """Execute Limit Order"""
         try:
-            print(f"🎯 Executing LIMIT {side.upper()} {amount} {symbol} @ {price}")
+            logger.info(f"🎯 Executing LIMIT {side.upper()} {amount} {symbol} @ {price}")
             return self.exchange.create_order(symbol, 'limit', side, amount, price, params)
         except Exception as e:
-            print(f"❌ Limit Order Failed: {e}")
+            logger.error(f"❌ Limit Order Failed: {e}")
             raise
     
     def cancel_all_orders(self, symbol):
@@ -114,16 +93,15 @@ class ExchangeConnector:
         try:
             return self.exchange.cancel_all_orders(symbol)
         except Exception as e:
-            print(f"⚠️ Cancel All Failed: {e}")
+            logger.warning(f"⚠️ Cancel All Failed: {e}")
             return None
 
     def fetch_ohlcv(self, symbol='SOL/USDT', timeframe='1h', limit=300):
         """Fetch OHLCV data"""
         try:
-            # print(f"📊 Fetching {symbol} {timeframe}...")
             return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         except Exception as e:
-            print(f"❌ Error fetching OHLCV: {e}")
+            logger.error(f"❌ Error fetching OHLCV for {symbol}: {e}")
             return []
     
     def fetch_ticker(self, symbol='SOL/USDT'):
@@ -131,15 +109,15 @@ class ExchangeConnector:
         try:
             return self.exchange.fetch_ticker(symbol)
         except Exception as e:
-            print(f"❌ Error fetching ticker: {e}")
-            return {'last': 0}
+            logger.error(f"❌ Error fetching ticker for {symbol}: {e}")
+            return {'last': 0, 'percentage': 0}
 
     def fetch_order(self, order_id, symbol):
         """Fetch order status by ID"""
         try:
             return self.exchange.fetch_order(order_id, symbol)
         except Exception as e:
-            print(f"❌ Error fetching order {order_id}: {e}")
+            logger.error(f"❌ Error fetching order {order_id}: {e}")
             raise
 
     def fetch_balance(self):
@@ -147,32 +125,50 @@ class ExchangeConnector:
         try:
             return self.exchange.fetch_balance()
         except Exception as e:
-            print(f"❌ Error fetching balance: {e}")
+            logger.error(f"❌ Error fetching balance: {e}")
             return {}
 
     def get_balance_usdt(self):
         """Helper to get total USDT balance for Futures"""
         try:
             balance = self.fetch_balance()
-            # For Futures, looking for USDT total or free balance
             if 'USDT' in balance:
-                return float(balance['USDT']['total'])
+                # CCXT Unified balance often uses 'total'
+                return float(balance['USDT'].get('total', balance['USDT'].get('free', 0)))
             return 0.0
         except Exception as e:
-            print(f"❌ Error getting USDT balance: {e}")
+            logger.error(f"❌ Error getting USDT balance: {e}")
             return 0.0
 
     def get_open_positions_count(self):
-        """Count active positions on the account (where size > 0)"""
+        """Count active positions on the account"""
         try:
-            # fetch_positions is a standard CCXT method for Futures
             positions = self.exchange.fetch_positions()
-            active_positions = [p for p in positions if float(p.get('contracts', 0)) > 0 or float(p.get('entryPrice', 0)) > 0]
+            # Contracts/Amount depends on exchange, but > 0 means active
+            active_positions = [p for p in positions if float(p.get('contracts', p.get('amount', 0))) > 0]
             return len(active_positions)
         except Exception as e:
-            print(f"❌ Error getting positions: {e}")
-            # Fallback: check open orders if positions fails (less accurate)
+            logger.error(f"❌ Error getting positions: {e}")
             return 0
+
+    def get_market_info(self, symbol: str) -> Dict:
+        """Fetch trading rules/info for a symbol (Audit #V10.2)"""
+        try:
+            if symbol not in self.exchange.markets:
+                self.exchange.load_markets()
+            
+            m = self.exchange.market(symbol)
+            return {
+                'min_amount': m['limits']['amount']['min'],
+                'min_cost': m['limits']['cost']['min'],
+                'precision_price': m['precision']['price'],
+                'precision_amount': m['precision']['amount'],
+                'status': m.get('active', True)
+            }
+        except Exception as e:
+            logger.error(f"❌ Error getting market info for {symbol}: {e}")
+            return {}
+
 
 
 
@@ -246,7 +242,7 @@ if __name__ == "__main__":
     for symbol in symbols:
         ticker = exchange.fetch_ticker(symbol)
         if ticker:
-            print(f"{symbol:12} → ${ticker['last']:>10,.2f}  ({ticker['change_24h']:>6.2f}%)")
+            print(f"{symbol:12} → ${ticker['last']:>10,.2f}  ({ticker['percentage']:>6.2f}%)")
     
     print("\n" + "="*70)
     print("✅ ALL TESTS PASSED - READY FOR LIVE TRADING")

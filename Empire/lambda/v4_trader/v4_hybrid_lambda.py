@@ -302,6 +302,7 @@ class MarketContext:
     
     # Optimization V10
     confidence_score: float = 0.5
+    signal_score: float = 0.0
     atr_value: float = 0.0
     sma_50: float = 0.0
     sma_200: float = 0.0
@@ -363,7 +364,7 @@ class MarketStateBuilder:
         )
         risk_blocked = daily_pnl_pct <= -self.config.max_daily_loss_pct
 
-        # 5. Optimization V10: Confidence Score calculation
+        # 5. Optimization V10: Confidence Score calculation (Level 4: Macro Adjustment)
         # A. Time Edge (Corridor quality)
         current_corridor = corridors.get_current_corridor(self.exchange.symbol if hasattr(self.exchange, 'symbol') else 'BTC/USDT')
         corridor_regime = current_corridor.get('regime') if current_corridor else None
@@ -381,12 +382,15 @@ class MarketStateBuilder:
         analysis = analyze_market(ohlcv_1h)
         structure_edge = 1.0 if analysis['indicators']['long_term_trend'] == 'BULLISH' else 0.3
         
-        conf_score = (
+        # Raw score (0-1)
+        raw_conf = (
             time_edge * self.config.weight_time +
             macro_edge * self.config.weight_macro +
             vix_edge * self.config.weight_volatility +
             structure_edge * self.config.weight_structure
         )
+        # Scale to 0.5 to 2.0 range (Level 4)
+        scaled_conf = 0.5 + (raw_conf * 1.5)
         
         # 6. Build final context
         context = MarketContext(
@@ -409,7 +413,8 @@ class MarketStateBuilder:
             daily_pnl_pct=daily_pnl_pct,
             dynamic_tp_pct=round(dyn_tp, 2),
             dynamic_sl_pct=round(dyn_sl, 2),
-            confidence_score=round(conf_score, 2),
+            confidence_score=round(scaled_conf, 2),
+            signal_score=analysis['indicators']['signal_score'],
             atr_value=analysis['indicators']['atr'],
             sma_50=analysis['indicators']['sma_50'],
             sma_200=analysis['indicators']['sma_200'],
@@ -1186,12 +1191,24 @@ class TradingEngine:
             logger.error(f"❌ Direct slot release failed: {e}")
 
     def _evaluate_entry(self, symbol: str, context: MarketContext) -> Dict:
-        """Evaluate entry (Audit #V9.5: Refactored into specialized methods)"""
+        """Evaluate entry (Audit #V9.5: Refactored into 4-Level Architecture)"""
         
-        # 1. Technical
+        # --- Level 2: TECHNICAL VALIDATION ---
         ta_result = self._check_technical_entry(symbol, context)
         if ta_result['status'] != "SIGNAL":
             return ta_result
+            
+        # Refusal if signal quality is poor (Optimization #V10.2)
+        if ta_result.get('score', 0) < 60:
+            logger.warning(f"🚫 Technical Veto: Signal score too low ({ta_result.get('score')}/100)")
+            return {"symbol": symbol, "status": "LOW_CONFIDENCE_TECHNICAL"}
+
+        # --- Level 3: MICRO TIMING ---
+        current_corridor = corridors.get_corridor_params(symbol)
+        corridor_regime = current_corridor.get('regime')
+        if corridor_regime in [corridors.MarketRegime.LOW_LIQUIDITY, corridors.MarketRegime.CLOSED]:
+            logger.info(f"⏳ Timing Block: Corridor {corridor_regime} - Waiting for better liquidity")
+            return {"symbol": symbol, "status": "WAIT_FOR_LIQUIDITY"}
 
         # 2. Slot Manager
         slot_manager = SlotManager(self.aws, context.max_slots, self.execution_id)
@@ -1254,7 +1271,7 @@ class TradingEngine:
                     logger.warning(f"🚫 Gray Zone Block: Price too close to SMA ({dist:.2%})")
                     return {"symbol": symbol, "status": "SMA_GRAY_ZONE"}
             
-        return {"status": "SIGNAL", "rsi": rsi, "price": price}
+        return {"status": "SIGNAL", "rsi": rsi, "price": price, "score": analysis['indicators']['signal_score']}
 
     def _check_ai_advisory(self, symbol: str, rsi: float) -> Dict:
         """Isolated AI Consultation"""
@@ -1293,24 +1310,37 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
             return {"decision": "CONFIRM", "reason": "AI_API_FALLBACK"}
 
     def _execute_v9_entry(self, symbol: str, context: MarketContext, entry_price: float, ai: Dict) -> Dict:
-        """Isolated Entry Execution with Confidence-Based Sizing and Runner TP (Audit #V10)"""
+        """Isolated Entry Execution with Confidence-Based Sizing (Level 4 Architecture)"""
         
-        # 1. Confidence-Based Sizing (Optimization N°1)
-        # risk = base_risk * (0.6 + confidence)
-        risk_adjustment = 0.6 + context.confidence_score
-        base_capital = context.balance * self.config.capital_pct * context.total_multiplier * risk_adjustment
+        # 1. Level 4: Macro Adjustment (Confidence Multiplier)
+        # size_multiplier results in 0.5x to 2.0x base size
+        size_multiplier = context.confidence_score
         
+        # Base capital = Account Balance * allocation % * circuit breaker/VIX mult
+        base_capital = context.balance * self.config.capital_pct * context.total_multiplier
+        
+        # Final capital after Level 4 adjustment
+        final_capital = base_capital * size_multiplier
+        
+        # Absolute Risk Cap (L2 protection)
         max_risk = context.balance * self.config.max_risk_per_trade_pct
-        potential_loss = base_capital * (abs(context.dynamic_sl_pct) / 100)
+        potential_loss = final_capital * (abs(context.dynamic_sl_pct) / 100)
         
         if potential_loss > max_risk:
-            base_capital = max_risk / (abs(context.dynamic_sl_pct) / 100)
-            logger.info(f"🛡️ Size capped (Max Risk: ${max_risk:.2f})")
+            final_capital = max_risk / (abs(context.dynamic_sl_pct) / 100)
+            logger.info(f"🛡️ Size capped by Max Risk (${max_risk:.2f})")
+
+        # 2. Min Position Safeguard (Audit #V10.2)
+        market_info = self.exchange.get_market_info(symbol)
+        min_cost = market_info.get('min_cost', 5.0) # Default $5 for USDT pairs
+        if final_capital < min_cost:
+            logger.warning(f"⚠️ Position size too small (${final_capital:.2f} < ${min_cost}). Scaling up to minimum.")
+            final_capital = min_cost
         
-        size = round(base_capital / entry_price, 4)
+        size = round(final_capital / entry_price, market_info.get('precision_amount', 4))
         trade_id = f"V10-{uuid.uuid4().hex[:8]}"
         
-        # 2. Order Execution
+        # 3. Order Execution
         filled = self.executor.execute_market_order(symbol, 'buy', size)
         real_entry = float(filled.get('average', entry_price))
         real_size = float(filled.get('amount', size))
