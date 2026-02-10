@@ -30,14 +30,7 @@ PARIS_TZ = pytz.timezone('Europe/Paris')
 # ==================== RÉGIMES DE MARCHÉ ====================
 # Ces régimes s'appliquent selon l'heure et les conditions
 
-class MarketRegime:
-    AGGRESSIVE_BREAKOUT = "AGGRESSIVE_BREAKOUT"    # Ouverture - On cherche les cassures
-    TREND_FOLLOWING = "TREND_FOLLOWING"            # Milieu - On suit la tendance
-    PULLBACK_SNIPER = "PULLBACK_SNIPER"            # Pullback dans la tendance
-    CAUTIOUS_REVERSAL = "CAUTIOUS_REVERSAL"        # Fermeture - Prudence
-    SCALPING = "SCALPING"                          # Micro-gains rapides
-    LOW_LIQUIDITY = "LOW_LIQUIDITY"                # Zone morte - Attention
-    CLOSED = "CLOSED"                              # Marché fermé
+from models import MarketRegime
 
 
 # ==================== MICRO-CORRIDORS PAR CLASSE D'ACTIF ====================

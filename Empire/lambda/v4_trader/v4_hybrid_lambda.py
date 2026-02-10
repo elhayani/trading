@@ -25,6 +25,7 @@ from news_fetcher import get_news_context
 from exchange_connector import ExchangeConnector
 import macro_context
 import micro_corridors as corridors
+from models import MarketRegime, AssetClass
 
 # ==================== CONFIGURATION ====================
 
@@ -103,22 +104,7 @@ class TradingConfig:
         assert self.target_sl_range[0] > self.target_sl_range[1], "SL range error" # -2 > -5
 
 
-class MarketRegime(Enum):
-    """Market regime classification"""
-    BULL_TREND = "bull_trend"
-    BEAR_TREND = "bear_trend"
-    HIGH_VOLATILITY = "high_volatility"
-    RANGE_BOUND = "range_bound"
-    CRASH = "crash"
-    RECOVERY = "recovery"
 
-
-class AssetClass(Enum):
-    """Asset classification"""
-    CRYPTO = "crypto"
-    FOREX = "forex"
-    COMMODITIES = "commodities"
-    INDICES = "indices"
 
 
 # ==================== LOGGING SETUP ====================
@@ -1103,6 +1089,18 @@ class TradingEngine:
             )
             open_trades = response.get('Items', [])
             
+            # 🔄 Handle Pagination (Audit #V9.6)
+            while 'LastEvaluatedKey' in response:
+                response = self.aws.trades_table.query(
+                    IndexName='GSI_OpenByPair',
+                    KeyConditionExpression=(
+                        boto3.dynamodb.conditions.Key('Status').eq('OPEN') &
+                        boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
+                    ),
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                open_trades.extend(response.get('Items', []))
+            
             if not open_trades:
                 return None
             
@@ -1237,10 +1235,11 @@ class TradingEngine:
         rsi = analysis['indicators']['rsi']
         price = analysis['current_price']
         
-        logger.info(f"📈 {symbol} Technical: RSI={rsi:.1f} (Target < {self.config.rsi_buy_threshold})")
-        
         # 1. RSI Extreme Filter
-        if rsi >= self.config.rsi_buy_threshold:
+        adaptive_rsi = corridors.get_rsi_threshold_adaptive(symbol, self.config.rsi_buy_threshold)
+        logger.info(f"📈 {symbol} Technical: RSI={rsi:.1f} (Target < {adaptive_rsi})")
+        
+        if rsi >= adaptive_rsi:
             return {"symbol": symbol, "status": "NO_SIGNAL", "rsi": rsi}
         
         # 2. Volume Confirmation
