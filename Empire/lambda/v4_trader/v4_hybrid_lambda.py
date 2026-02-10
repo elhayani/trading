@@ -4,6 +4,7 @@ import boto3
 import logging
 import uuid
 import requests
+import time
 from datetime import datetime, timedelta, timezone
 from market_analysis import analyze_market
 from news_fetcher import get_news_context
@@ -109,6 +110,40 @@ def classify_asset(symbol):
     if any(idx in symbol_upper for idx in INDICES_SYMBOLS): return "Indices"
     return "Crypto"
 
+# --- V8 SAFE EXECUTION ENGINE ---
+def execute_trade_safe(exchange, symbol, size, action='buy'):
+    """
+    🛠️ V8 execution engine with fill verification
+    Prevents 'ghost orders' by polling exchange until confirmation.
+    Ref: Problem #10
+    """
+    logger.info(f"🚀 [V8] Executing {action.upper()} for {size} {symbol}...")
+    order = exchange.create_market_order(symbol, action, size)
+    
+    # Wait for real confirmation (approx 10s)
+    for i in range(10):
+        try:
+            status = exchange.fetch_order(order['id'], symbol)
+            if status['status'] == 'closed':
+                logger.info(f"✅ Order {order['id']} FULLY FILLED")
+                return status # Returns the order with average price and amount
+            
+            logger.info(f"⏳ Order {order['id']} pending ({status['status']})... Check {i+1}/10")
+        except Exception as e:
+            logger.warning(f"⚠️ fetch_order failed: {e}")
+        
+        time.sleep(1)
+    
+    # Final check
+    status = exchange.fetch_order(order['id'], symbol)
+    if status['status'] == 'closed':
+        return status
+        
+    # Critial Alert: Order exists but status unknown/not-filled
+    error_msg = f"❌ CRITICAL: Order {order['id']} not confirmed as filled after 10s! Manual check required."
+    logger.error(error_msg)
+    raise TimeoutError(error_msg)
+
 # ==================== TRADING CONFIGURATION (EMPIRE V7) ====================
 DEFAULT_SYMBOL = os.environ.get('SYMBOL', 'SOL/USDT')
 
@@ -163,55 +198,24 @@ REVERSAL_TRIGGER_ENABLED = os.environ.get('REVERSAL_TRIGGER', 'true').lower() ==
 MAX_CRYPTO_EXPOSURE = int(os.environ.get('MAX_CRYPTO_EXPOSURE', '2'))
 # ========================================================
 
-def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0, exchange=None):
+def log_trade_to_empire(trade_id, symbol, action, strategy, entry_price, size, cost, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0, execution_info=''):
+    """
+    🗄️ Persistence Engine (V8): Purely for DynamoDB
+    Logs ready-to-save trade data.
+    """
     try:
-        trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
         timestamp = get_paris_time().isoformat()
-        
-        # Calculate Position Size based on Capital
-        capital = float(os.environ.get('CAPITAL', '1000'))
-        price_float = float(price)
-        size = round(capital / price_float, 4) if price_float > 0 else 0
-        
-        # 🚀 EXECUTE TRADE ON EXCHANGE (If exchange provided)
-        execution_info = "PAPER_TRADE"
-        real_entry_price = price
-        real_size = size
-        
-        if exchange:
-            try:
-                # 1. Market Buy
-                order = exchange.create_market_order(symbol, 'buy', size)
-                real_entry_price = order.get('average', order.get('price', price))
-                real_size = order.get('amount', size) # Get filled amount
-                execution_info = f"EXECUTED_ID_{order['id']}"
-                logger.info(f"✅ MARKET BUY EXECUTED: {real_size} {symbol} @ {real_entry_price}")
-                
-                # 2. Limit TP (Best Practice for Testnet & Live)
-                if tp_pct > 0:
-                    tp_price = float(real_entry_price) * (1 + tp_pct/100)
-                    exchange.create_limit_order(symbol, 'sell', real_size, tp_price, params={'reduceOnly': True})
-                    logger.info(f"🎯 LIMIT TP PLACED @ {tp_price}")
-                    
-            except Exception as trade_err:
-                logger.error(f"❌ TRADE EXECUTION FAILED: {trade_err}")
-                execution_info = f"FAILED: {trade_err}"
-                # If trade failed, maybe we shouldn't log as OPEN? 
-                # For safety, we log it with status ERROR or skip logging?
-                # Let's log but mark as FAILED execution
-                return # Abort logging if execution failed to prevent phantom trades
-        
         item = {
             'TradeId': trade_id,
             'Timestamp': timestamp,
             'AssetClass': asset_class,
             'Pair': symbol,
-            'Type': action, # 'BUY'
+            'Type': action, 
             'Strategy': strategy,
-            'EntryPrice': str(real_entry_price),
-            'Size': str(real_size),       
-            'Cost': str(capital),    
-            'Value': str(capital),   
+            'EntryPrice': str(entry_price),
+            'Size': str(size),       
+            'Cost': str(cost),    
+            'Value': str(cost),   
             'SL': str(sl_pct),       
             'TP': str(tp_pct),       
             'ATR': '0',
@@ -221,9 +225,19 @@ def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset
             'Execution': execution_info
         }
         empire_table.put_item(Item=item)
-        logger.info(f"✅ Trade logged: {trade_id} | Size: {real_size} {symbol}")
+        logger.info(f"💾 Trade Persistence SUCCESS: {trade_id}")
     except Exception as e:
-        logger.error(f"❌ Failed to log to Empire: {e}")
+        logger.error(f"❌ Persistence FAILED for {trade_id}: {e}")
+
+def place_take_profit_safe(exchange, symbol, size, tp_price):
+    """Helper to place TP order with error handling"""
+    try:
+        exchange.create_limit_order(symbol, 'sell', size, tp_price, params={'reduceOnly': True})
+        logger.info(f"🎯 LIMIT TP PLACED @ {tp_price}")
+        return True
+    except Exception as e:
+        logger.error(f"⚠️ Failed to place TP: {e}")
+        return False
 
 def log_skip_to_empire(symbol, reason, price, asset_class='Crypto'):
     """Log skipped/no-signal events for the Reporter"""
@@ -878,8 +892,9 @@ def close_all_positions(open_trades, current_price, reason, exchange=None):
                 size = float(trade['Size'])
                 logger.info(f"📉 CLOSING POSITION: {size} {symbol} ({reason})")
                 
-                # 1. Market Sell
-                exchange.create_market_order(symbol, 'sell', size)
+                # 1. Market Sell (🛠️ V8 SAFE EXECUTION)
+                filled_order = execute_trade_safe(exchange, symbol, size, 'sell')
+                logger.info(f"📉 Position Closed (Confirmed): {filled_order['id']}")
                 
                 # 2. Cancel Open Orders (TP/SL)
                 exchange.cancel_all_orders(symbol)
@@ -988,6 +1003,7 @@ def manage_exits(symbol, asset_class, exchange=None):
             logger.info(f"🚀 SOL in Turbo Zone +{pnl_pct:.2f}%. Trailing active, riding the wave...")
         
         # 📈 TRAILING STOP CHECK (Priority 3 - RSI confirmation required)
+        rsi = None
         if pnl_pct >= TRAILING_TP_PCT:
             target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=14)
             rsi = analyze_market(target_ohlcv)['indicators']['rsi']
@@ -996,8 +1012,10 @@ def manage_exits(symbol, asset_class, exchange=None):
                 logger.info(f"📈 TRAILING TP ACTIVATED (RSI {rsi:.1f} > {RSI_SELL_THRESHOLD}). Closing at {current_price:.2f}")
                 total_pnl = close_all_positions(open_trades, current_price, "TRAILING_TP", exchange)
                 return f"TRAILING_TP_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
-        else:
-            logger.info(f"📊 In profit +{pnl_pct:.2f}% but RSI={rsi:.1f} < {RSI_SELL_THRESHOLD}. Holding for more gains.")
+        
+        # Log status if still held
+        rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+        logger.info(f"📊 {symbol} | PnL: {pnl_pct:+.2f}% | RSI: {rsi_str} | Status: HOLD")
     
         return "HOLD"
         
@@ -1006,25 +1024,36 @@ def manage_exits(symbol, asset_class, exchange=None):
         return None
 
 def get_portfolio_context(symbol, asset_class='Crypto'):
-    """Get portfolio context for a specific symbol — V7: uses actual asset_class"""
+    """
+    Get portfolio context — V8: uses GSI Status-index with Timestamp
+    Ensures high performance and correct cooldown detection.
+    """
     try:
-        # Query specifically for OPEN trades on this pair
-        response = empire_table.query(
+        # 1. Get current OPEN trades for this pair
+        response_open = empire_table.query(
             IndexName='Status-index',
             KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN'),
+            # We filter Pair in memory or via FilterExpression (Pair is not in Index key)
             FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(symbol)
         )
-        open_trades = response.get('Items', [])
+        open_trades = response_open.get('Items', [])
         
-        # We still need last_trade (which could be CLOSED), so for that we use a simple scan/list limited
-        # or we accept that last_trade might be missing if we only query OPEN.
-        # But for reliability, the user's focus is on identifying open positions fast.
+        # 2. Get last CLOSED trade for Cooldown (Order by Timestamp DESC)
+        response_closed = empire_table.query(
+            IndexName='Status-index',
+            KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('CLOSED'),
+            ScanIndexForward=False, # Get latest first
+            Limit=50 # Check last 50 trades
+        )
+        closed_trades = [t for t in response_closed.get('Items', []) if t.get('Pair') == symbol]
+        last_closed = closed_trades[0] if closed_trades else None
         
-        # To get the truly last trade (CLOSED or OPEN), we need a scan or a different index.
-        # Since this is less critical than identifying open slots, we'll keep it simple.
-        last_trade = open_trades[0] if open_trades else None
+        # Determine Truly Last Trade
+        last_trade = open_trades[0] if open_trades else last_closed
+        
         return {"current_pair_exposure": len(open_trades), "last_trade": last_trade}, open_trades
     except Exception as e:
+        logger.error(f"Portfolio context error: {e}")
         return {"current_pair_exposure": 0}, []
 
 def lambda_handler(event, context):
@@ -1227,7 +1256,9 @@ def lambda_handler(event, context):
                         if not acquire_atomic_slot(max_slots):
                             results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
                             continue
-                            
+                        
+                        current_trades += 1 # 🔄 Update local counter for next assets in loop
+                        
                         final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
                         adjusted_capital, confidence = calculate_dynamic_position_size(
@@ -1237,13 +1268,33 @@ def lambda_handler(event, context):
                         calc_tp = HARD_TP_PCT * corridor_tp_mult
                         calc_sl = STOP_LOSS_PCT * corridor_sl_mult
                         
-                        log_trade_to_empire(
-                            symbol, "LONG", f"V8_SCORE_{final_score}_CONF_{confidence:.1f}",
-                            current_price, "CONFIRM", f"Score: {final_score}/100. {decision.get('reason')}",
-                            asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
-                            exchange=exchange
-                        )
-                        results.append({"symbol": symbol, "status": "TRADE_EXECUTED", "score": final_score})
+                        # 🚀 V8 EXECUTION ENGINE
+                        try:
+                            trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
+                            size = round(adjusted_capital / current_price, 4)
+                            
+                            # 1. Market Buy
+                            filled = execute_trade_safe(exchange, symbol, size, 'buy')
+                            entry_p = float(filled.get('average', current_price))
+                            entry_s = float(filled.get('amount', size))
+                            
+                            # 2. Place Take Profit
+                            tp_price = entry_p * (1 + calc_tp/100)
+                            place_take_profit_safe(exchange, symbol, entry_s, tp_price)
+                            
+                            # 3. Persistence
+                            log_trade_to_empire(
+                                trade_id, symbol, "LONG", f"V8_SCORE_{final_score}_CONF_{confidence:.1f}",
+                                entry_p, entry_s, adjusted_capital, "CONFIRM", 
+                                f"Score: {final_score}/100. {decision.get('reason')}",
+                                asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
+                                execution_info=f"EXECUTED_ID_{filled['id']}"
+                            )
+                            results.append({"symbol": symbol, "status": "TRADE_EXECUTED", "score": final_score})
+                            
+                        except Exception as exec_err:
+                            logger.error(f"❌ CRITICAL EXECUTION ERROR for {symbol}: {exec_err}")
+                            results.append({"symbol": symbol, "status": "EXECUTION_FAILED", "error": str(exec_err)})
                     else:
                         log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": decision.get('reason')})
@@ -1289,6 +1340,8 @@ def lambda_handler(event, context):
                             results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
                             continue
 
+                        current_trades += 1 # 🔄 Update local counter
+                        
                         final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
                         adjusted_capital, confidence = calculate_dynamic_position_size(
@@ -1297,14 +1350,33 @@ def lambda_handler(event, context):
                         calc_tp = HARD_TP_PCT * corridor_tp_mult
                         calc_sl = STOP_LOSS_PCT * corridor_sl_mult
                         
-                        log_trade_to_empire(
-                            symbol, "LONG", f"V7_TREND_{corridor_name}",
-                            current_price, "CONFIRM",
-                            f"TREND: Price>{sma200:.0f}(SMA200), RSI={rsi:.1f}. {decision.get('reason')}",
-                            asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
-                            exchange=exchange
-                        )
-                        results.append({"symbol": symbol, "status": "TRADE_TREND_EXECUTED", "price": current_price})
+                        # 🚀 V8 EXECUTION ENGINE
+                        try:
+                            trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
+                            size = round(adjusted_capital / current_price, 4)
+                            
+                            # 1. Market Buy
+                            filled = execute_trade_safe(exchange, symbol, size, 'buy')
+                            entry_p = float(filled.get('average', current_price))
+                            entry_s = float(filled.get('amount', size))
+                            
+                            # 2. Place Take Profit
+                            tp_price = entry_p * (1 + calc_tp/100)
+                            place_take_profit_safe(exchange, symbol, entry_s, tp_price)
+                            
+                            # 3. Persistence
+                            log_trade_to_empire(
+                                trade_id, symbol, "LONG", f"V7_TREND_{corridor_name}",
+                                entry_p, entry_s, adjusted_capital, "CONFIRM", 
+                                f"TREND: Price>{sma200:.0f}(SMA200), RSI={rsi:.1f}. {decision.get('reason')}",
+                                asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
+                                execution_info=f"EXECUTED_ID_{filled['id']}"
+                            )
+                            results.append({"symbol": symbol, "status": "TRADE_TREND_EXECUTED", "price": entry_p})
+                            
+                        except Exception as exec_err:
+                            logger.error(f"❌ CRITICAL TREND EXECUTION ERROR: {exec_err}")
+                            results.append({"symbol": symbol, "status": "TREND_EXECUTION_FAILED"})
                     else:
                         log_skip_to_empire(symbol, f"TREND_AI_VETO: {decision.get('reason')}", current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_TREND_AI_VETO"})

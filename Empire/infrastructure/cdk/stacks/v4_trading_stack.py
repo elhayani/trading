@@ -131,6 +131,7 @@ class V4TradingStack(Stack):
         unified_trades_table.add_global_secondary_index(
             index_name="Status-index",
             partition_key=dynamodb.Attribute(name="Status", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="Timestamp", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL
         )
         
