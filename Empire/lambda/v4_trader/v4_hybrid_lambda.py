@@ -635,50 +635,21 @@ def check_portfolio_correlation(symbol):
         return True, "ERROR", 0
 
 
-def calculate_dynamic_position_size(base_capital, rsi, signal_strength, vol_ratio, momentum_trend, stop_loss_pct, total_balance):
+def calculate_dynamic_position_size(base_capital, final_score, stop_loss_pct, total_balance):
     """
-    🚀 V5 OPTIMIZATION 3: Dynamic Position Sizing (V8.3 with Risk Guard)
-    Increases size on high-confidence signals, reduces on weak signals
-    Based on simplified Kelly Criterion
+    🚀 V8.5: Proportional Position Sizing
+    Size is now directly proportional to the unified signal score.
     Returns: (adjusted_capital: float, confidence_score: float)
     """
     if not DYNAMIC_SIZING_ENABLED:
         return base_capital, 1.0
     
-    confidence_score = 1.0
+    # 📈 Score-to-Confidence mapping:
+    # 70 pts -> 0.5x multiplier (Minimum entry)
+    # 85 pts -> 1.0x multiplier (Standard entry)
+    # 100 pts -> 1.5x multiplier (Strong conviction)
     
-    # RSI Quality Bonus
-    if rsi < 25:
-        confidence_score += 0.30  # Extreme oversold = strong signal
-        logger.info(f"🎯 RSI Bonus +30%: Extreme oversold ({rsi:.1f})")
-    elif rsi < 30:
-        confidence_score += 0.15
-        logger.info(f"🎯 RSI Bonus +15%: Very oversold ({rsi:.1f})")
-    elif rsi > 38:
-        confidence_score -= 0.10  # Near threshold = weaker signal
-    
-    # Volume Confirmation Bonus
-    if vol_ratio >= 2.0:
-        confidence_score += 0.20
-        logger.info(f"🎯 Volume Bonus +20%: Strong volume ({vol_ratio:.1f}x)")
-    elif vol_ratio >= 1.75:
-        confidence_score += 0.10
-    
-    # Multi-TF Signal Strength Bonus
-    if signal_strength == "STRONG":
-        confidence_score += 0.25
-        logger.info(f"🎯 Multi-TF Bonus +25%: STRONG signal")
-    elif signal_strength == "WEAK":
-        confidence_score -= 0.15
-    
-    # Momentum Trend Bonus
-    if momentum_trend == "BULLISH":
-        confidence_score += 0.15
-        logger.info(f"🎯 Momentum Bonus +15%: BULLISH trend")
-    elif momentum_trend == "BEARISH":
-        confidence_score -= 0.25  # Strong penalty for counter-trend
-    
-    # Cap between 0.5x and 1.5x
+    confidence_score = 0.5 + (final_score - 70) / 30
     confidence_score = max(0.5, min(confidence_score, 1.5))
     
     adjusted_capital = base_capital * confidence_score
@@ -692,7 +663,7 @@ def calculate_dynamic_position_size(base_capital, rsi, signal_strength, vol_rati
         adjusted_capital = max_risk_dollars / (abs(stop_loss_pct) / 100)
         logger.warning(f"🛡️ Risk Cap Applied: ${old_cap:.0f} -> ${adjusted_capital:.0f} (Risk limited to 2% of balance)")
         
-    logger.info(f"💰 Dynamic Sizing: {base_capital:.0f}$ × {confidence_score:.2f} = {adjusted_capital:.0f}$")
+    logger.info(f"💰 Unified Dynamic Sizing: Score {final_score} -> {confidence_score:.2f}x | Final: ${adjusted_capital:.0f}")
     
     return adjusted_capital, confidence_score
 
@@ -1353,7 +1324,7 @@ def lambda_handler(event, context):
                         calc_sl = STOP_LOSS_PCT * corridor_sl_mult
                         
                         adjusted_capital, confidence = calculate_dynamic_position_size(
-                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend, calc_sl, g_ctx['balance']
+                            base_capital, final_score, calc_sl, g_ctx['balance']
                         )
                         
                         # 🚀 V8 EXECUTION ENGINE
@@ -1386,90 +1357,96 @@ def lambda_handler(event, context):
                     else:
                         log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": decision.get('reason')})
-                
                 # ======================== TREND FOLLOWING (V7 MODE) ========================
                 elif TREND_FOLLOWING_ENABLED and sma200 is not None and current_price > sma200 and rsi > TREND_RSI_MIN:
                     logger.info(f"📈 TREND SIGNAL: {symbol} | Price={current_price:.2f} > SMA200={sma200:.2f} | RSI={rsi:.1f}")
                     
-                    # Volume check (adaptive)
+                    # �️ V8.5.1: Scoring for Trend Following
+                    t_score = 65 # Base score if filters pass
+                    t_details = [f"TREND_ON_SMA (+65)"]
+                    
+                    # Volume bonus
                     vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume, asset_class=asset_class)
-                    if not vol_confirmed:
-                        log_skip_to_empire(symbol, f"TREND_LOW_VOLUME: {vol_ratio:.2f}x", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_LOW_VOL", "vol": vol_ratio})
-                        continue
+                    if vol_confirmed:
+                        t_score += 15
+                        t_details.append(f"VOL_CONFIRMED (+15) [{vol_ratio:.2f}x]")
                     
-                    # Momentum filter
+                    # Momentum bonus
                     momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
-                    if not momentum_ok:
-                        log_skip_to_empire(symbol, f"TREND_BEARISH_MOMENTUM: {ema_diff:.1f}%", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_MOMENTUM"})
-                        continue
-                    
-                    # Correlation check
-                    correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
-                    if not correlation_ok:
-                        log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_CORRELATION"})
-                        continue
-                    
-                    # AI confirmation
-                    news_symbol = symbol.split('=')[0].split('/')[0]
-                    news_ctx = get_news_context(news_symbol)
-                    signal_strength = "STRONG"
-                    portfolio_stats.update({
-                        'signal_strength': signal_strength, 'rsi_4h': 0,
-                        'vix': vix_value, 'dynamic_threshold': dynamic_rsi_threshold
-                    })
-                    
-                    decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
-                    if decision.get('decision') == "CONFIRM":
-                        # 🔒 V8: Atomic Slot Acquisition (Last Barrier)
-                        if not acquire_atomic_slot(max_slots):
-                            results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
-                            continue
+                    if momentum_ok:
+                        t_score += 15
+                        t_details.append(f"MOMENTUM_OK (+15) [{momentum_trend}]")
+                        
+                    # RSI bonus
+                    if rsi > 60:
+                        t_score += 5
+                        t_details.append("RSI_STRENGTH (+5)")
 
-                        current_trades += 1 # 🔄 Update local counter
+                    final_score = min(100, t_score)
+                    logger.info(f"⚖️ Trend Scoring for {symbol}: {final_score}/100 | Details: {', '.join(t_details)}")
+                    
+                    if final_score >= 70:
+                        # AI confirmation
+                        news_symbol = symbol.split('=')[0].split('/')[0]
+                        news_ctx = get_news_context(news_symbol)
+                        portfolio_stats.update({
+                            'signal_strength': "STRONG", 'rsi_4h': 0,
+                            'vix': g_ctx['vix']['value'], 'dynamic_threshold': dynamic_rsi_threshold,
+                            'trading_score': final_score
+                        })
                         
-                        final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
-                        base_capital = CAPITAL_PER_TRADE * final_size_mult
-                        
-                        calc_tp = HARD_TP_PCT * corridor_tp_mult
-                        calc_sl = STOP_LOSS_PCT * corridor_sl_mult
-                        
-                        adjusted_capital, confidence = calculate_dynamic_position_size(
-                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend, calc_sl, g_ctx['balance']
-                        )
-                        
-                        # 🚀 V8 EXECUTION ENGINE
-                        try:
-                            trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
-                            size = round(adjusted_capital / current_price, 4)
+                        decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
+                        if decision.get('decision') == "CONFIRM":
+                            # 🔒 V8: Atomic Slot Acquisition (Last Barrier)
+                            if not acquire_atomic_slot(max_slots):
+                                results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
+                                continue
+
+                            current_trades += 1 # 🔄 Update local counter
                             
-                            # 1. Market Buy
-                            filled = execute_trade_safe(exchange, symbol, size, 'buy')
-                            entry_p = float(filled.get('average', current_price))
-                            entry_s = float(filled.get('amount', size))
+                            final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
+                            base_capital = CAPITAL_PER_TRADE * final_size_mult
                             
-                            # 2. Place Take Profit
-                            tp_price = entry_p * (1 + calc_tp/100)
-                            place_take_profit_safe(exchange, symbol, entry_s, tp_price)
+                            calc_tp = HARD_TP_PCT * corridor_tp_mult
+                            calc_sl = STOP_LOSS_PCT * corridor_sl_mult
                             
-                            # 3. Persistence
-                            log_trade_to_empire(
-                                trade_id, symbol, "LONG", f"V7_TREND_{corridor_name}",
-                                entry_p, entry_s, adjusted_capital, "CONFIRM", 
-                                f"TREND: Price>{sma200:.0f}(SMA200), RSI={rsi:.1f}. {decision.get('reason')}",
-                                asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
-                                execution_info=f"EXECUTED_ID_{filled['id']}"
+                            adjusted_capital, confidence = calculate_dynamic_position_size(
+                                base_capital, final_score, calc_sl, g_ctx['balance']
                             )
-                            results.append({"symbol": symbol, "status": "TRADE_TREND_EXECUTED", "price": entry_p})
                             
-                        except Exception as exec_err:
-                            logger.error(f"❌ CRITICAL TREND EXECUTION ERROR: {exec_err}")
-                            results.append({"symbol": symbol, "status": "TREND_EXECUTION_FAILED"})
+                            # �🚀 V8 EXECUTION ENGINE
+                            try:
+                                trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
+                                size = round(adjusted_capital / current_price, 4)
+                                
+                                # 1. Market Buy
+                                filled = execute_trade_safe(exchange, symbol, size, 'buy')
+                                entry_p = float(filled.get('average', current_price))
+                                entry_s = float(filled.get('amount', size))
+                                
+                                # 2. Place Take Profit
+                                tp_price = entry_p * (1 + calc_tp/100)
+                                place_take_profit_safe(exchange, symbol, entry_s, tp_price)
+                                
+                                # 3. Persistence
+                                log_trade_to_empire(
+                                    trade_id, symbol, "LONG", f"V7_TREND_{corridor_name}",
+                                    entry_p, entry_s, adjusted_capital, "CONFIRM", 
+                                    f"TREND: Price>{sma200:.0f}(SMA200), RSI={rsi:.1f}. Score: {final_score}. {decision.get('reason')}",
+                                    asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
+                                    execution_info=f"EXECUTED_ID_{filled['id']}"
+                                )
+                                results.append({"symbol": symbol, "status": "TRADE_TREND_EXECUTED", "price": entry_p})
+                                
+                            except Exception as exec_err:
+                                logger.error(f"❌ CRITICAL TREND EXECUTION ERROR: {exec_err}")
+                                results.append({"symbol": symbol, "status": "TREND_EXECUTION_FAILED"})
+                        else:
+                            log_skip_to_empire(symbol, f"TREND_AI_VETO: {decision.get('reason')}", current_price, asset_class)
+                            results.append({"symbol": symbol, "status": "SKIPPED_TREND_AI_VETO"})
                     else:
-                        log_skip_to_empire(symbol, f"TREND_AI_VETO: {decision.get('reason')}", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_AI_VETO"})
+                        log_skip_to_empire(symbol, f"TREND_LOW_SCORE: {final_score}", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_LOW_SCORE"})
                 
                 else:
                     sma_info = f" | SMA200={sma200:.2f}" if sma200 else ""
