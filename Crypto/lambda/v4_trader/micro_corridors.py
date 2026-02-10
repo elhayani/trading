@@ -467,21 +467,29 @@ CRYPTO_CORRIDORS = {
 # ==================== MAPPING SYMBOLE -> CORRIDORS ====================
 
 SYMBOL_CORRIDOR_MAP = {
-    # Indices
+    # Indices (Legacy Yahoo + New Crypto-CFD)
     '^NDX': INDICES_CORRIDORS,
     '^GSPC': INDICES_CORRIDORS,
     '^DJI': INDICES_CORRIDORS,
+    'SPX/USDT': INDICES_CORRIDORS,    # V7
+    'US30/USDT': INDICES_CORRIDORS,   # V7 (Dow Jones)
+    'NDX/USDT': INDICES_CORRIDORS,    # V7 (Nasdaq)
+    'DEFI/USDT': INDICES_CORRIDORS,   # V7 (Crypto Index)
     
     # Forex EUR/GBP
     'EURUSD': FOREX_EUR_GBP_CORRIDORS,
     'GBPUSD': FOREX_EUR_GBP_CORRIDORS,
+    'EUR/USD': FOREX_EUR_GBP_CORRIDORS, # V7 variant
+    'GBP/USD': FOREX_EUR_GBP_CORRIDORS, # V7 variant
     
     # Forex JPY
     'USDJPY': FOREX_JPY_CORRIDORS,
+    'USD/JPY': FOREX_JPY_CORRIDORS, # V7 variant
     
-    # Commodities
-    'GC=F': COMMODITIES_CORRIDORS,
-    'CL=F': COMMODITIES_CORRIDORS,
+    # Commodities (V7: Tokenized)
+    'PAXG/USDT': COMMODITIES_CORRIDORS,  # Gold
+    'XAG/USDT': COMMODITIES_CORRIDORS,   # Silver
+    'USOIL/USDT': COMMODITIES_CORRIDORS, # Oil (if available)
     
     # Crypto
     'SOL/USDT': CRYPTO_CORRIDORS,

@@ -42,8 +42,6 @@ MACRO_SYMBOLS = {
     'DXY': 'DX-Y.NYB',      # Dollar Index (primary)
     'US10Y': '^TNX',         # US 10-Year Treasury Yield
     'VIX': '^VIX',           # Volatility Index (Fear Gauge)
-    'GOLD': 'GC=F',          # Gold (Safe Haven)
-    'SPY': 'SPY',            # S&P 500 ETF (Risk barometer)
 }
 
 # Fallback symbols for Dollar Index (DX-Y.NYB often 404s)
