@@ -1427,7 +1427,11 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
         """Adaptive volume confirmation (Audit #V10.7)"""
         if len(ohlcv) < 20: return True, 1.0
         
-        asset_class = classify_asset(symbol)
+        # 💡 FIX: Bypass volume pour indices/forex (données API instables)
+        if any(idx in symbol.upper() for idx in ["SPX", "NDX", "EUR", "GBP", "AUD"]):
+            logger.info(f"ℹ️ Volume check bypassed for {symbol} (Index/Forex)")
+            return True, 1.0
+
         current_vol = ohlcv[-1][5]
         avg_vol = sum(c[5] for c in ohlcv[-21:-1]) / 20
         
@@ -1436,16 +1440,8 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
         ratio = current_vol / avg_vol
         logger.info(f"📊 Volume Ratio for {symbol}: {ratio:.2f}x")
         
-        # Veto only for Crypto/Commodities if ratio < 0.8
-        is_valid = True
-        if asset_class in ["Crypto", "Commodities"] and ratio < 0.8:
-            is_valid = False
-            
-        # Indices and Forex never veto based on volume (Audit #V10.7)
-        if asset_class in ["Indices", "Forex"]:
-            is_valid = True
-            
-        return is_valid, ratio
+        # Seuil réduit à 0.8x pour éviter la paralysie (Audit #V10.7)
+        return ratio > 0.8, ratio
 
 
 # ==================== LAMBDA HANDLER ====================

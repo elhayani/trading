@@ -28,8 +28,8 @@ class DecisionEngine:
             
         # LEVEL 2: TECHNICAL VALIDATION (Signal Quality)
         score = ta_result.get('score', 0)
-        if score < 60:
-            logger.warning(f"🚫 Level 2 Veto: Signal score {score}/100 < 60")
+        if score < 50: # 💡 Passage de 60 à 50 pour autoriser les Dips (Audit #V10.7)
+            logger.warning(f"🚫 Level 2 Veto: Signal score {score}/100 < 50")
             return False, f"LOW_TECHNICAL_SCORE_{score}", 0.0
             
         # LEVEL 3: MICRO TIMING (Corridor Check)
