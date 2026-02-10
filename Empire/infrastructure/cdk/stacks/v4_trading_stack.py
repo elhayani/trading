@@ -118,7 +118,22 @@ class V4TradingStack(Stack):
         empire_history_table.grant_read_write_data(trading_lambda)
         
         # Grant access to unified EmpireTradesHistory table
-        unified_trades_table = dynamodb.Table.from_table_name(self, "UnifiedTradesTable", "EmpireTradesHistory")
+        unified_trades_table = dynamodb.Table(
+            self, "UnifiedEmpireTable",
+            table_name="EmpireTradesHistory",
+            partition_key=dynamodb.Attribute(name="TradeId", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+            point_in_time_recovery=True
+        )
+        
+        # 🚀 V8 PERFORMANCE INDEX: Status-index
+        unified_trades_table.add_global_secondary_index(
+            index_name="Status-index",
+            partition_key=dynamodb.Attribute(name="Status", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL
+        )
+        
         unified_trades_table.grant_read_write_data(trading_lambda)
         # Define other tables for Reporting (Forex, Indices, Commodities)
         # We define them here so CDK creates them if they don't exist, and we can grant permissions.
