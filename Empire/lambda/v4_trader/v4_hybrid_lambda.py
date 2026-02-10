@@ -947,8 +947,78 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication news
         
         return json.loads(completion)
     except Exception as e:
-        logger.warning(f"⚠️ Bedrock Error: {e}. Fail-safe: CONFIRM with Low Confidence (Audit #3.3)")
-        return {"decision": "CONFIRM", "reason": "AWS_API_TIMEOUT_FALLBACK", "confidence": 0.5}
+        logger.warning(f"⚠️ Bedrock Error: {e}")
+        return {"decision": "CONFIRM", "reason": "AI_API_FALLBACK", "confidence": 0}
+
+# --- V8.6 CORE HELPERS (Audit #V8.6) ---
+def ai_confirm_safe(symbol, rsi, news_ctx, portfolio_stats, history):
+    """AI advisory - failsafe and non-blocking (Audit #3.3)"""
+    try:
+        decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
+        return decision.get("decision") == "CONFIRM", decision.get("reason"), "HIGH"
+    except Exception as e:
+        logger.warning(f"⚠️ AI fallback for {symbol}: {e}")
+        return True, "AI_FALLBACK", "LOW"
+
+def execute_trade_core(
+    exchange, symbol, asset_class, side,
+    entry_price, score, ctx,
+    tp_pct, sl_pct, tag, reason
+):
+    """Centralized execution engine for V8.6 - Atomic & Robust"""
+    # 🔒 1. Atomic Slot Acquisition (The absolute source of truth)
+    if not acquire_atomic_slot(ctx['max_slots']):
+        return {"symbol": symbol, "status": "SKIPPED_SLOT_FULL"}
+
+    slot_acquired = True
+    try:
+        # 2. Risk Modulators
+        final_mult = (
+            ctx['vix']['multiplier']
+            * ctx['cb']['multiplier']
+            * ctx.get('corridor_risk_mult', 1.0)
+        )
+        base_capital = CAPITAL_PER_TRADE * final_mult
+
+        # 3. Dynamic Sizing
+        adjusted_capital, confidence = calculate_dynamic_position_size(
+            base_capital, score, sl_pct, ctx['balance']
+        )
+
+        size = round(adjusted_capital / entry_price, 4)
+        trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
+
+        # 4. Exchange Execution
+        filled = execute_trade_safe(exchange, symbol, size, side)
+        entry_p = float(filled.get("average", entry_price))
+        entry_s = float(filled.get("amount", size))
+
+        # 5. Take Profit placement
+        tp_price = entry_p * (1 + tp_pct / 100)
+        place_take_profit_safe(exchange, symbol, entry_s, tp_price)
+
+        # 6. Persistence
+        log_trade_to_empire(
+            trade_id, symbol, side.upper(), tag,
+            entry_p, entry_s, adjusted_capital,
+            "CONFIRM", reason, asset_class,
+            tp_pct=round(tp_pct, 2),
+            sl_pct=round(sl_pct, 2),
+            execution_info=f"EXECUTED_ID_{filled['id']}"
+        )
+
+        return {
+            "symbol": symbol,
+            "status": "TRADE_EXECUTED",
+            "price": entry_p,
+            "score": score
+        }
+
+    except Exception as e:
+        logger.error(f"❌ EXECUTION CRITICAL ERROR for {symbol}: {e}")
+        if slot_acquired:
+            release_atomic_slot()
+        return {"symbol": symbol, "status": "EXECUTION_FAILED", "error": str(e)}
 
 def close_all_positions(open_trades, current_price, reason, exchange=None):
     """Helper to close all open positions with proper PnL calculation"""
@@ -1403,168 +1473,77 @@ def lambda_handler(event, context):
                 final_score = min(100, score)
                 logger.info(f"⚖️ Final Scoring for {symbol}: {final_score}/100 | Min Req: {g_ctx['entry_threshold']}")
 
+                # 🧠 V8.6 UNIFIED DECISION PIPELINE (Audit #V8.6)
                 if final_score >= g_ctx['entry_threshold']:
-                    # Final AI confirmation
+                    # 1. Prepare Decision Context
                     news_symbol = symbol.split('=')[0].split('/')[0]
                     news_ctx = get_news_context(news_symbol)
-                    
                     portfolio_stats.update({
-                        'signal_strength': signal_strength,
-                        'rsi_4h': rsi_4h,
-                        'vix': g_ctx['vix']['value'],
-                        'dynamic_threshold': dynamic_rsi_threshold,
+                        'signal_strength': signal_strength, 'rsi_4h': rsi_4h,
+                        'vix': g_ctx['vix']['value'], 'dynamic_threshold': dynamic_rsi_threshold,
                         'trading_score': final_score
                     })
-                    
-                    decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
-                    if decision.get('decision') == "CONFIRM":
-                        # 🔒 V8: Atomic Slot Acquisition (Last Barrier)
-                        if not acquire_atomic_slot(max_slots):
-                            results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
-                            continue
-                        
-                        slot_acquired = True
-                        current_trades += 1 # 🔄 Update local counter
-                        
-                        try:
-                            final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
-                            base_capital = CAPITAL_PER_TRADE * final_size_mult
-                            
-                            calc_tp = HARD_TP_PCT * corridor_tp_mult
-                            calc_sl = STOP_LOSS_PCT * corridor_sl_mult
-                            
-                            adjusted_capital, confidence = calculate_dynamic_position_size(
-                                base_capital, final_score, calc_sl, g_ctx['balance']
-                            )
-                            
-                            trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
-                            size = round(adjusted_capital / current_price, 4)
-                            
-                            # 🚀 V8 EXECUTION ENGINE
-                            filled = execute_trade_safe(exchange, symbol, size, 'buy')
-                            entry_p = float(filled.get('average', current_price))
-                            entry_s = float(filled.get('amount', size))
-                            
-                            # 2. Place Take Profit
-                            tp_price = entry_p * (1 + calc_tp/100)
-                            place_take_profit_safe(exchange, symbol, entry_s, tp_price)
-                            
-                            # 3. Persistence
-                            log_trade_to_empire(
-                                trade_id, symbol, "LONG", f"V8_SCORE_{final_score}_REG_{g_ctx['regime']}",
-                                entry_p, entry_s, adjusted_capital, "CONFIRM", 
-                                f"Score: {final_score}/100. Regime: {g_ctx['regime']}. {decision.get('reason')}",
-                                asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
-                                execution_info=f"EXECUTED_ID_{filled['id']}"
-                            )
-                            results.append({"symbol": symbol, "status": "TRADE_EXECUTED", "score": final_score})
-                            
-                        except Exception as exec_err:
-                            logger.error(f"❌ CRITICAL EXECUTION ERROR for {symbol}: {exec_err}")
-                            if slot_acquired:
-                                release_atomic_slot()
-                                current_trades -= 1
-                            results.append({"symbol": symbol, "status": "EXECUTION_FAILED", "error": str(exec_err)})
+
+                    # 2. AI Advisory (Safe & Non-blocking)
+                    ai_ok, ai_reason, ai_conf = ai_confirm_safe(
+                        symbol, rsi, news_ctx, portfolio_stats, history
+                    )
+
+                    if ai_ok:
+                        exec_res = execute_trade_core(
+                            exchange=exchange, symbol=symbol, asset_class=asset_class,
+                            side="buy", entry_price=current_price, score=final_score,
+                            ctx=g_ctx, tp_pct=calc_tp, sl_pct=calc_sl,
+                            tag=f"V8_SCORE_{final_score}_REG_{g_ctx['regime']}",
+                            reason=f"Score:{final_score}. Regime:{g_ctx['regime']}. {ai_reason}"
+                        )
+                        results.append(exec_res)
                     else:
-                        log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": decision.get('reason')})
+                        log_skip_to_empire(symbol, f"AI_VETO: {ai_reason}", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": ai_reason})
+
                 # ======================== TREND FOLLOWING (V7 MODE) ========================
                 elif TREND_FOLLOWING_ENABLED and sma200 is not None and current_price > sma200 and rsi > TREND_RSI_MIN:
-                    logger.info(f"📈 TREND SIGNAL: {symbol} | Price={current_price:.2f} > SMA200={sma200:.2f} | RSI={rsi:.1f}")
+                    # � Audit #V8.6: Simplified Trend scoring
+                    t_score = 65 
+                    t_details = ["TREND_ON_SMA"]
                     
-                    # �️ V8.5.1: Scoring for Trend Following
-                    t_score = 65 # Base score if filters pass
-                    t_details = [f"TREND_ON_SMA (+65)"]
-                    
-                    # Volume bonus
                     vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume, asset_class=asset_class)
                     if vol_confirmed:
                         t_score += 15
-                        t_details.append(f"VOL_CONFIRMED (+15) [{vol_ratio:.2f}x]")
+                        t_details.append(f"VOL({vol_ratio:.1f}x)")
                     
-                    # Momentum bonus
-                    momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
+                    momentum_ok, momentum_trend, _ = check_momentum_filter(target_ohlcv, rsi=rsi)
                     if momentum_ok:
                         t_score += 15
-                        t_details.append(f"MOMENTUM_OK (+15) [{momentum_trend}]")
-                        
-                    # RSI bonus
-                    if rsi > 60:
-                        t_score += 5
-                        t_details.append("RSI_STRENGTH (+5)")
+                        t_details.append(f"MOM({momentum_trend})")
 
-                    final_score = min(100, t_score)
-                    logger.info(f"⚖️ Trend Scoring for {symbol}: {final_score}/100 | Min Req: {g_ctx['entry_threshold']}")
-                    
-                    if final_score >= g_ctx['entry_threshold']:
+                    if t_score >= g_ctx['entry_threshold']:
                         # AI confirmation
                         news_symbol = symbol.split('=')[0].split('/')[0]
                         news_ctx = get_news_context(news_symbol)
-                        portfolio_stats.update({
-                            'signal_strength': "STRONG", 'rsi_4h': 0,
-                            'vix': g_ctx['vix']['value'], 'dynamic_threshold': dynamic_rsi_threshold,
-                            'trading_score': final_score
-                        })
+                        portfolio_stats.update({'signal_strength': "STRONG", 'rsi_4h': 0, 'trading_score': t_score})
                         
-                        decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
-                        if decision.get('decision') == "CONFIRM":
-                            # 🔒 V8: Atomic Slot Acquisition (Last Barrier)
-                            if not acquire_atomic_slot(max_slots):
-                                results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
-                                continue
-
-                            slot_acquired = True
-                            current_trades += 1 # 🔄 Update local counter
-                            
-                            try:
-                                final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
-                                base_capital = CAPITAL_PER_TRADE * final_size_mult
-                                
-                                calc_tp = HARD_TP_PCT * corridor_tp_mult
-                                calc_sl = STOP_LOSS_PCT * corridor_sl_mult
-                                
-                                adjusted_capital, confidence = calculate_dynamic_position_size(
-                                    base_capital, final_score, calc_sl, g_ctx['balance']
-                                )
-                                
-                                trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
-                                size = round(adjusted_capital / current_price, 4)
-                                
-                                # 🚀 V8 EXECUTION ENGINE
-                                filled = execute_trade_safe(exchange, symbol, size, 'buy')
-                                entry_p = float(filled.get('average', current_price))
-                                entry_s = float(filled.get('amount', size))
-                                
-                                # 2. Place Take Profit
-                                tp_price = entry_p * (1 + calc_tp/100)
-                                place_take_profit_safe(exchange, symbol, entry_s, tp_price)
-                                
-                                # 3. Persistence
-                                log_trade_to_empire(
-                                    trade_id, symbol, "LONG", f"V8_TREND_{g_ctx['regime']}",
-                                    entry_p, entry_s, adjusted_capital, "CONFIRM", 
-                                    f"TREND: Price>{sma200:.0f}(SMA200). Score: {final_score}. Regime: {g_ctx['regime']}",
-                                    asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
-                                    execution_info=f"EXECUTED_ID_{filled['id']}"
-                                )
-                                results.append({"symbol": symbol, "status": "TRADE_TREND_EXECUTED", "price": entry_p})
-                                
-                            except Exception as exec_err:
-                                logger.error(f"❌ CRITICAL TREND EXECUTION ERROR: {exec_err}")
-                                if slot_acquired:
-                                    release_atomic_slot()
-                                    current_trades -= 1
-                                results.append({"symbol": symbol, "status": "TREND_EXECUTION_FAILED"})
+                        ai_ok, ai_reason, _ = ai_confirm_safe(symbol, rsi, news_ctx, portfolio_stats, history)
+                        if ai_ok:
+                            exec_res = execute_trade_core(
+                                exchange=exchange, symbol=symbol, asset_class=asset_class,
+                                side="buy", entry_price=current_price, score=t_score,
+                                ctx=g_ctx, tp_pct=calc_tp, sl_pct=calc_sl,
+                                tag=f"V8_TREND_{g_ctx['regime']}",
+                                reason=f"TREND > SMA200 | Score:{t_score} | {ai_reason}"
+                            )
+                            results.append(exec_res)
                         else:
-                            log_skip_to_empire(symbol, f"TREND_AI_VETO: {decision.get('reason')}", current_price, asset_class)
+                            log_skip_to_empire(symbol, f"TREND_AI_VETO: {ai_reason}", current_price, asset_class)
                             results.append({"symbol": symbol, "status": "SKIPPED_TREND_AI_VETO"})
                     else:
-                        log_skip_to_empire(symbol, f"TREND_LOW_SCORE: {final_score}", current_price, asset_class)
-                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_LOW_SCORE"})
+                        log_skip_to_empire(symbol, f"TREND_LOW_SCORE: {t_score}", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_LOW_SCORE", "score": t_score})
                 
                 else:
                     sma_info = f" | SMA200={sma200:.2f}" if sma200 else ""
-                    log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {dynamic_rsi_threshold}{sma_info}", current_price, asset_class)
+                    log_skip_to_empire(symbol, f"IDLE: RSI={rsi:.1f}{sma_info}", current_price, asset_class)
                     results.append({"symbol": symbol, "status": "IDLE", "rsi": rsi})
                     
             except Exception as item_err:
