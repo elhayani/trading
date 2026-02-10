@@ -23,6 +23,8 @@ from botocore.exceptions import ClientError
 from market_analysis import analyze_market
 from news_fetcher import get_news_context
 from exchange_connector import ExchangeConnector
+import macro_context
+import micro_corridors as corridors
 
 # ==================== CONFIGURATION ====================
 
@@ -61,6 +63,24 @@ class TradingConfig:
     volume_confirmation_enabled: bool = True
     ai_confirmation_enabled: bool = True
     
+    # --- Optimizations V10 (Audit #V10.1) ---
+    # Confidence weights
+    weight_time: float = 0.35
+    weight_macro: float = 0.30
+    weight_volatility: float = 0.20
+    weight_structure: float = 0.15
+    
+    # Split TP
+    tp_split_ratio: float = 0.60  # 60% for first TP, 40% for runner
+    runner_enabled: bool = True
+    
+    # SMA proximity (Audit #V10.4)
+    sma_proximity_threshold: float = 0.005 # 0.5% buffer around SMAs
+    
+    # ATR Multiplier for SL
+    atr_sl_mult: float = 2.0
+    volatility_adjustment_enabled: bool = True
+    
     @classmethod
     def from_env(cls):
         """Load configuration from environment variables"""
@@ -69,7 +89,10 @@ class TradingConfig:
             max_slots_calm=int(os.getenv('MAX_SLOTS_CALM', '5')),
             rsi_buy_threshold=float(os.getenv('RSI_THRESHOLD', '42')),
             volume_confirmation_enabled=os.getenv('VOLUME_CONFIRM', 'true').lower() == 'true',
-            ai_confirmation_enabled=os.getenv('AI_CONFIRM', 'true').lower() == 'true'
+            ai_confirmation_enabled=os.getenv('AI_CONFIRM', 'true').lower() == 'true',
+            tp_split_ratio=float(os.getenv('TP_SPLIT', '0.6')),
+            runner_enabled=os.getenv('RUNNER_ENABLE', 'true').lower() == 'true',
+            atr_sl_mult=float(os.getenv('ATR_SL_MULT', '2.0'))
         )
     
     def validate(self):
@@ -301,6 +324,13 @@ class MarketContext:
     dynamic_tp_pct: float
     dynamic_sl_pct: float
     
+    # Optimization V10
+    confidence_score: float = 0.5
+    atr_value: float = 0.0
+    sma_50: float = 0.0
+    sma_200: float = 0.0
+    is_high_liquidity: bool = True
+    
     @property
     def total_multiplier(self) -> float:
         """Combined risk multiplier"""
@@ -336,14 +366,9 @@ class MarketStateBuilder:
         max_slots = self._calculate_max_slots(balance, vix_value)
         
         # 3. Dynamic Targets (Volatility based)
-        # Scale 0 to 1 between VIX 15 and 35
         vix_factor = max(0, min(1, (vix_value - 15) / 20))
-        
-        # TP: Higher during high vol
         tp_min, tp_max = self.config.target_tp_range
         dyn_tp = tp_min + vix_factor * (tp_max - tp_min)
-        
-        # SL: Tighter during high vol (-5% calm -> -2% volatile)
         sl_wide, sl_tight = self.config.target_sl_range[1], self.config.target_sl_range[0]
         dyn_sl = sl_wide + vix_factor * (sl_tight - sl_wide)
         
@@ -353,19 +378,41 @@ class MarketStateBuilder:
         regime = self._determine_regime(btc_24h, btc_7d, btc_1h, vix_value, cb_level)
         daily_pnl, daily_pnl_pct = self._get_daily_performance(balance)
         
-        # Reduced blocking if diversified (open_positions >= 2)
-        # allow trading in L2_HALT if diversified and PnL is okay.
         diversified_protection = (open_positions >= 2 and daily_pnl_pct > -0.02)
-        
         can_trade = (
             cb_level != "L3_SURVIVAL" and
-            (cb_level != "L2_HALT" or diversified_protection) and # Relaxed CB
+            (cb_level != "L2_HALT" or diversified_protection) and
             vix_value < self.config.vix_max and
             daily_pnl_pct > -self.config.max_daily_loss_pct
         )
-        
         risk_blocked = daily_pnl_pct <= -self.config.max_daily_loss_pct
+
+        # 5. Optimization V10: Confidence Score calculation
+        # A. Time Edge (Corridor quality)
+        current_corridor = corridors.get_current_corridor(self.exchange.symbol if hasattr(self.exchange, 'symbol') else 'BTC/USDT')
+        corridor_regime = current_corridor.get('regime') if current_corridor else None
+        time_edge = 1.0 if corridor_regime in [corridors.MarketRegime.AGGRESSIVE_BREAKOUT, corridors.MarketRegime.TREND_FOLLOWING] else 0.4
         
+        # B. Macro Edge
+        macro_ctx = macro_context.get_macro_context()
+        macro_edge = 1.0 if macro_ctx.get('regime') == 'RISK_ON' else 0.5 if macro_ctx.get('regime') == 'MIXED' else 0.2
+        
+        # C. Volatility Edge (Normalized VIX)
+        vix_edge = 1.0 - vix_factor 
+        
+        # D. Structure Edge (Trend alignment)
+        ohlcv_1h = self.exchange.fetch_ohlcv('BTC/USDT', '1h', limit=100)
+        analysis = analyze_market(ohlcv_1h)
+        structure_edge = 1.0 if analysis['indicators']['long_term_trend'] == 'BULLISH' else 0.3
+        
+        conf_score = (
+            time_edge * self.config.weight_time +
+            macro_edge * self.config.weight_macro +
+            vix_edge * self.config.weight_volatility +
+            structure_edge * self.config.weight_structure
+        )
+        
+        # 6. Build final context
         context = MarketContext(
             timestamp=datetime.now(timezone.utc),
             balance=balance,
@@ -385,10 +432,15 @@ class MarketStateBuilder:
             daily_pnl=daily_pnl,
             daily_pnl_pct=daily_pnl_pct,
             dynamic_tp_pct=round(dyn_tp, 2),
-            dynamic_sl_pct=round(dyn_sl, 2)
+            dynamic_sl_pct=round(dyn_sl, 2),
+            confidence_score=round(conf_score, 2),
+            atr_value=analysis['indicators']['atr'],
+            sma_50=analysis['indicators']['sma_50'],
+            sma_200=analysis['indicators']['sma_200'],
+            is_high_liquidity=is_golden
         )
         
-        logger.info(f"✅ Context: {regime.value} | TP: {dyn_tp:.1f}% | SL: {dyn_sl:.1f}% | Slots: {max_slots}")
+        logger.info(f"✅ Context: {regime.value} | Conf: {conf_score:.2f} | TP: {dyn_tp:.1f}% | SL: {dyn_sl:.1f}%")
         return context
     
     def _get_balance_safe(self) -> float:
@@ -974,6 +1026,11 @@ class TradingEngine:
             logger.warning(f"🚫 Global Block: {reason}")
             self.persistence.log_skip(symbol, "crypto", reason, 0, context)
             return {"symbol": symbol, "status": "BLOCKED", "reason": reason}
+
+        # 2b. Symbol-specific Kill Switch (Optimization N°5)
+        if self._is_symbol_locked(symbol):
+            logger.warning(f"🚫 Symbol {symbol} is LOCKED due to recent poor performance.")
+            return {"symbol": symbol, "status": "SYMBOL_LOCKED"}
         
         # 3. Manage exits (Priorité absolue)
         exit_result = self._manage_exits(symbol, context)
@@ -985,6 +1042,52 @@ class TradingEngine:
         
         return entry_result
     
+    def _is_symbol_locked(self, symbol: str) -> bool:
+        """Check if a symbol is temporarily locked (Optimization N°5)"""
+        try:
+            response = self.aws.state_table.get_item(Key={'trader_id': f"LOCK#{symbol}"})
+            item = response.get('Item')
+            if item:
+                expiry = datetime.fromisoformat(item['expiry'])
+                if datetime.now(timezone.utc) < expiry:
+                    return True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check symbol lock: {e}")
+            return False
+    
+    def _lock_symbol(self, symbol: str, hours: int, reason: str):
+        """Apply temporary lock to a symbol"""
+        expiry = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+        try:
+            self.aws.state_table.put_item(Item={
+                'trader_id': f"LOCK#{symbol}",
+                'expiry': expiry,
+                'reason': reason,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+            logger.warning(f"🔒 LOCKED {symbol} for {hours}h: {reason}")
+        except Exception as e:
+            logger.error(f"Failed to lock symbol: {e}")
+
+    def _handle_loss_lock(self, symbol: str, trade: Dict):
+        """Analyze loss and lock symbol if conditions met (Optimization N°5)"""
+        try:
+            context = trade.get('MarketContext', {})
+            confidence = float(context.get('confidence_score', 1.0))
+            is_low_liq = context.get('is_high_liquidity') is False
+            
+            # Rule: loss during LOW_LIQUIDITY -> 4h lock
+            if is_low_liq:
+                self._lock_symbol(symbol, hours=4, reason="LOSS_DURING_LOW_LIQUIDITY")
+                return
+
+            # Rule: low confidence loss -> 2h lock
+            if confidence < 0.6:
+                self._lock_symbol(symbol, hours=2, reason="LOW_CONFIDENCE_LOSS")
+        except Exception as e:
+            logger.warning(f"Failed to handle loss lock: {e}")
+
     def _get_block_reason(self, context: MarketContext) -> str:
         """Determine why trading is blocked"""
         if context.risk_blocked:
@@ -1057,11 +1160,17 @@ class TradingEngine:
         try:
             self.executor.close_position(symbol, size, reason)
             
+            total_pnl = 0
             for t in trades:
                 entry = float(t['EntryPrice'])
                 cost = float(t['Cost'])
                 pnl = ((exit_price - entry) / entry) * cost
+                total_pnl += pnl
                 self.persistence.log_trade_close(t['TradeId'], exit_price, pnl, reason)
+            
+            # Optimization N°5: Symbol-specific Lock
+            if total_pnl < 0:
+                self._handle_loss_lock(symbol, trades[0])
             
             # ✅ CORRECTION : Récupérer l'instance existante ou release direct
             slot_mgr = self.active_slots.pop(symbol, None)
@@ -1092,7 +1201,7 @@ class TradingEngine:
         """Evaluate entry (Audit #V9.5: Refactored into specialized methods)"""
         
         # 1. Technical
-        ta_result = self._check_technical_entry(symbol)
+        ta_result = self._check_technical_entry(symbol, context)
         if ta_result['status'] != "SIGNAL":
             return ta_result
 
@@ -1121,21 +1230,32 @@ class TradingEngine:
             self.active_slots.pop(symbol, None)
             return {"symbol": symbol, "status": "ERROR", "msg": str(e)}
 
-    def _check_technical_entry(self, symbol: str) -> Dict:
-        """Isolated Technical Analysis Entry Check"""
+    def _check_technical_entry(self, symbol: str, context: MarketContext) -> Dict:
+        """Isolated Technical Analysis Entry Check with High Confidence Filters (Audit #V10.4)"""
         ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=100)
         analysis = analyze_market(ohlcv)
         rsi = analysis['indicators']['rsi']
+        price = analysis['current_price']
         
         logger.info(f"📈 {symbol} Technical: RSI={rsi:.1f} (Target < {self.config.rsi_buy_threshold})")
         
+        # 1. RSI Extreme Filter
         if rsi >= self.config.rsi_buy_threshold:
             return {"symbol": symbol, "status": "NO_SIGNAL", "rsi": rsi}
         
+        # 2. Volume Confirmation
         if self.config.volume_confirmation_enabled and not self._check_volume(ohlcv):
             return {"symbol": symbol, "status": "LOW_VOLUME"}
+
+        # 3. SMA Neutral Zone Filter (Optimization N°4)
+        for sma_val in [context.sma_50, context.sma_200]:
+            if sma_val > 0:
+                dist = abs(price - sma_val) / sma_val
+                if dist < self.config.sma_proximity_threshold:
+                    logger.warning(f"🚫 Gray Zone Block: Price too close to SMA ({dist:.2%})")
+                    return {"symbol": symbol, "status": "SMA_GRAY_ZONE"}
             
-        return {"status": "SIGNAL", "rsi": rsi, "price": analysis['current_price']}
+        return {"status": "SIGNAL", "rsi": rsi, "price": price}
 
     def _check_ai_advisory(self, symbol: str, rsi: float) -> Dict:
         """Isolated AI Consultation"""
@@ -1174,9 +1294,13 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
             return {"decision": "CONFIRM", "reason": "AI_API_FALLBACK"}
 
     def _execute_v9_entry(self, symbol: str, context: MarketContext, entry_price: float, ai: Dict) -> Dict:
-        """Isolated Entry Execution and Database Logging"""
-        # Position Sizing
-        base_capital = context.balance * self.config.capital_pct * context.total_multiplier
+        """Isolated Entry Execution with Confidence-Based Sizing and Runner TP (Audit #V10)"""
+        
+        # 1. Confidence-Based Sizing (Optimization N°1)
+        # risk = base_risk * (0.6 + confidence)
+        risk_adjustment = 0.6 + context.confidence_score
+        base_capital = context.balance * self.config.capital_pct * context.total_multiplier * risk_adjustment
+        
         max_risk = context.balance * self.config.max_risk_per_trade_pct
         potential_loss = base_capital * (abs(context.dynamic_sl_pct) / 100)
         
@@ -1185,28 +1309,51 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
             logger.info(f"🛡️ Size capped (Max Risk: ${max_risk:.2f})")
         
         size = round(base_capital / entry_price, 4)
-        trade_id = f"V9-{uuid.uuid4().hex[:8]}"
+        trade_id = f"V10-{uuid.uuid4().hex[:8]}"
         
-        # Order Execution
+        # 2. Order Execution
         filled = self.executor.execute_market_order(symbol, 'buy', size)
         real_entry = float(filled.get('average', entry_price))
         real_size = float(filled.get('amount', size))
         
-        # TP Placement
-        tp_price = real_entry * (1 + context.dynamic_tp_pct / 100)
-        self.executor.place_take_profit_order(symbol, real_size, tp_price)
+        # 3. Dynamic SL (Optimization N°3)
+        # sl = ATR * corridor_sl_mult * volatility_adjustment
+        if self.config.volatility_adjustment_enabled and context.atr_value > 0:
+            atr_sl_pct = (context.atr_value * self.config.atr_sl_mult) / real_entry * 100
+            final_sl = -max(2.0, min(10.0, atr_sl_pct)) # Cap between 2% and 10%
+        else:
+            final_sl = context.dynamic_sl_pct
+
+        # 4. Split TP / Runner (Optimization N°2)
+        if self.config.runner_enabled and context.is_high_liquidity:
+            tp_size = round(real_size * self.config.tp_split_ratio, 4)
+            runner_size = round(real_size - tp_size, 4)
+            
+            tp_price = real_entry * (1 + context.dynamic_tp_pct / 100)
+            self.executor.place_take_profit_order(symbol, tp_size, tp_price)
+            logger.info(f"🏃 Split Runner Activated: {tp_size} for TP, {runner_size} for Runner")
+        else:
+            tp_price = real_entry * (1 + context.dynamic_tp_pct / 100)
+            self.executor.place_take_profit_order(symbol, real_size, tp_price)
         
-        # Logging (Audit #V9.7: Use AssetClass Enum)
+        # Logging
         self.persistence.log_trade_open(
             trade_id=trade_id, symbol=symbol, asset_class=AssetClass.CRYPTO.value, side="buy",
             entry_price=real_entry, size=real_size, capital=base_capital,
-            strategy=f"V9_{context.regime.value}", 
-            tp_pct=context.dynamic_tp_pct, sl_pct=context.dynamic_sl_pct,
+            strategy=f"V10_{context.regime.value}", 
+            tp_pct=context.dynamic_tp_pct, sl_pct=final_sl,
             ai_decision=ai['decision'], ai_reason=ai['reason'],
             context=context
         )
         
-        return {"symbol": symbol, "status": "LONG_OPEN", "id": trade_id, "tp": context.dynamic_tp_pct, "sl": context.dynamic_sl_pct}
+        return {
+            "symbol": symbol, 
+            "status": "LONG_OPEN", 
+            "id": trade_id, 
+            "tp": context.dynamic_tp_pct, 
+            "sl": final_sl,
+            "confidence": context.confidence_score
+        }
 
     def _check_volume(self, ohlcv: List) -> bool:
         if len(ohlcv) < 20: return True
