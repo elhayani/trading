@@ -215,6 +215,47 @@ def is_golden_window(timestamp_iso=None):
         logger.error(f"Golden Window check error: {e}")
         return False
 
+# --- V8 GLOBAL CONTEXT CACHE ---
+def fetch_global_market_context(exchange):
+    """
+    🏛️ Empire V8 Core: Fetch all global data ONCE
+    Reduces API calls and ensures consistency across all 8 assets.
+    """
+    logger.info("🌍 Fetching Global Market Context (V8 Cache)...")
+    
+    # 1. Balance & Slots
+    balance = exchange.get_balance_usdt()
+    positions_count = exchange.get_open_positions_count()
+    max_slots = get_max_slots(balance)
+    
+    # 2. Circuit Breaker (BTC Performance)
+    cb_can_trade, cb_size_mult, cb_level, btc_24h, btc_7d = check_circuit_breaker(exchange)
+    
+    # 3. BTC Crash Filter (1h)
+    btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
+    btc_1h_change = 0
+    if btc_ohlcv and len(btc_ohlcv) >= 2:
+        btc_1h_change = (btc_ohlcv[-1][4] - btc_ohlcv[-2][4]) / btc_ohlcv[-2][4]
+    
+    # 4. VIX Filter
+    vix_can_trade, vix_mult, vix_val = check_vix_filter()
+    
+    # 5. Golden Window
+    golden = is_golden_window()
+    
+    context = {
+        "balance": balance,
+        "current_trades": positions_count,
+        "max_slots": max_slots,
+        "cb": {"can_trade": cb_can_trade, "multiplier": cb_size_mult, "level": cb_level, "24h": btc_24h, "7d": btc_7d},
+        "btc_1h": btc_1h_change,
+        "vix": {"can_trade": vix_can_trade, "multiplier": vix_mult, "value": vix_val},
+        "is_golden": golden
+    }
+    
+    logger.info(f"✅ V8 Context Ready: Slots {positions_count}/{max_slots} | VIX: {vix_val:.1f} | BTC 24h: {btc_24h:.2%}")
+    return context
+
 def check_circuit_breaker(exchange):
     """
     🛡️ CIRCUIT BREAKER (Leçon 2022 - FTX/Luna Crash Protection)
@@ -894,12 +935,11 @@ def lambda_handler(event, context):
         
         exchange = ExchangeConnector('binance', api_key=api_key, secret=secret, testnet=testnet)
         
-        # 🔥 V7 DYNAMIC SLOTS
-        balance_usdt = exchange.get_balance_usdt()
-        current_trades = exchange.get_open_positions_count()
-        max_slots = get_max_slots(balance_usdt)
-        
-        logger.info(f"🏛️ EMPIRE V7 | Capital: ${balance_usdt:.2f} | Slots Active: {current_trades}/{max_slots}")
+        # 🔥 V8 GLOBAL CONTEXT (Architecture Context-Aware)
+        # We fetch EVERYTHING global once, before the loop
+        g_ctx = fetch_global_market_context(exchange)
+        current_trades = g_ctx['current_trades']
+        max_slots = g_ctx['max_slots']
         
         for raw_symbol in symbols_to_check:
             symbol = raw_symbol.strip()
@@ -907,7 +947,7 @@ def lambda_handler(event, context):
             
             # Dynamic classification (similar to Dashboard API)
             asset_class = classify_asset(symbol)
-            logger.info(f"🚀 Empire V4 Hybrid | Target: {symbol} | Class: {asset_class}")
+            logger.info(f"� Processing {symbol} ({asset_class})")
             
             try:
                 # 1. GESTION DES SORTIES (Priorité Absolue)
@@ -923,32 +963,17 @@ def lambda_handler(event, context):
                     results.append({"symbol": symbol, "status": "SLOTS_FULL", "slots": f"{current_trades}/{max_slots}"})
                     continue
 
-                # 2. 🛡️ CIRCUIT BREAKER CHECK (Leçon 2022 - 3 niveaux)
-                cb_can_trade, cb_size_mult, cb_level, btc_24h, btc_7d = check_circuit_breaker(exchange)
-                
-                if not cb_can_trade:
-                    if cb_level == "L3_SURVIVAL":
-                        logger.critical(f"🚨 SURVIVAL MODE - Consider liquidating risky positions!")
-                    results.append({"symbol": symbol, "status": f"BLOCKED_CB_{cb_level}", "btc_24h": f"{btc_24h:.2%}", "btc_7d": f"{btc_7d:.2%}"})
+                # 2. 🛡️ CIRCUIT BREAKER CHECK (V8: From Cache)
+                if not g_ctx['cb']['can_trade']:
+                    if g_ctx['cb']['level'] == "L3_SURVIVAL":
+                        logger.critical(f"🚨 SURVIVAL MODE ACTIVE - BTC Crash!")
+                    results.append({"symbol": symbol, "status": f"BLOCKED_CB_{g_ctx['cb']['level']}"})
                     continue
                 
-                # 2.5 FILTRE DE CORRÉLATION BTC (Crash horaire)
-                btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
-                
-                if not btc_ohlcv or len(btc_ohlcv) < 2:
-                    btc_change = 0 # Assume stable if no data, or skip? Better skip to be safe?
-                    # Actually if BTC data missing, might mean exchange issues.
-                    # Let's assume 0 change but log warning
-                    logger.warning("⚠️ BTC 1h data missing. Assuming stable.")
-                    btc_change = 0
-                else:
-                    current_close = btc_ohlcv[-1][4]
-                    prev_close = btc_ohlcv[-2][4] 
-                    btc_change = (current_close - prev_close) / prev_close
-                
-                if btc_change < BTC_CRASH_THRESHOLD:
-                    logger.warning(f"🚨 BTC CRASH ({btc_change:.2%}). Buys blocked.")
-                    results.append({"symbol": symbol, "status": "SKIPPED_BTC_CRASH", "btc_change": f"{btc_change:.2%}"})
+                # 2.5 FILTRE DE CORRÉLATION BTC (V8: From Cache)
+                if g_ctx['btc_1h'] < BTC_CRASH_THRESHOLD:
+                    logger.warning(f"🚨 BTC CRASH ({g_ctx['btc_1h']:.2%}). Buys blocked.")
+                    results.append({"symbol": symbol, "status": "SKIPPED_BTC_CRASH", "btc_change": f"{g_ctx['btc_1h']:.2%}"})
                     continue
 
                 # 3. CONTEXTE & LIMITES
@@ -962,10 +987,9 @@ def lambda_handler(event, context):
                         results.append({"symbol": symbol, "status": "SKIPPED_COOLDOWN"})
                         continue
 
-                # 🔥 3.5 VIX FILTER (Don't trade in extreme volatility)
-                can_trade, size_multiplier, vix_value = check_vix_filter()
-                if not can_trade:
-                    results.append({"symbol": symbol, "status": "SKIPPED_VIX_HIGH", "vix": vix_value})
+                # 🔥 3.5 VIX FILTER (V8: From Cache)
+                if not g_ctx['vix']['can_trade']:
+                    results.append({"symbol": symbol, "status": "SKIPPED_VIX_HIGH", "vix": g_ctx['vix']['value']})
                     continue
 
                 # 4. ANALYSE & SIGNAL
@@ -978,8 +1002,8 @@ def lambda_handler(event, context):
                 rsi = analysis['indicators']['rsi']
                 current_price = analysis['current_price']
 
-                # 5. 🎯 DYNAMIC RSI THRESHOLD (based on market regime)
-                dynamic_rsi_threshold, market_regime = get_dynamic_rsi_threshold(cb_level, btc_7d, symbol)
+                # 5. 🎯 DYNAMIC RSI THRESHOLD (V8: Use Cache BTC 7d)
+                dynamic_rsi_threshold, market_regime = get_dynamic_rsi_threshold(g_ctx['cb']['level'], g_ctx['cb']['7d'], symbol)
                 
                 # 🎯 V5.1 Micro-Corridors Override (Time-Based Optimization)
                 corridor_risk_mult = 1.0
@@ -997,9 +1021,8 @@ def lambda_handler(event, context):
                         corridor_name = c_params.get('name', 'Standard')
                         dynamic_rsi_threshold = p.get('rsi_threshold', dynamic_rsi_threshold)
                         
-                # 🦁 GOLDEN WINDOW Check
-                timestamp_iso = event.get('timestamp') or get_paris_time().isoformat()
-                in_golden_window = is_golden_window(timestamp_iso)
+                # 🦁 GOLDEN WINDOW Check (V8: Use Cache)
+                in_golden_window = g_ctx['is_golden']
                 
                 # 🔥 V7: Adaptive volume threshold per asset class
                 required_volume = get_volume_threshold_for_asset(asset_class)
@@ -1053,13 +1076,13 @@ def lambda_handler(event, context):
                     portfolio_stats.update({
                         'signal_strength': signal_strength,
                         'rsi_4h': rsi_4h,
-                        'vix': vix_value,
+                        'vix': g_ctx['vix']['value'],
                         'dynamic_threshold': dynamic_rsi_threshold
                     })
                     
                     decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
                     if decision.get('decision') == "CONFIRM":
-                        final_size_mult = size_multiplier * cb_size_mult * corridor_risk_mult
+                        final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
                         adjusted_capital, confidence = calculate_dynamic_position_size(
                             base_capital, rsi, signal_strength, vol_ratio, momentum_trend
@@ -1114,7 +1137,7 @@ def lambda_handler(event, context):
                     
                     decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
                     if decision.get('decision') == "CONFIRM":
-                        final_size_mult = size_multiplier * cb_size_mult * corridor_risk_mult
+                        final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
                         adjusted_capital, confidence = calculate_dynamic_position_size(
                             base_capital, rsi, signal_strength, vol_ratio, momentum_trend
