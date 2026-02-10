@@ -36,7 +36,7 @@ def get_paris_time():
     return datetime.now(timezone.utc) + timedelta(hours=1)
 
 # Asset classification 
-COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER', 'USOIL']
+COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER', 'USOIL', 'OIL']
 FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
 INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30', 'SPX']
 

@@ -93,7 +93,7 @@ class V4TradingStack(Stack):
                 "API_KEY": "8GMSKB5dEktu58yrd3P5NCNabI9mDHIY8zpvnO7ZXsIW3NnEzjD7Ppf5cZeoOCnC",
                 "SECRET_KEY": "2V89JGWnqPdEL1ilbwx1va6r14Lc9g78ZufY3OJdQrjhRdZhE1DTc3nVBI6Y7sju",
                 "CAPITAL": "1000",
-                "SYMBOLS": "SOL/USDT,PAXG/USDT,XAG/USDT,SPX/USDT",
+                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
                 "CHECK_INTERVAL": "3600",  # 1 hour
                 "EXCHANGE": "binance"
             },
@@ -176,7 +176,7 @@ class V4TradingStack(Stack):
             timeout=Duration.minutes(1),
             memory_size=256,
             environment={
-                "SYMBOLS": "SOL/USDT,PAXG/USDT,XAG/USDT,SPX/USDT",
+                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
                 "TRADING_MODE": "live",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
             },
