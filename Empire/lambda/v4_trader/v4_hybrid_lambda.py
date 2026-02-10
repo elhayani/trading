@@ -21,62 +21,63 @@ from botocore.exceptions import ClientError
 
 # Import custom modules
 from market_analysis import analyze_market
-from news_fetcher import get_news_context, get_full_context
+from news_fetcher import get_news_context
 from exchange_connector import ExchangeConnector
 
 # ==================== CONFIGURATION ====================
 
 @dataclass
 class TradingConfig:
-    """Centralized configuration with validation"""
+    """Centralized configuration with validation (Audit #V9.4)"""
     
-    # Risk Management
-    capital_per_trade: float = 200.0
-    max_slots: int = 3
+    # Risk Management & Dynamic Allocation
+    capital_pct: float = 0.05             # 5% of balance per trade
+    max_slots_calm: int = 5               # Up to 5 slots in calm markets
+    max_slots_volatile: int = 2           # Min 2 slots when volatile
     max_risk_per_trade_pct: float = 0.02  # 2%
     max_daily_loss_pct: float = 0.05      # 5%
     max_drawdown_pct: float = 0.15        # 15%
     
+    # Dynamic TP/SL Ranges
+    target_tp_range: Tuple[float, float] = (4.0, 12.0)  # Min/Max TP
+    target_sl_range: Tuple[float, float] = (-2.0, -5.0) # Tight/Wide SL
+    
     # Entry/Exit Thresholds
     rsi_buy_threshold: float = 42.0
     rsi_sell_threshold: float = 78.0
-    stop_loss_pct: float = -3.5
-    hard_tp_pct: float = 8.0
     trailing_tp_pct: float = 1.5
     
     # Market Filters
     btc_crash_threshold: float = -0.08
-    vix_max: float = 30.0
+    vix_max: float = 35.0                 # Slightly relaxed for diversification
     vix_reduce: float = 25.0
     
-    # Circuit Breakers
+    # Circuit Breakers (Audit #V9.6: Removed unused cooldown/MTF)
     cb_level_1: float = -0.05   # -5%
     cb_level_2: float = -0.10   # -10%
     cb_level_3: float = -0.20   # -20%
-    cb_cooldown_hours: float = 48.0
     
-    # Features
-    volume_confirmation_enabled: bool = True
-    multi_timeframe_enabled: bool = True
-    ai_confirmation_enabled: bool = True
+    # Features (Audit #V9.8: Env-loadable)
+    volume_confirmation_enabled: bool = os.getenv('VOLUME_CONFIRM', 'true').lower() == 'true'
+    ai_confirmation_enabled: bool = os.getenv('AI_CONFIRM', 'true').lower() == 'true'
     
     @classmethod
     def from_env(cls):
         """Load configuration from environment variables"""
         return cls(
-            capital_per_trade=float(os.getenv('CAPITAL', '200')),
-            max_slots=int(os.getenv('MAX_SLOTS', '3')),
+            capital_pct=float(os.getenv('CAPITAL_PCT', '0.05')),
+            max_slots_calm=int(os.getenv('MAX_SLOTS_CALM', '5')),
             rsi_buy_threshold=float(os.getenv('RSI_THRESHOLD', '42')),
-            stop_loss_pct=float(os.getenv('STOP_LOSS', '-3.5')),
-            hard_tp_pct=float(os.getenv('HARD_TP', '8.0')),
+            volume_confirmation_enabled=os.getenv('VOLUME_CONFIRM', 'true').lower() == 'true',
+            ai_confirmation_enabled=os.getenv('AI_CONFIRM', 'true').lower() == 'true'
         )
     
     def validate(self):
         """Validate configuration constraints"""
-        assert 0 < self.max_risk_per_trade_pct <= 0.05, "Risk per trade must be 0-5%"
-        assert 0 < self.max_daily_loss_pct <= 0.10, "Daily loss limit must be 0-10%"
-        # assert self.stop_loss_pct < 0, "Stop loss must be negative" # Logic depends on sign
-        assert self.hard_tp_pct > 0, "Take profit must be positive"
+        assert 0 < self.capital_pct <= 0.15, "Capital percentage must be 0.1-15%"
+        assert 1 <= self.max_slots_volatile <= self.max_slots_calm, "Slot config error"
+        assert self.target_tp_range[0] < self.target_tp_range[1], "TP range error"
+        assert self.target_sl_range[0] > self.target_sl_range[1], "SL range error" # -2 > -5
 
 
 class MarketRegime(Enum):
@@ -129,8 +130,11 @@ class AWSClients:
         if self._initialized:
             return
             
-        self.dynamodb = boto3.resource('dynamodb')
+        # Configuration
+        self.region = os.getenv('AWS_REGION', 'us-east-1')
+        self.dynamodb = boto3.resource('dynamodb', region_name=self.region)
         self.bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+        self.secretsmanager = boto3.client('secretsmanager', region_name=self.region)
         
         # Tables
         self.trades_table = self.dynamodb.Table(
@@ -141,23 +145,55 @@ class AWSClients:
         )
         
         self._initialized = True
+    
+    def check_kill_switch(self) -> bool:
+        """Check if global emergency stop is active"""
+        try:
+            response = self.state_table.get_item(Key={'trader_id': 'GLOBAL_KILL'})
+            item = response.get('Item')
+            if item and item.get('enabled') is True:
+                logger.critical("🚨 GLOBAL KILL SWITCH DETECTED - ABORTING")
+                return True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check kill switch: {e}")
+            return False
+
+    def get_secret(self, secret_name: str) -> Dict:
+        """Fetch secret from AWS Secrets Manager with mandatory check in production"""
+        if not secret_name:
+            if os.getenv('TRADING_MODE') == 'live':
+                logger.critical("🚨 PRODUCTION ERROR: SECRET_NAME is mandatory in live mode!")
+                raise ValueError("SECRET_NAME missing in live environment")
+            return {}
+            
+        try:
+            response = self.secretsmanager.get_secret_value(SecretId=secret_name)
+            if 'SecretString' in response:
+                return json.loads(response['SecretString'])
+            return {}
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch secret {secret_name}: {e}")
+            return {}
 
 
 # ==================== SLOT MANAGER ====================
 
 class SlotManager:
-    """Atomic slot management with guaranteed cleanup"""
+    """Atomic slot management with TTL-based leak protection (Audit #V9.1)"""
     
-    def __init__(self, state_table, max_slots: int):
-        self.state_table = state_table
+    def __init__(self, aws, max_slots: int, execution_id: str):
+        self.aws = aws
         self.max_slots = max_slots
+        self.execution_id = execution_id
         self.slot_acquired = False
     
     def acquire(self) -> bool:
-        """Atomically acquire a trading slot"""
+        """Atomically acquire a trading slot using a counter + heartbeat"""
         try:
-            self.state_table.update_item(
-                Key={'trader_id': 'GLOBAL_LOCK'},
+            # 1. Atomic Counter Update
+            self.aws.state_table.update_item(
+                Key={'trader_id': 'GLOBAL_SLOTS'},
                 UpdateExpression="SET ActiveSlots = if_not_exists(ActiveSlots, :zero) + :one",
                 ConditionExpression="if_not_exists(ActiveSlots, :zero) < :max",
                 ExpressionAttributeValues={
@@ -166,8 +202,18 @@ class SlotManager:
                     ':max': self.max_slots
                 }
             )
+            
+            # 2. Register Heartbeat (for future cleanup of orphans)
+            ttl = int((datetime.now(timezone.utc) + timedelta(hours=6)).timestamp())
+            self.aws.state_table.put_item(Item={
+                'trader_id': f"HEARTBEAT#{self.execution_id}",
+                'Type': 'SLOT_RESERVATION',
+                'TTL': ttl,
+                'Timestamp': datetime.now(timezone.utc).isoformat()
+            })
+            
             self.slot_acquired = True
-            logger.info(f"✅ Slot acquired ({self.max_slots} max)")
+            logger.info(f"✅ Slot acquired ({self.execution_id})")
             return True
             
         except ClientError as e:
@@ -178,18 +224,26 @@ class SlotManager:
             return False
     
     def release(self):
-        """Release acquired slot"""
+        """Release acquired slot and cleanup heartbeat"""
+        if not self.slot_acquired:
+            return
+            
         try:
-            self.state_table.update_item(
-                Key={'trader_id': 'GLOBAL_LOCK'},
-                UpdateExpression="SET ActiveSlots = if_not_exists(ActiveSlots, :one) - :one",
+            # 1. Decrement Counter
+            self.aws.state_table.update_item(
+                Key={'trader_id': 'GLOBAL_SLOTS'},
+                UpdateExpression="SET ActiveSlots = ActiveSlots - :one",
                 ConditionExpression="ActiveSlots > :zero",
                 ExpressionAttributeValues={
                     ':one': 1,
                     ':zero': 0
                 }
             )
-            logger.info("🔓 Slot released")
+            
+            # 2. Delete Heartbeat
+            self.aws.state_table.delete_item(Key={'trader_id': f"HEARTBEAT#{self.execution_id}"})
+            
+            logger.info(f"🔓 Slot released ({self.execution_id})")
             
         except Exception as e:
             logger.error(f"❌ Slot release failed: {e}")
@@ -243,6 +297,10 @@ class MarketContext:
     daily_pnl: float
     daily_pnl_pct: float
     
+    # Dynamic Targets (Audit #V9.4)
+    dynamic_tp_pct: float
+    dynamic_sl_pct: float
+    
     @property
     def total_multiplier(self) -> float:
         """Combined risk multiplier"""
@@ -265,36 +323,43 @@ class MarketStateBuilder:
         self.aws = AWSClients()
     
     def build(self) -> MarketContext:
-        """Build complete market context with retries"""
-        logger.info("🔍 Building market context...")
+        """Build complete market context with adaptive logic (Audit #V9.4)"""
+        logger.info("🔍 Building adaptive market context...")
         
-        # 1. Portfolio state
-        balance = self._get_balance_safe()
-        open_positions = self._get_open_positions_safe()
-        max_slots = self._calculate_max_slots(balance)
-        
-        # 2. BTC context
+        # 1. BTC & VIX (Core inputs)
         btc_24h, btc_7d, btc_1h = self._get_btc_performance()
-        
-        # 3. VIX
         vix_value, vix_mult = self._get_vix_safe()
         
-        # 4. Circuit breaker
+        # 2. Portfolio state
+        balance = self._get_balance_safe()
+        open_positions = self._get_open_positions_safe()
+        max_slots = self._calculate_max_slots(balance, vix_value)
+        
+        # 3. Dynamic Targets (Volatility based)
+        # Scale 0 to 1 between VIX 15 and 35
+        vix_factor = max(0, min(1, (vix_value - 15) / 20))
+        
+        # TP: Higher during high vol
+        tp_min, tp_max = self.config.target_tp_range
+        dyn_tp = tp_min + vix_factor * (tp_max - tp_min)
+        
+        # SL: Tighter during high vol (-5% calm -> -2% volatile)
+        sl_wide, sl_tight = self.config.target_sl_range[1], self.config.target_sl_range[0]
+        dyn_sl = sl_wide + vix_factor * (sl_tight - sl_wide)
+        
+        # 4. Circuit breaker & Diversification logic
         cb_mult, cb_level = self._get_circuit_breaker_status(btc_24h, btc_7d)
-        
-        # 5. Golden window
         is_golden = self._is_golden_window()
-        
-        # 6. Regime
         regime = self._determine_regime(btc_24h, btc_7d, btc_1h, vix_value, cb_level)
-        
-        # 7. Daily performance
         daily_pnl, daily_pnl_pct = self._get_daily_performance(balance)
         
-        # 8. Can trade?
+        # Reduced blocking if diversified (open_positions >= 2)
+        # allow trading in L2_HALT if diversified and PnL is okay.
+        diversified_protection = (open_positions >= 2 and daily_pnl_pct > -0.02)
+        
         can_trade = (
             cb_level != "L3_SURVIVAL" and
-            cb_level != "L2_HALT" and
+            (cb_level != "L2_HALT" or diversified_protection) and # Relaxed CB
             vix_value < self.config.vix_max and
             daily_pnl_pct > -self.config.max_daily_loss_pct
         )
@@ -318,10 +383,12 @@ class MarketStateBuilder:
             can_trade=can_trade,
             risk_blocked=risk_blocked,
             daily_pnl=daily_pnl,
-            daily_pnl_pct=daily_pnl_pct
+            daily_pnl_pct=daily_pnl_pct,
+            dynamic_tp_pct=round(dyn_tp, 2),
+            dynamic_sl_pct=round(dyn_sl, 2)
         )
         
-        logger.info(f"✅ Context: {regime.value} | VIX: {vix_value:.1f} | Can trade: {can_trade}")
+        logger.info(f"✅ Context: {regime.value} | TP: {dyn_tp:.1f}% | SL: {dyn_sl:.1f}% | Slots: {max_slots}")
         return context
     
     def _get_balance_safe(self) -> float:
@@ -345,11 +412,19 @@ class MarketStateBuilder:
             logger.error(f"Failed to get open positions: {e}")
             return 0
     
-    def _calculate_max_slots(self, balance: float) -> int:
-        """Calculate max slots based on balance"""
-        if balance < 1000:
-            return 1
-        return min(int(balance / 1000), self.config.max_slots)
+    def _calculate_max_slots(self, balance: float, vix: float) -> int:
+        """Calculate max slots based on balance & market calm (Audit #V9.4)"""
+        # Base slots (1 per $4k budget to keep it conservative but scalable)
+        base_slots = max(1, int(balance / 4000))
+        
+        # Calm market (VIX < 20) -> Allow up to config max (ex: 5)
+        if vix < 20:
+            return min(base_slots + 2, self.config.max_slots_calm)
+        # Volatile market (VIX > 28) -> Restrict slots
+        elif vix > 28:
+            return min(base_slots, self.config.max_slots_volatile)
+        
+        return min(base_slots + 1, 3)
     
     def _get_btc_performance(self) -> Tuple[float, float, float]:
         """Get BTC performance metrics"""
@@ -524,20 +599,32 @@ class MarketStateBuilder:
         return MarketRegime.RANGE_BOUND
     
     def _get_daily_performance(self, balance: float) -> Tuple[float, float]:
-        """Calculate today's PnL"""
+        """Calculate today's PnL (Optimized GSI Query #V9.5)"""
         try:
-            today_start = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ).isoformat()
+            today_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
-            # 🛠️ V8.6 Optimized Index: GSI_OpenByPair (Status PK)
+            # 🛠️ GSI_ExitDate: Status (PK) + ExitDate (SK) 
             response = self.aws.trades_table.query(
-                IndexName='GSI_OpenByPair',
-                KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('CLOSED'),
-                FilterExpression=boto3.dynamodb.conditions.Attr('ExitTime').gte(today_start)
+                IndexName='GSI_ExitDate',
+                KeyConditionExpression=(
+                    boto3.dynamodb.conditions.Key('Status').eq('CLOSED') &
+                    boto3.dynamodb.conditions.Key('ExitDate').eq(today_date)
+                )
             )
             
             trades = response.get('Items', [])
+            
+            # 🔄 Handle Pagination (Audit #V9.6)
+            while 'LastEvaluatedKey' in response:
+                response = self.aws.trades_table.query(
+                    IndexName='GSI_ExitDate',
+                    KeyConditionExpression=(
+                        boto3.dynamodb.conditions.Key('Status').eq('CLOSED') &
+                        boto3.dynamodb.conditions.Key('ExitDate').eq(today_date)
+                    ),
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                trades.extend(response.get('Items', []))
             daily_pnl = sum(float(t.get('PnL', 0)) for t in trades)
             daily_pnl_pct = daily_pnl / balance if balance > 0 else 0
             
@@ -645,48 +732,7 @@ class TradeExecutor:
             raise
 
 
-# ==================== AI ANALYST (Empire V8 Core) ====================
-
-def ask_bedrock(symbol, rsi, news_context, portfolio_stats, history):
-    """Query Bedrock AI for sentiment confirmation (Audit #3.3)"""
-    aws = AWSClients()
-    
-    prompt = f"""
-Vous êtes l'Analyste de Flux de Nouvelles pour l'Empire V9 (Production Optimized).
-LA DÉCISION TECHNIQUE EST DÉJÀ PRISE : Le système a confirmé que {symbol} est statistiquement prêt pour un achat (RSI à {rsi:.1f}).
-
-VOTRE MISSION :
-1. Examiner les nouvelles récentes pour {symbol}.
-2. Détecter toute nouvelle CATASTROPHIQUE (hack, faillite, exploit) invalidant le trade.
-3. NE PAS juger le RSI ou les indicateurs techniques.
-
-NEWS :
-{news_context}
-
-RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
-"""
-    try:
-        response = aws.bedrock.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 200,
-                "temperature": 0,
-                "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-            })
-        )
-        result = json.loads(response['body'].read())
-        completion = result['content'][0]['text'].strip()
-        
-        # JSON Extraction
-        start = completion.find('{')
-        end = completion.rfind('}') + 1
-        if start != -1:
-            return json.loads(completion[start:end])
-        return {"decision": "CONFIRM", "reason": "AI_FORMAT_ERROR"}
-    except Exception as e:
-        logger.warning(f"⚠️ Bedrock Error: {e}. Fallback to CONFIRM.")
-        return {"decision": "CONFIRM", "reason": "AI_API_FALLBACK"}
+# ==================== PERSISTENCE ====================
 
 
 # ==================== PERSISTENCE ====================
@@ -710,9 +756,10 @@ class TradePersistence:
         tp_pct: float,
         sl_pct: float,
         ai_decision: str,
-        ai_reason: str
+        ai_reason: str,
+        context: MarketContext
     ):
-        """Log new trade opening"""
+        """Log new trade opening with full context (Audit #V9.2)"""
         try:
             timestamp = datetime.now(timezone.utc).isoformat()
             
@@ -724,16 +771,17 @@ class TradePersistence:
                 'Pair': symbol,
                 'Type': side.upper(),
                 'Strategy': strategy,
-                'EntryPrice': str(entry_price),
-                'Size': str(size),
-                'Cost': str(capital),
-                'Value': str(capital),
-                'TP': str(tp_pct),
-                'SL': str(sl_pct),
+                'EntryPrice': Decimal(str(round(entry_price, 8))),
+                'Size': Decimal(str(round(size, 8))),
+                'Cost': Decimal(str(round(capital, 2))),
+                'Value': Decimal(str(round(capital, 2))),
+                'TP': Decimal(str(round(tp_pct, 2))),
+                'SL': Decimal(str(round(sl_pct, 2))),
                 'Status': 'OPEN',
                 'AI_Decision': ai_decision,
                 'AI_Reason': ai_reason,
-                'PeakPnL': '0'
+                'PeakPnL': Decimal('0'),
+                'MarketContext': context.to_dict() # 📊 Gold mine for post-trade analysis
             }
             
             self.aws.trades_table.put_item(Item=item)
@@ -749,31 +797,42 @@ class TradePersistence:
         pnl: float,
         reason: str
     ):
-        """Log trade closure"""
+        """Log trade closure with Anti-Double-Close protection"""
         try:
-            exit_time = datetime.now(timezone.utc).isoformat()
+            exit_time = datetime.now(timezone.utc)
+            exit_time_iso = exit_time.isoformat()
+            exit_date = exit_time.strftime('%Y-%m-%d')
             
             self.aws.trades_table.update_item(
                 Key={'TradeId': trade_id},
                 UpdateExpression=(
-                    "SET #status = :status, "
+                    "SET #status = :closed, "
                     "PnL = :pnl, "
                     "ExitPrice = :exit_price, "
                     "ExitTime = :exit_time, "
+                    "ExitDate = :exit_date, "
                     "ExitReason = :reason"
                 ),
+                ConditionExpression="#status = :open", # 🛡️ ANTI-DOUBLE CLOSE
                 ExpressionAttributeNames={'#status': 'Status'},
                 ExpressionAttributeValues={
-                    ':status': 'CLOSED',
-                    ':pnl': str(pnl),
-                    ':exit_price': str(exit_price),
-                    ':exit_time': exit_time,
+                    ':closed': 'CLOSED',
+                    ':open': 'OPEN',
+                    ':pnl': Decimal(str(round(pnl, 2))),
+                    ':exit_price': Decimal(str(round(exit_price, 8))),
+                    ':exit_time': exit_time_iso,
+                    ':exit_date': exit_date,
                     ':reason': reason
                 }
             )
             
             logger.info(f"💾 Trade closed: {trade_id} | PnL: ${pnl:+.2f}")
             
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"⚠️ Trade {trade_id} already closed or status changed.")
+            else:
+                logger.error(f"Failed to log trade closure: {e}")
         except Exception as e:
             logger.error(f"Failed to log trade closure: {e}")
     
@@ -782,12 +841,13 @@ class TradePersistence:
         symbol: str,
         asset_class: str,
         reason: str,
-        price: float
+        price: float,
+        context: Optional[MarketContext] = None
     ):
-        """Log skipped opportunity"""
+        """Log skipped opportunity with optional context"""
         try:
             timestamp = datetime.now(timezone.utc).isoformat()
-            log_id = f"SKIP-{int(time.time())}"
+            log_id = f"SKIP-{int(time.time())}-{uuid.uuid4().hex[:4]}"
             
             item = {
                 'TradeId': log_id,
@@ -798,9 +858,11 @@ class TradePersistence:
                 'Status': 'SKIPPED',
                 'Type': 'INFO',
                 'ExitReason': reason,
-                'EntryPrice': str(price),
+                'EntryPrice': Decimal(str(round(price, 8))),
                 'TTL': int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
             }
+            if context:
+                item['MarketContext'] = context.to_dict()
             
             self.aws.trades_table.put_item(Item=item)
             
@@ -813,13 +875,29 @@ class TradePersistence:
 class TradingEngine:
     """Main trading orchestrator"""
     
-    def __init__(self, config: TradingConfig):
+    def __init__(self, config: TradingConfig, execution_id: str = "local"):
         self.config = config
+        self.execution_id = execution_id
+        self.aws = AWSClients()
+        self.active_slots: Dict[str, SlotManager] = {} # 🛡️ Slot persistence (Audit #V9.5)
         
-        # Load credentials from env
+        # Load credentials (SECURE: Secrets Manager Mandatory in Prod)
+        trading_mode = os.environ.get('TRADING_MODE', 'test')
+        secret_name = os.environ.get('SECRET_NAME')
+        
+        if not secret_name and trading_mode == 'live':
+            logger.critical("🛑 KILL SWITCH: SECRET_NAME is missing in LIVE mode.")
+            raise RuntimeError("Mandatory SECRET_NAME missing")
+
         api_key = os.environ.get('API_KEY')
         secret = os.environ.get('SECRET_KEY')
-        trading_mode = os.environ.get('TRADING_MODE', 'test')
+        
+        if secret_name:
+            logger.info(f"🛡️ Loading credentials from Secrets Manager: {secret_name}")
+            creds = self.aws.get_secret(secret_name)
+            api_key = creds.get('API_KEY', api_key) or creds.get('apiKey', api_key)
+            secret = creds.get('SECRET_KEY', secret) or creds.get('secret', secret)
+            
         testnet = (trading_mode == 'test' or trading_mode == 'paper')
         
         self.exchange = ExchangeConnector(
@@ -830,14 +908,58 @@ class TradingEngine:
         )
         self.executor = TradeExecutor(self.exchange, config)
         self.persistence = TradePersistence()
-        self.aws = AWSClients()
+        
+        # 🔄 Reconcile slots on startup (Audit #V9.6)
+        # Prevents ActiveSlots drift after Lambda restarts or manual adjustments
+        self._reconcile_slots()
     
+    def _reconcile_slots(self):
+        """Synchronize DynamoDB ActiveSlots with actual OPEN trades in database"""
+        try:
+            logger.info("🔄 Reconciling trading slots...")
+            # Query all trades with Status='OPEN' via Index
+            response = self.aws.trades_table.query(
+                IndexName='GSI_OpenByPair',
+                KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN')
+            )
+            open_trades = response.get('Items', [])
+            
+            # Handle pagination for reconciliation
+            while 'LastEvaluatedKey' in response:
+                response = self.aws.trades_table.query(
+                    IndexName='GSI_OpenByPair',
+                    KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN'),
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                open_trades.extend(response.get('Items', []))
+            
+            actual_count = len(open_trades)
+            logger.info(f"📊 Found {actual_count} open trades in database.")
+            
+            # Atomic update to match reality (Audit #V9.7)
+            # Using update_item with ConditionExpression could be safer but put_item
+            # with LastUpdated is acceptable given the frequency of Lambda execution.
+            self.aws.state_table.put_item(Item={
+                'trader_id': 'GLOBAL_SLOTS',
+                'ActiveSlots': actual_count,
+                'LastUpdated': datetime.now(timezone.utc).isoformat(),
+                'ReconciledBy': self.execution_id
+            })
+            logger.info(f"✅ Slots reconciled: {actual_count} active.")
+            
+        except Exception as e:
+            logger.error(f"❌ Slot reconciliation failed: {e}")
+
     def run_cycle(self, symbol: str):
-        """Run single trading cycle for symbol"""
+        """Run single trading cycle with Kill Switch & Observability"""
         logger.info(f"\n{'='*60}")
-        logger.info(f"🔄 Empire V9 Cycle: {symbol}")
+        logger.info(f"🔄 Empire V9 Cycle: {symbol} | ID: {self.execution_id}")
         logger.info(f"{'='*60}\n")
         
+        # 0. Global Kill Switch check (Audit #V9.3)
+        if self.aws.check_kill_switch():
+            return {"status": "HALTED", "reason": "KILL_SWITCH"}
+
         # 1. Build market context
         try:
             market_builder = MarketStateBuilder(self.exchange, self.config)
@@ -850,7 +972,7 @@ class TradingEngine:
         if not context.can_trade:
             reason = self._get_block_reason(context)
             logger.warning(f"🚫 Global Block: {reason}")
-            self.persistence.log_skip(symbol, "crypto", reason, 0)
+            self.persistence.log_skip(symbol, "crypto", reason, 0, context)
             return {"symbol": symbol, "status": "BLOCKED", "reason": reason}
         
         # 3. Manage exits (Priorité absolue)
@@ -901,9 +1023,10 @@ class TradingEngine:
             
             logger.info(f"📊 {symbol} Position: {pnl_pct:+.2f}%")
             
-            # Logic: Stop Loss / Take Profit / Trailing
-            sl = float(open_trades[0].get('SL', self.config.stop_loss_pct))
-            tp = float(open_trades[0].get('TP', self.config.hard_tp_pct))
+            # Logic: Stop Loss / Take Profit / Trailing (Audit #V9.4)
+            # Use stored TP/SL or safe defaults if legacy trade
+            sl = float(open_trades[0].get('SL', -3.5))
+            tp = float(open_trades[0].get('TP', 8.0))
             
             # 1. Stop Loss
             if pnl_pct <= sl:
@@ -927,7 +1050,7 @@ class TradingEngine:
             return None
     
     def _close_all_v9(self, trades, exit_price, reason):
-        """Helper to close and release slot"""
+        """Helper to close and release slot (Audit #V9.5: Slot Persistence)"""
         symbol = trades[0]['Pair']
         size = sum(float(t['Size']) for t in trades)
         
@@ -939,19 +1062,67 @@ class TradingEngine:
                 cost = float(t['Cost'])
                 pnl = ((exit_price - entry) / entry) * cost
                 self.persistence.log_trade_close(t['TradeId'], exit_price, pnl, reason)
-                
-                # Release atomic slot per trade
-                SlotManager(self.aws.state_table, 1).release()
+            
+            # ✅ CORRECTION : Récupérer l'instance existante ou release direct
+            slot_mgr = self.active_slots.pop(symbol, None)
+            if slot_mgr:
+                slot_mgr.release()
+            else:
+                self._release_slot_direct() 
                 
             return f"CLOSED_{reason}"
         except Exception as e:
             logger.error(f"Close failure: {e}")
             return f"FAILURE_{reason}"
 
+    def _release_slot_direct(self):
+        """Direct fallback release (Audit #V9.5)"""
+        try:
+            self.aws.state_table.update_item(
+                Key={'trader_id': 'GLOBAL_SLOTS'},
+                UpdateExpression="SET ActiveSlots = ActiveSlots - :one",
+                ConditionExpression="ActiveSlots > :zero",
+                ExpressionAttributeValues={':one': 1, ':zero': 0}
+            )
+            logger.info("🔓 Slot released via direct fallback")
+        except Exception as e:
+            logger.error(f"❌ Direct slot release failed: {e}")
+
     def _evaluate_entry(self, symbol: str, context: MarketContext) -> Dict:
-        """Evaluate and execute entry with AI Advisory"""
+        """Evaluate entry (Audit #V9.5: Refactored into specialized methods)"""
         
-        # 1. Technical Analysis
+        # 1. Technical
+        ta_result = self._check_technical_entry(symbol)
+        if ta_result['status'] != "SIGNAL":
+            return ta_result
+
+        # 2. Slot Manager
+        slot_manager = SlotManager(self.aws, context.max_slots, self.execution_id)
+        if not slot_manager.acquire():
+            return {"symbol": symbol, "status": "SKIPPED_SLOTS_FULL"}
+        
+        self.active_slots[symbol] = slot_manager # ✅ Store for closure
+
+        try:
+            # 3. AI Advisory
+            ai_result = self._check_ai_advisory(symbol, ta_result['rsi'])
+            if ai_result['decision'] == "CANCEL":
+                slot_manager.release()
+                del self.active_slots[symbol]
+                self.persistence.log_skip(symbol, AssetClass.CRYPTO.value, f"AI_VETO: {ai_result['reason']}", ta_result['price'], context)
+                return {"symbol": symbol, "status": "AI_VETO", "reason": ai_result['reason']}
+
+            # 4. Finalize Execution
+            return self._execute_v9_entry(symbol, context, ta_result['price'], ai_result)
+
+        except Exception as e:
+            logger.error(f"Entry failed: {e}")
+            slot_manager.release()
+            self.active_slots.pop(symbol, None)
+            return {"symbol": symbol, "status": "ERROR", "msg": str(e)}
+
+    def _check_technical_entry(self, symbol: str) -> Dict:
+        """Isolated Technical Analysis Entry Check"""
         ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=100)
         analysis = analyze_market(ohlcv)
         rsi = analysis['indicators']['rsi']
@@ -961,72 +1132,81 @@ class TradingEngine:
         if rsi >= self.config.rsi_buy_threshold:
             return {"symbol": symbol, "status": "NO_SIGNAL", "rsi": rsi}
         
-        # 2. Volume Confirmation
-        if self.config.volume_confirmation_enabled:
-            vol_ok = self._check_volume(ohlcv)
-            if not vol_ok:
-                return {"symbol": symbol, "status": "LOW_VOLUME"}
-
-        # 3. Slot Acquisition (Atomic)
-        slot_manager = SlotManager(self.aws.state_table, context.max_slots)
-        if not slot_manager.acquire():
-            return {"symbol": symbol, "status": "SKIPPED_SLOTS_FULL"}
+        if self.config.volume_confirmation_enabled and not self._check_volume(ohlcv):
+            return {"symbol": symbol, "status": "LOW_VOLUME"}
             
+        return {"status": "SIGNAL", "rsi": rsi, "price": analysis['current_price']}
+
+    def _check_ai_advisory(self, symbol: str, rsi: float) -> Dict:
+        """Isolated AI Consultation"""
+        if not self.config.ai_confirmation_enabled:
+            return {"decision": "CONFIRM", "reason": "AI_DISABLED"}
+        
+        news_ctx = get_news_context(symbol)
+        return self.ask_bedrock(symbol, rsi, news_ctx)
+
+    def ask_bedrock(self, symbol: str, rsi: float, news_context: str) -> Dict:
+        """Query Bedrock AI for sentiment confirmation (Audit #V9.5)"""
+        prompt = f"""
+Vous êtes l'Analyste de Flux de Nouvelles pour l'Empire V9.
+LA DÉCISION TECHNIQUE EST DÉJÀ PRISE : {symbol} est prêt (RSI: {rsi:.1f}).
+EXAMINEZ LES NEWS : {news_context}
+VOTRE MISSION : Détecter toute nouvelle CATASTROPHIQUE.
+RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
+"""
         try:
-            # 4. AI Advisory (Production Fail-safe)
-            ai_decision = "CONFIRM"
-            ai_reason = "AI_DISABLED"
-            
-            if self.config.ai_confirmation_enabled:
-                news_ctx = get_news_context(symbol)
-                decision = ask_bedrock(symbol, rsi, news_ctx, {}, [])
-                ai_decision = decision.get("decision", "CONFIRM")
-                ai_reason = decision.get("reason", "AI_ANALYSIS_COMPLETE")
-
-            if ai_decision == "CANCEL":
-                slot_manager.release()
-                self.persistence.log_skip(symbol, "crypto", f"AI_VETO: {ai_reason}", analysis['current_price'])
-                return {"symbol": symbol, "status": "AI_VETO", "reason": ai_reason}
-
-            # 5. Position Sizing (Risk Managed)
-            entry_price = analysis['current_price']
-            base_capital = self.config.capital_per_trade * context.total_multiplier
-            
-            # Risk Cap (2% Max Loss)
-            max_risk = context.balance * self.config.max_risk_per_trade_pct
-            potential_loss = base_capital * (abs(self.config.stop_loss_pct) / 100)
-            if potential_loss > max_risk:
-                base_capital = max_risk / (abs(self.config.stop_loss_pct) / 100)
-                logger.info("🛡️ Position size capped by Risk Management (2% limit)")
-            
-            size = round(base_capital / entry_price, 4)
-            
-            # 6. Execution
-            trade_id = f"V9-{uuid.uuid4().hex[:8]}"
-            filled = self.executor.execute_market_order(symbol, 'buy', size)
-            
-            real_entry = float(filled.get('average', entry_price))
-            real_size = float(filled.get('amount', size))
-            
-            # 7. Protect (Take Profit)
-            tp_price = real_entry * (1 + self.config.hard_tp_pct / 100)
-            self.executor.place_take_profit_order(symbol, real_size, tp_price)
-            
-            # 8. Persistence
-            self.persistence.log_trade_open(
-                trade_id=trade_id, symbol=symbol, asset_class="crypto", side="buy",
-                entry_price=real_entry, size=real_size, capital=base_capital,
-                strategy=f"V9_{context.regime.value}", 
-                tp_pct=self.config.hard_tp_pct, sl_pct=self.config.stop_loss_pct,
-                ai_decision=ai_decision, ai_reason=ai_reason
+            response = self.aws.bedrock.invoke_model(
+                modelId="anthropic.claude-3-haiku-20240307-v1:0",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 200,
+                    "temperature": 0,
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                })
             )
-            
-            return {"symbol": symbol, "status": "LONG_OPEN", "id": trade_id}
-
+            result = json.loads(response['body'].read())
+            completion = result['content'][0]['text']
+            start = completion.find('{')
+            end = completion.rfind('}') + 1
+            return json.loads(completion[start:end]) if start != -1 else {"decision": "CONFIRM", "reason": "FORMAT_ERROR"}
         except Exception as e:
-            logger.error(f"Entry execution failed for {symbol}: {e}")
-            slot_manager.release()
-            return {"symbol": symbol, "status": "ERROR", "msg": str(e)}
+            logger.warning(f"⚠️ Bedrock fallback: {e}")
+            return {"decision": "CONFIRM", "reason": "AI_API_FALLBACK"}
+
+    def _execute_v9_entry(self, symbol: str, context: MarketContext, entry_price: float, ai: Dict) -> Dict:
+        """Isolated Entry Execution and Database Logging"""
+        # Position Sizing
+        base_capital = context.balance * self.config.capital_pct * context.total_multiplier
+        max_risk = context.balance * self.config.max_risk_per_trade_pct
+        potential_loss = base_capital * (abs(context.dynamic_sl_pct) / 100)
+        
+        if potential_loss > max_risk:
+            base_capital = max_risk / (abs(context.dynamic_sl_pct) / 100)
+            logger.info(f"🛡️ Size capped (Max Risk: ${max_risk:.2f})")
+        
+        size = round(base_capital / entry_price, 4)
+        trade_id = f"V9-{uuid.uuid4().hex[:8]}"
+        
+        # Order Execution
+        filled = self.executor.execute_market_order(symbol, 'buy', size)
+        real_entry = float(filled.get('average', entry_price))
+        real_size = float(filled.get('amount', size))
+        
+        # TP Placement
+        tp_price = real_entry * (1 + context.dynamic_tp_pct / 100)
+        self.executor.place_take_profit_order(symbol, real_size, tp_price)
+        
+        # Logging (Audit #V9.7: Use AssetClass Enum)
+        self.persistence.log_trade_open(
+            trade_id=trade_id, symbol=symbol, asset_class=AssetClass.CRYPTO.value, side="buy",
+            entry_price=real_entry, size=real_size, capital=base_capital,
+            strategy=f"V9_{context.regime.value}", 
+            tp_pct=context.dynamic_tp_pct, sl_pct=context.dynamic_sl_pct,
+            ai_decision=ai['decision'], ai_reason=ai['reason'],
+            context=context
+        )
+        
+        return {"symbol": symbol, "status": "LONG_OPEN", "id": trade_id, "tp": context.dynamic_tp_pct, "sl": context.dynamic_sl_pct}
 
     def _check_volume(self, ohlcv: List) -> bool:
         if len(ohlcv) < 20: return True
@@ -1040,7 +1220,10 @@ class TradingEngine:
 # ==================== LAMBDA HANDLER ====================
 
 def lambda_handler(event, context):
-    """V9 Main Entry Point"""
+    """V9 Main Entry Point (Audit #V9.3: Observability)"""
+    execution_id = f"EXEC-{uuid.uuid4().hex[:6]}"
+    logger.info(f"🚀 Execution Start: {execution_id}")
+    
     try:
         config = TradingConfig.from_env()
         config.validate()
@@ -1049,7 +1232,7 @@ def lambda_handler(event, context):
         symbols_env = os.environ.get('SYMBOLS', 'SOL/USDT')
         symbols = event.get('symbols', event.get('symbol', symbols_env)).split(',')
         
-        engine = TradingEngine(config)
+        engine = TradingEngine(config, execution_id=execution_id)
         results = []
         
         for s in symbols:
@@ -1060,7 +1243,7 @@ def lambda_handler(event, context):
             
         return {
             'statusCode': 200,
-            'body': json.dumps({'status': 'SUCCESS', 'results': results})
+            'body': json.dumps({'status': 'SUCCESS', 'results': results, 'execution_id': execution_id})
         }
         
     except Exception as e:
@@ -1070,6 +1253,3 @@ def lambda_handler(event, context):
             'body': json.dumps({'status': 'ERROR', 'error': str(e)})
         }
 
-if __name__ == "__main__":
-    # Local Test
-    print(lambda_handler({'symbol': 'SOL/USDT'}, None))
