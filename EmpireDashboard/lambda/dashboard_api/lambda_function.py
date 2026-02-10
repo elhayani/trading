@@ -136,7 +136,7 @@ def fetch_oanda_balance():
 # Asset classification for multi-broker/multi-asset systems
 COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER']
 FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
-INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30']
+INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30', 'SPX']
 
 def get_paris_time():
     """Returns current Paris time (UTC+1 for winter)"""
@@ -600,16 +600,15 @@ def lambda_handler(event, context):
         print(f"DEBUG: Oanda Balance = {oanda_balance}")
 
         # =====================================================================
-        # ALLOCATION LOGIC
-        # Binance → Crypto (80%) + Commodities (20%)
-        # Oanda   → Forex (50%) + Indices (50%)  [fallback CALC $200 if not connected]
+        # =====================================================================
+        # ALLOCATION LOGIC (UNIFIED BINANCE ACCOUNT)
         # =====================================================================
         
-        # Split ratios
-        CRYPTO_SHARE = 0.80
+        # Split ratios for Unified Account (Total = 1.0)
+        CRYPTO_SHARE = 0.40
         COMMODITIES_SHARE = 0.20
-        FOREX_SHARE = 0.50
-        INDICES_SHARE = 0.50
+        FOREX_SHARE = 0.20
+        INDICES_SHARE = 0.20
         
         # Fallback allocations (only if broker not connected)
         FOREX_FALLBACK = 200.0
@@ -618,6 +617,8 @@ def lambda_handler(event, context):
         # Separate live Binance positions by asset class
         crypto_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Crypto']
         commodities_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Commodities']
+        forex_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Forex']
+        indices_live_positions = [p for p in live_positions if p.get('AssetClass') == 'Indices']
 
         allocations = {}
         for asset_class in ['Crypto', 'Forex', 'Indices', 'Commodities']:
@@ -636,7 +637,7 @@ def lambda_handler(event, context):
             current = 0
             source = 'CALCULATED'
 
-            # ── BINANCE: Crypto (80%) ──
+            # ── BINANCE: Crypto (40%) ──
             if asset_class == 'Crypto' and binance_balance is not None:
                 unrealized_live = sum(float(p.get('PnL', 0)) for p in crypto_live_positions)
                 pnl = closed_pnl + unrealized_live
@@ -652,24 +653,39 @@ def lambda_handler(event, context):
                 open_count = len(commodities_live_positions)
                 source = 'LIVE'
             
-            # ── OANDA: Forex (50%) ──
-            elif asset_class == 'Forex' and oanda_balance is not None:
-                current = oanda_balance * FOREX_SHARE
-                pnl = closed_pnl + (oanda_unrealized * FOREX_SHARE)
+            # ── BINANCE: Forex (20%) ──
+            elif asset_class == 'Forex' and binance_balance is not None:
+                unrealized_live = sum(float(p.get('PnL', 0)) for p in forex_live_positions)
+                pnl = closed_pnl + unrealized_live
+                current = (binance_balance * FOREX_SHARE) + unrealized_live
+                open_count = len(forex_live_positions)
                 source = 'LIVE'
             
-            # ── OANDA: Indices (50%) ──
-            elif asset_class == 'Indices' and oanda_balance is not None:
-                current = oanda_balance * INDICES_SHARE
-                pnl = closed_pnl + (oanda_unrealized * INDICES_SHARE)
+            # ── BINANCE: Indices (20%) ──
+            elif asset_class == 'Indices' and binance_balance is not None:
+                unrealized_live = sum(float(p.get('PnL', 0)) for p in indices_live_positions)
+                pnl = closed_pnl + unrealized_live
+                current = (binance_balance * INDICES_SHARE) + unrealized_live
+                open_count = len(indices_live_positions)
                 source = 'LIVE'
             
-            # ── FALLBACK: Forex/Indices not connected ──
+            # ── FALLBACK: Oanda or Calculator ──
             elif asset_class == 'Forex':
-                current = FOREX_FALLBACK + pnl
+                if oanda_balance is not None:
+                    current = oanda_balance * 0.5 # Old Logic Fallback
+                    source = 'LIVE (OANDA)'
+                else:
+                    current = FOREX_FALLBACK + pnl
             elif asset_class == 'Indices':
-                current = INDICES_FALLBACK + pnl
+                if oanda_balance is not None:
+                    current = oanda_balance * 0.5 # Old Logic Fallback
+                    source = 'LIVE (OANDA)'
+                else: 
+                    current = INDICES_FALLBACK + pnl
 
+            # V7: Dynamic allocation percentage
+            share_pct = {'Crypto': CRYPTO_SHARE, 'Commodities': COMMODITIES_SHARE, 'Forex': FOREX_SHARE, 'Indices': INDICES_SHARE}.get(asset_class, 0.25) * 100
+            
             allocations[asset_class] = {
                 'initial': round(current - pnl, 2),
                 'current': round(current, 2),
@@ -677,7 +693,8 @@ def lambda_handler(event, context):
                 'total': open_count + closed_count,
                 'open': open_count,
                 'closed': closed_count,
-                'source': source
+                'source': source,
+                'share_pct': share_pct
             }
 
         # RECALCUL TOTAL EQUITY (Dynamic sum of all allocations)

@@ -441,16 +441,22 @@
             ];
 
             assets.forEach(asset => {
-                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0, total: 0, open: 0, closed: 0, source: 'CALCULATED' };
+                const data = allocations[asset.id] || { initial: 0, current: 0, pnl: 0, total: 0, open: 0, closed: 0, source: 'CALCULATED', share_pct: 0 };
                 const pnl = data.pnl;
                 const current = data.current;
                 const source = data.source || 'CALCULATED';
+
+                // Use API provided share_pct or calculate it
+                let sharePct = data.share_pct;
+                if (!sharePct && totalEquity > 0) {
+                    sharePct = (current / totalEquity) * 100;
+                }
 
                 let valueColor = "text-slate-300";
                 if (pnl > 0) valueColor = "text-green-400";
                 if (pnl < 0) valueColor = "text-red-400";
 
-                const percent = (current / totalEquity) * 100;
+                const percent = sharePct || 0; // Use the calculated or provided percentage for the bar width
                 const pnlLabel = pnl >= 0 ? `+${pnl.toFixed(0)}` : `${pnl.toFixed(0)}`;
 
                 // Source badge
@@ -467,6 +473,7 @@
                             </div>
                             <div class="flex gap-2">
                                 <span class="${valueColor} font-bold">$${current.toFixed(0)}</span>
+                                <span class="text-slate-500 text-[10px] self-center">(${percent.toFixed(1)}%)</span>
                                 <span class="text-slate-500">(${pnlLabel})</span>
                             </div>
                         </div>

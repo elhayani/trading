@@ -35,7 +35,9 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 dynamodb = boto3.resource('dynamodb')
 bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
-EMPIRE_TABLE = "EmpireCryptoV4"
+
+# Table configuration
+EMPIRE_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireCryptoV4')
 empire_table = dynamodb.Table(EMPIRE_TABLE)
 
 def get_paris_time():
@@ -45,7 +47,7 @@ def get_paris_time():
 # Asset classification for multi-broker/multi-asset systems
 COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER']
 FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
-INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30']
+INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30', 'SPX']
 
 def classify_asset(symbol):
     """
@@ -97,6 +99,17 @@ CB_COOLDOWN_HOURS = float(os.environ.get('CB_COOLDOWN', '48'))  # Hours of tradi
 SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '6.0'))  # V6.1: Activate earlier (was 10.0)
 SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '2.5'))  # V6.1: Tighter trail (was 3.0)
 VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))  # V6.1: Slightly stricter (was 1.1)
+
+# 🔥 V7 ADAPTIVE VOLUME THRESHOLDS (Per-Asset Class)
+VOLUME_CONFIRM_CRYPTO = float(os.environ.get('VOL_CONFIRM_CRYPTO', '1.2'))       # Crypto: liquide → standard
+VOLUME_CONFIRM_COMMODITIES = float(os.environ.get('VOL_CONFIRM_COMMOD', '0.12'))  # Commodities: /10x (Or, Argent)
+VOLUME_CONFIRM_INDICES = float(os.environ.get('VOL_CONFIRM_INDICES', '0.24'))     # Indices: /5x (SPX)
+VOLUME_CONFIRM_FOREX = float(os.environ.get('VOL_CONFIRM_FOREX', '0.6'))          # Forex: /2x
+
+# 🛡️ TREND FOLLOWING MODE (V7 Hybrid)
+TREND_FOLLOWING_ENABLED = os.environ.get('TREND_FOLLOWING', 'true').lower() == 'true'
+TREND_RSI_MIN = float(os.environ.get('TREND_RSI_MIN', '55'))  # RSI > 55 for trend buy
+SMA_PERIOD = int(os.environ.get('SMA_PERIOD', '200'))  # SMA200 for trend confirmation
 
 # 🚀 V5 ADVANCED OPTIMIZATIONS
 MOMENTUM_FILTER_ENABLED = os.environ.get('MOMENTUM_FILTER', 'true').lower() == 'true'
@@ -225,8 +238,12 @@ def check_circuit_breaker(exchange):
     try:
         # Fetch BTC 24h performance
         btc_ohlcv_24h = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=25)
-        if len(btc_ohlcv_24h) >= 25:
+        if len(btc_ohlcv_24h) > 0:
             btc_now = btc_ohlcv_24h[-1][4]
+        else:
+            btc_now = 0
+
+        if len(btc_ohlcv_24h) >= 25:
             btc_24h_ago = btc_ohlcv_24h[0][4]
             btc_24h_change = (btc_now - btc_24h_ago) / btc_24h_ago
         else:
@@ -265,14 +282,28 @@ def check_circuit_breaker(exchange):
         return True, 1.0, "ERROR", 0, 0
 
 
-def check_volume_confirmation(ohlcv_data, threshold=None):
+def get_volume_threshold_for_asset(asset_class):
+    """🔥 V7: Get adaptive volume threshold based on asset class"""
+    thresholds = {
+        'Crypto': VOLUME_CONFIRM_CRYPTO,
+        'Commodities': VOLUME_CONFIRM_COMMODITIES,
+        'Indices': VOLUME_CONFIRM_INDICES,
+        'Forex': VOLUME_CONFIRM_FOREX,
+    }
+    return thresholds.get(asset_class, VOLUME_CONFIRMATION)
+
+
+def check_volume_confirmation(ohlcv_data, threshold=None, asset_class='Crypto'):
     """
-    🎯 Volume Confirmation Filter (SOL Turbo Mode)
-    Only buy if current volume > threshold (default 1.2x)
+    🎯 Volume Confirmation Filter (V7 Adaptive)
+    Uses per-asset-class thresholds to avoid SKIPPED_LOW_VOLUME on niche assets.
     Returns: (confirmed: bool, vol_ratio: float)
     """
     try:
-        req_threshold = threshold if threshold is not None else VOLUME_CONFIRMATION
+        if threshold is not None:
+            req_threshold = threshold
+        else:
+            req_threshold = get_volume_threshold_for_asset(asset_class)
 
         if len(ohlcv_data) < 20:
             return True, 1.0  # Not enough data, allow
@@ -293,6 +324,18 @@ def check_volume_confirmation(ohlcv_data, threshold=None):
     except Exception as e:
         logger.error(f"Volume check error: {e}")
         return True, 1.0
+
+
+def calculate_sma(ohlcv_data, period=200):
+    """
+    📊 V7: Calculate Simple Moving Average
+    Used for Trend Following mode
+    Returns: SMA value or None if insufficient data
+    """
+    if not ohlcv_data or len(ohlcv_data) < period:
+        return None
+    closes = [c[4] for c in ohlcv_data[-period:]]
+    return sum(closes) / len(closes)
 
 
 def get_dynamic_rsi_threshold(circuit_breaker_level, btc_7d_change, symbol=''):
@@ -827,16 +870,20 @@ def manage_exits(symbol, asset_class, exchange=None):
         logger.error(f"Exit Error: {e}")
         return None
 
-def get_portfolio_context(symbol):
+def get_portfolio_context(symbol, asset_class='Crypto'):
+    """Get portfolio context for a specific symbol — V7: uses actual asset_class (was hardcoded 'Crypto')"""
     try:
         response = empire_table.scan(
-            FilterExpression=boto3.dynamodb.conditions.Attr('AssetClass').eq('Crypto') & 
-                             boto3.dynamodb.conditions.Key('Pair').eq(symbol), # Optimize scan
+            FilterExpression=boto3.dynamodb.conditions.Attr('AssetClass').eq(asset_class) & 
+                             boto3.dynamodb.conditions.Attr('Pair').eq(symbol),
             Limit=50
         )
-        items = sorted(response.get('Items', []), key=lambda x: x['Timestamp'], reverse=True)
+        items = sorted(response.get('Items', []), key=lambda x: x.get('Timestamp', ''), reverse=True)
         open_trades = [t for t in items if t.get('Status') == 'OPEN']
-        return {"current_pair_exposure": len(open_trades), "last_trade": open_trades[0] if open_trades else None}, items[:10]
+        # V7: Cooldown uses ALL trades (OPEN + CLOSED), not just OPEN
+        all_recent = [t for t in items if t.get('Status') in ['OPEN', 'CLOSED']]
+        last_trade = all_recent[0] if all_recent else None
+        return {"current_pair_exposure": len(open_trades), "last_trade": last_trade}, items[:10]
     except Exception as e:
         return {"current_pair_exposure": 0}, []
 
@@ -883,9 +930,17 @@ def lambda_handler(event, context):
                 
                 # 2.5 FILTRE DE CORRÉLATION BTC (Crash horaire)
                 btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
-                current_close = btc_ohlcv[-1][4]
-                prev_close = btc_ohlcv[-2][4] 
-                btc_change = (current_close - prev_close) / prev_close
+                
+                if not btc_ohlcv or len(btc_ohlcv) < 2:
+                    btc_change = 0 # Assume stable if no data, or skip? Better skip to be safe?
+                    # Actually if BTC data missing, might mean exchange issues.
+                    # Let's assume 0 change but log warning
+                    logger.warning("⚠️ BTC 1h data missing. Assuming stable.")
+                    btc_change = 0
+                else:
+                    current_close = btc_ohlcv[-1][4]
+                    prev_close = btc_ohlcv[-2][4] 
+                    btc_change = (current_close - prev_close) / prev_close
                 
                 if btc_change < BTC_CRASH_THRESHOLD:
                     logger.warning(f"🚨 BTC CRASH ({btc_change:.2%}). Buys blocked.")
@@ -893,7 +948,7 @@ def lambda_handler(event, context):
                     continue
 
                 # 3. CONTEXTE & LIMITES
-                portfolio_stats, history = get_portfolio_context(symbol)
+                portfolio_stats, history = get_portfolio_context(symbol, asset_class)
                 if portfolio_stats['current_pair_exposure'] >= MAX_EXPOSURE:
                     logger.info(f"⏸️ Max exposure ({MAX_EXPOSURE}) reached for {symbol}")
                     results.append({"symbol": symbol, "status": "SKIPPED_MAX_EXPOSURE"})
@@ -914,7 +969,7 @@ def lambda_handler(event, context):
                     continue
 
                 # 4. ANALYSE & SIGNAL
-                target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=100)
+                target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)  # V7: 200 candles for SMA200
                 if not target_ohlcv or len(target_ohlcv) < 14:
                     results.append({"symbol": symbol, "status": "SKIPPED_NO_DATA"})
                     continue
@@ -945,15 +1000,20 @@ def lambda_handler(event, context):
                 # 🦁 GOLDEN WINDOW Check
                 timestamp_iso = event.get('timestamp') or get_paris_time().isoformat()
                 in_golden_window = is_golden_window(timestamp_iso)
-                required_volume = VOLUME_CONFIRMATION
+                
+                # 🔥 V7: Adaptive volume threshold per asset class
+                required_volume = get_volume_threshold_for_asset(asset_class)
                 
                 if in_golden_window:
-                    required_volume = 1.0 # Aggressive Volume in Golden Window
+                    required_volume = min(required_volume, 1.0)  # More aggressive in golden window
                     dynamic_rsi_threshold = max(dynamic_rsi_threshold, 45) # Allow up to 45
                 
+                # 📊 V7: Calculate SMA200 for Trend Following
+                sma200 = calculate_sma(target_ohlcv, SMA_PERIOD)
+                
                 if rsi < dynamic_rsi_threshold:
-                    # 5.1 VOLUME CONFIRMATION
-                    vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume)
+                    # 5.1 VOLUME CONFIRMATION (V7: Adaptive per asset class)
+                    vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume, asset_class=asset_class)
                     if not vol_confirmed:
                         log_skip_to_empire(symbol, f"LOW_VOLUME: {vol_ratio:.2f}x", current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_LOW_VOLUME", "vol": vol_ratio})
@@ -1018,8 +1078,65 @@ def lambda_handler(event, context):
                     else:
                         log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
                         results.append({"symbol": symbol, "status": "SKIPPED_AI_VETO", "reason": decision.get('reason')})
+                # ======================== V7: TREND FOLLOWING MODE ========================
+                elif TREND_FOLLOWING_ENABLED and sma200 is not None and current_price > sma200 and rsi > TREND_RSI_MIN:
+                    logger.info(f"📈 TREND SIGNAL: {symbol} | Price={current_price:.2f} > SMA200={sma200:.2f} | RSI={rsi:.1f}")
+                    
+                    # Volume check (adaptive)
+                    vol_confirmed, vol_ratio = check_volume_confirmation(target_ohlcv, threshold=required_volume, asset_class=asset_class)
+                    if not vol_confirmed:
+                        log_skip_to_empire(symbol, f"TREND_LOW_VOLUME: {vol_ratio:.2f}x", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_LOW_VOL", "vol": vol_ratio})
+                        continue
+                    
+                    # Momentum filter
+                    momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
+                    if not momentum_ok:
+                        log_skip_to_empire(symbol, f"TREND_BEARISH_MOMENTUM: {ema_diff:.1f}%", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_MOMENTUM"})
+                        continue
+                    
+                    # Correlation check
+                    correlation_ok, correlation_reason, crypto_exposure = check_portfolio_correlation(symbol)
+                    if not correlation_ok:
+                        log_skip_to_empire(symbol, correlation_reason, current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_CORRELATION"})
+                        continue
+                    
+                    # AI confirmation
+                    news_symbol = symbol.split('=')[0].split('/')[0]
+                    news_ctx = get_news_context(news_symbol)
+                    signal_strength = "STRONG"
+                    portfolio_stats.update({
+                        'signal_strength': signal_strength, 'rsi_4h': 0,
+                        'vix': vix_value, 'dynamic_threshold': dynamic_rsi_threshold
+                    })
+                    
+                    decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
+                    if decision.get('decision') == "CONFIRM":
+                        final_size_mult = size_multiplier * cb_size_mult * corridor_risk_mult
+                        base_capital = CAPITAL_PER_TRADE * final_size_mult
+                        adjusted_capital, confidence = calculate_dynamic_position_size(
+                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend
+                        )
+                        calc_tp = HARD_TP_PCT * corridor_tp_mult
+                        calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                        
+                        log_trade_to_empire(
+                            symbol, "LONG", f"V7_TREND_{corridor_name}",
+                            current_price, "CONFIRM",
+                            f"TREND: Price>{sma200:.0f}(SMA200), RSI={rsi:.1f}. {decision.get('reason')}",
+                            asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
+                            exchange=exchange
+                        )
+                        results.append({"symbol": symbol, "status": "TRADE_TREND_EXECUTED", "price": current_price})
+                    else:
+                        log_skip_to_empire(symbol, f"TREND_AI_VETO: {decision.get('reason')}", current_price, asset_class)
+                        results.append({"symbol": symbol, "status": "SKIPPED_TREND_AI_VETO"})
+                
                 else:
-                    log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {dynamic_rsi_threshold}", current_price, asset_class)
+                    sma_info = f" | SMA200={sma200:.2f}" if sma200 else ""
+                    log_skip_to_empire(symbol, f"NO_SIGNAL: RSI={rsi:.1f} > {dynamic_rsi_threshold}{sma_info}", current_price, asset_class)
                     results.append({"symbol": symbol, "status": "IDLE", "rsi": rsi})
                     
             except Exception as item_err:
