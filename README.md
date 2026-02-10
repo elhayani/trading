@@ -1,32 +1,29 @@
-# 🏛️ Empire V7 — Unified AI Trading System
+# 🏛️ Empire V10.9 — Sniper Agile Mode
 
-> **Système de trading multi-actifs unifié** : une seule Lambda AWS traite 8 actifs (Crypto, Commodities, Indices) avec scheduling intelligent, analyse technique avancée et IA générative (AWS Bedrock).
+> **Système de trading multi-actifs unifié** : architecture V10 ultra-réactive. Une seule Lambda AWS traite les actifs majeurs avec une précision chirurgicale, une gestion des secrets sécurisée et une analyse technique hautement descriptive.
 
 ## 🎯 Statut Production
 
 ```
 ✅ DÉPLOYÉ EN PRODUCTION AWS (eu-west-3)
-📅 Dernière MAJ : 2026-02-10
-💰 Mode : LIVE (Binance)
-🏛️ Architecture : Super-Lambda Unifiée
+📅 Dernière MAJ : 2026-02-10 (Audit #V10.9)
+💰 Mode : LIVE (Binance USD-M Futures)
+🏛️ Architecture : V10 Hybrid Sniper
 ⏰ Smart Scheduling : 4 règles CRON adaptatives
-🎯 Actifs : 8 (3 Crypto + 3 Commodities + 2 Indices)
+🎯 Actifs : 5 (BTC, ETH, SOL, PAXG, SPX)
 ```
 
 ---
 
-## 🎯 Actifs Actifs
+## 🎯 Actifs Actifs (Sniper Mode)
 
 | Classe | Symbole | Description |
 |--------|---------|-------------|
-| **Crypto** | `BTC/USDT` | Bitcoin — Le Roi 👑 |
-| **Crypto** | `ETH/USDT` | Ethereum — Alt-leader 💎 |
-| **Crypto** | `SOL/USDT` | Solana — Turbo Mode ⚡ |
-| **Commodities** | `PAXG/USDT` | Or (via PAX Gold) 🥇 |
-| **Commodities** | `XAG/USDT` | Argent 🥈 |
-| **Commodities** | `OIL/USDT` | Pétrole (WTI Proxy) 🛢️ |
-| **Indices** | `SPX/USDT` | S&P 500 📈 |
-| **Indices** | `NDX/USDT` | Nasdaq 100 💻 |
+| **Crypto** | `BTCUSDT` | Bitcoin — Le Roi 👑 |
+| **Crypto** | `ETHUSDT` | Ethereum — Alt-leader 💎 |
+| **Crypto** | `SOLUSDT` | Solana — Turbo Mode ⚡ |
+| **Commodities** | `PAXGUSDT` | Or (via PAX Gold) 🥇 |
+| **Indices** | `SPXUSDT` | S&P 500 📈 |
 
 ---
 
@@ -45,7 +42,7 @@
 │          ▼                                                    │
 │  [🏛️ V4HybridLiveTrader — Super-Lambda]                      │
 │   └── Boucle séquentielle :                                   │
-│       BTC → ETH → SOL → PAXG → XAG → OIL → SPX → NDX        │
+│       BTC → ETH → SOL → PAXG → SPX                            │
 │          │                                                    │
 │          ├── 🧠 micro_corridors.py   (Paramètres adaptatifs)  │
 │          ├── 📊 market_analysis.py   (RSI, EMA, SMA200)       │
@@ -180,9 +177,9 @@ aws events list-rules --region eu-west-3
 | Cooldown | 4h | Entre 2 trades même actif |
 | Stop Loss | -3.5% | Protection capital |
 | Take Profit | +8.0% | R/R = 1:2.3 |
-| RSI Buy | < 42 | Seuil d'entrée |
+| RSI Buy | **< 35.0** | **V10 Sniper Limit** |
 | RSI Sell | > 78 | Confirmation sortie trailing |
-| VIX Max | 30 | Blocage total au-dessus |
+| VIX Max | 35 | Blocage total au-dessus |
 | Circuit Breaker | -5% / -10% / -20% | L1/L2/L3 BTC |
 
 ---
@@ -191,7 +188,8 @@ aws events list-rules --region eu-west-3
 
 | Version | Date | Changement |
 |---------|------|-----------|
-| **V7.0** | 2026-02-10 | 🏛️ Super-Lambda unifiée, Smart Scheduling, 8 actifs |
+| **V10.9** | 2026-02-10 | 🎯 Sniper Agile : Fix Binance Futures, RSI 35, Skip logs descriptifs |
+| V9.0 | 2026-02-10 | 🏛️ Super-Lambda unifiée, Architecture Level 4, Fail-safe |
 | V6.2 | 2026-02-08 | Fix P&L reporting |
 | V6.1 | 2026-02-08 | Maximum Performance (R/R optimisés) |
 | V6.0 | 2026-02-07 | Trailing Stop universel |
