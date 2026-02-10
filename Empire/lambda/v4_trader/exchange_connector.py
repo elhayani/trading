@@ -134,6 +134,14 @@ class ExchangeConnector:
             print(f"❌ Error fetching ticker: {e}")
             return {'last': 0}
 
+    def fetch_order(self, order_id, symbol):
+        """Fetch order status by ID"""
+        try:
+            return self.exchange.fetch_order(order_id, symbol)
+        except Exception as e:
+            print(f"❌ Error fetching order {order_id}: {e}")
+            raise
+
     def fetch_balance(self):
         """Fetch account balance"""
         try:
