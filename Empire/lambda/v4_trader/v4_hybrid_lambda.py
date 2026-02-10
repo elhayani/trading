@@ -164,6 +164,11 @@ BTC_CRASH_THRESHOLD = float(os.environ.get('BTC_CRASH', '-0.08'))
 VIX_MAX_THRESHOLD = float(os.environ.get('VIX_MAX', '30'))
 VIX_REDUCE_THRESHOLD = float(os.environ.get('VIX_REDUCE', '25'))
 
+# Risk Guards (V8.3)
+MAX_RISK_PER_TRADE_PCT = float(os.environ.get('MAX_RISK_PER_TRADE', '0.02')) # 2% balance
+MAX_DAILY_LOSS_PCT = float(os.environ.get('MAX_DAILY_LOSS', '0.05'))        # 5% balance
+GLOBAL_DRAWDOWN_LIMIT = float(os.environ.get('MAX_DRAWDOWN', '0.15'))      # 15% drawdown
+
 # Advanced Features
 MULTI_TF_ENABLED = os.environ.get('MULTI_TF', 'true').lower() == 'true'
 RSI_4H_THRESHOLD = float(os.environ.get('RSI_4H_THRESHOLD', '50'))
@@ -288,6 +293,26 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
+def calculate_daily_performance():
+    """V8.3: Calculate PnL of trades closed today for Risk Management"""
+    try:
+        # Paris today starting at 00:00
+        today_str = get_paris_time().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        
+        response = empire_table.query(
+            IndexName='Status-index',
+            KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('CLOSED'),
+            FilterExpression=boto3.dynamodb.conditions.Attr('ExitTime').gte(today_str)
+        )
+        
+        trades = response.get('Items', [])
+        daily_pnl = sum(float(t.get('PnL', 0)) for t in trades)
+        logger.info(f"📅 Daily Performance: ${daily_pnl:+.2f} ({len(trades)} trades)")
+        return daily_pnl
+    except Exception as e:
+        logger.error(f"Error calculating daily performance: {e}")
+        return 0
+
 # --- V8 GLOBAL CONTEXT CACHE (MarketState Class) ---
 class MarketState:
     """
@@ -312,6 +337,14 @@ class MarketState:
         
         # 4. Golden Window Status
         self.is_golden = self._check_golden_window()
+        
+        # 5. Risk Guards (Audit #V8.3)
+        self.daily_pnl = calculate_daily_performance()
+        self.daily_pnl_pct = self.daily_pnl / self.balance if self.balance > 0 else 0
+        self.risk_blocked = self.daily_pnl_pct <= -MAX_DAILY_LOSS_PCT
+        
+        if self.risk_blocked:
+            logger.critical(f"🛑 RISK BLOCK: Daily Loss {self.daily_pnl_pct:.2%} exceeds limit {MAX_DAILY_LOSS_PCT:.2%}!")
         
         logger.info(f"✅ V8 MarketState Ready | Slots: {self.current_trades}/{self.max_slots} | VIX: {self.vix['value']:.1f}")
 
@@ -600,9 +633,9 @@ def check_portfolio_correlation(symbol):
         return True, "ERROR", 0
 
 
-def calculate_dynamic_position_size(base_capital, rsi, signal_strength, vol_ratio, momentum_trend):
+def calculate_dynamic_position_size(base_capital, rsi, signal_strength, vol_ratio, momentum_trend, stop_loss_pct, total_balance):
     """
-    🚀 V5 OPTIMIZATION 3: Dynamic Position Sizing
+    🚀 V5 OPTIMIZATION 3: Dynamic Position Sizing (V8.3 with Risk Guard)
     Increases size on high-confidence signals, reduces on weak signals
     Based on simplified Kelly Criterion
     Returns: (adjusted_capital: float, confidence_score: float)
@@ -647,6 +680,16 @@ def calculate_dynamic_position_size(base_capital, rsi, signal_strength, vol_rati
     confidence_score = max(0.5, min(confidence_score, 1.5))
     
     adjusted_capital = base_capital * confidence_score
+    
+    # 🛡️ V8.3: Hard Risk Cap (PositionSize * SL% <= Balance * MAX_RISK_PER_TRADE_PCT)
+    max_risk_dollars = total_balance * MAX_RISK_PER_TRADE_PCT
+    actual_risk_dollars = adjusted_capital * (abs(stop_loss_pct) / 100)
+    
+    if actual_risk_dollars > max_risk_dollars:
+        old_cap = adjusted_capital
+        adjusted_capital = max_risk_dollars / (abs(stop_loss_pct) / 100)
+        logger.warning(f"🛡️ Risk Cap Applied: ${old_cap:.0f} -> ${adjusted_capital:.0f} (Risk limited to 2% of balance)")
+        
     logger.info(f"💰 Dynamic Sizing: {base_capital:.0f}$ × {confidence_score:.2f} = {adjusted_capital:.0f}$")
     
     return adjusted_capital, confidence_score
@@ -1107,10 +1150,11 @@ def lambda_handler(event, context):
                     continue
 
                 # 2. 🛡️ CIRCUIT BREAKER CHECK (V8: From Cache)
-                if not g_ctx['cb']['can_trade']:
+                if not g_ctx['cb']['can_trade'] or g_ctx.get('risk_blocked'):
+                    reason = f"BLOCKED_CB_{g_ctx['cb']['level']}" if not g_ctx['cb']['can_trade'] else "BLOCKED_DAILY_LOSS"
                     if g_ctx['cb']['level'] == "L3_SURVIVAL":
                         logger.critical(f"🚨 SURVIVAL MODE ACTIVE - BTC Crash!")
-                    results.append({"symbol": symbol, "status": f"BLOCKED_CB_{g_ctx['cb']['level']}"})
+                    results.append({"symbol": symbol, "status": reason})
                     continue
                 
                 # 2.5 FILTRE DE CORRÉLATION BTC (V8: From Cache)
@@ -1266,12 +1310,13 @@ def lambda_handler(event, context):
                         
                         final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
-                        adjusted_capital, confidence = calculate_dynamic_position_size(
-                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend
-                        )
                         
                         calc_tp = HARD_TP_PCT * corridor_tp_mult
                         calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                        
+                        adjusted_capital, confidence = calculate_dynamic_position_size(
+                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend, calc_sl, g_ctx['balance']
+                        )
                         
                         # 🚀 V8 EXECUTION ENGINE
                         try:
@@ -1349,11 +1394,13 @@ def lambda_handler(event, context):
                         
                         final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
-                        adjusted_capital, confidence = calculate_dynamic_position_size(
-                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend
-                        )
+                        
                         calc_tp = HARD_TP_PCT * corridor_tp_mult
                         calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                        
+                        adjusted_capital, confidence = calculate_dynamic_position_size(
+                            base_capital, rsi, signal_strength, vol_ratio, momentum_trend, calc_sl, g_ctx['balance']
+                        )
                         
                         # 🚀 V8 EXECUTION ENGINE
                         try:
