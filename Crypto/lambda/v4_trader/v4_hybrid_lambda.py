@@ -4,11 +4,12 @@ import boto3
 import logging
 import uuid
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from market_analysis import analyze_market
 from news_fetcher import get_news_context
 from exchange_connector import ExchangeConnector
-# 🎯 V5 Micro-Corridors
+
+# 🎯 Micro-Corridors (Empire V7 Core)
 try:
     from micro_corridors import (
         get_corridor_params, 
@@ -19,17 +20,6 @@ try:
 except ImportError:
     MICRO_CORRIDORS_AVAILABLE = False
 
-# 🛡️ V5.1 Predictability Index - Détection des actifs erratiques
-try:
-    from predictability_index import (
-        calculate_predictability_score,
-        is_asset_erratic,
-        get_predictability_adjustment
-    )
-    PREDICTABILITY_INDEX_AVAILABLE = True
-except ImportError:
-    PREDICTABILITY_INDEX_AVAILABLE = False
-
 # AWS & Logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -37,86 +27,79 @@ dynamodb = boto3.resource('dynamodb')
 bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 
 # Table configuration
-EMPIRE_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireCryptoV4')
+EMPIRE_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireTradesHistory') # Unified Table V7
 empire_table = dynamodb.Table(EMPIRE_TABLE)
 
 def get_paris_time():
-    """Returns current Paris time (UTC+1 for winter)"""
-    return datetime.utcnow() + timedelta(hours=1)
+    """Returns current Paris time (UTC+1)"""
+    # Use timezone-aware UTC to fix deprecation warning
+    return datetime.now(timezone.utc) + timedelta(hours=1)
 
-# Asset classification for multi-broker/multi-asset systems
-COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER']
+# Asset classification 
+COMMODITIES_SYMBOLS = ['PAXG', 'XAG', 'GOLD', 'SILVER', 'USOIL']
 FOREX_SYMBOLS = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD']
 INDICES_SYMBOLS = ['DEFI', 'NDX', 'GSPC', 'US30', 'SPX']
 
 def classify_asset(symbol):
-    """
-    Classify a Binance/Broker symbol into Asset Class.
-    Prioritizes specific prefixes/keywords.
-    """
+    """Classify a Binance/Broker symbol into Asset Class."""
     symbol_upper = symbol.upper()
-    
-    # 1. Commodities
-    if any(comm in symbol_upper for comm in COMMODITIES_SYMBOLS):
-        return "Commodities"
-    
-    # 2. Forex
-    if any(fx in symbol_upper for fx in FOREX_SYMBOLS):
-        return "Forex"
-    
-    # 3. Indices
-    if any(idx in symbol_upper for idx in INDICES_SYMBOLS):
-        return "Indices"
-    
-    # Default
+    if any(comm in symbol_upper for comm in COMMODITIES_SYMBOLS): return "Commodities"
+    if any(fx in symbol_upper for fx in FOREX_SYMBOLS): return "Forex"
+    if any(idx in symbol_upper for idx in INDICES_SYMBOLS): return "Indices"
     return "Crypto"
 
-# ==================== CONFIGURATION V6.1 OPTIMIZED ====================
+# ==================== TRADING CONFIGURATION (EMPIRE V7) ====================
 DEFAULT_SYMBOL = os.environ.get('SYMBOL', 'SOL/USDT')
-CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '200'))   # 400€ total / 2 max positions (V6.1: reduced concentration)
-RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '42'))  # V6.1: Tighter filter (was 45)
-RSI_SELL_THRESHOLD = float(os.environ.get('RSI_SELL_THRESHOLD', '78'))  # V6.1: Let winners run (was 75)
-STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-3.5'))  # V6.1 CRITICAL FIX: Tighter SL (was -5.0)
-HARD_TP_PCT = float(os.environ.get('HARD_TP', '8.0'))  # V6.1 CRITICAL FIX: Better R/R (was 5.0) → Now 1:2.3
-TRAILING_TP_PCT = float(os.environ.get('TRAILING_TP', '1.5'))  # V6.1: Faster activation (was 2.0)
-MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '2'))  # V6.1: Reduced concentration risk (was 3)
-COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '4'))  # Hours between trades
-BTC_CRASH_THRESHOLD = float(os.environ.get('BTC_CRASH', '-0.08'))  # Relaxed crash filter (V5.1)
 
-# ==================== NEW OPTIMIZATIONS ====================
-VIX_MAX_THRESHOLD = float(os.environ.get('VIX_MAX', '30'))  # Don't trade if VIX > 30
-VIX_REDUCE_THRESHOLD = float(os.environ.get('VIX_REDUCE', '25'))  # Reduce size if VIX > 25
-MULTI_TF_ENABLED = os.environ.get('MULTI_TF', 'true').lower() == 'true'  # Multi-timeframe confirmation
-RSI_4H_THRESHOLD = float(os.environ.get('RSI_4H_THRESHOLD', '50'))  # Relaxed 4h confirmation to 50
+# Risk Management
+CAPITAL_PER_TRADE = float(os.environ.get('CAPITAL', '200'))   
+MAX_EXPOSURE = int(os.environ.get('MAX_EXPOSURE', '2'))
+COOLDOWN_HOURS = float(os.environ.get('COOLDOWN_HOURS', '4'))
 
-# 🔥 CIRCUIT BREAKER (Leçon 2022 - Protection Anti-Crash à 3 Niveaux)
-CIRCUIT_BREAKER_L1 = float(os.environ.get('CB_L1', '-0.05'))  # -5% BTC 24h = Reduce size 50%
-CIRCUIT_BREAKER_L2 = float(os.environ.get('CB_L2', '-0.10'))  # -10% BTC 24h = FULL STOP 48h
-CIRCUIT_BREAKER_L3 = float(os.environ.get('CB_L3', '-0.20'))  # -20% BTC 7d = SURVIVAL MODE
-CB_COOLDOWN_HOURS = float(os.environ.get('CB_COOLDOWN', '48'))  # Hours of trading pause after L2
+# Trading Parameters
+RSI_BUY_THRESHOLD = float(os.environ.get('RSI_THRESHOLD', '42'))
+RSI_SELL_THRESHOLD = float(os.environ.get('RSI_SELL_THRESHOLD', '78'))
+STOP_LOSS_PCT = float(os.environ.get('STOP_LOSS', '-3.5'))
+HARD_TP_PCT = float(os.environ.get('HARD_TP', '8.0'))
+TRAILING_TP_PCT = float(os.environ.get('TRAILING_TP', '1.5'))
 
-# 🎯 SOL TURBO MODE V6.1 (Capture Volatilité 2025)
-SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '6.0'))  # V6.1: Activate earlier (was 10.0)
-SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '2.5'))  # V6.1: Tighter trail (was 3.0)
-VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))  # V6.1: Slightly stricter (was 1.1)
+# Filters & Safety
+BTC_CRASH_THRESHOLD = float(os.environ.get('BTC_CRASH', '-0.08'))
+VIX_MAX_THRESHOLD = float(os.environ.get('VIX_MAX', '30'))
+VIX_REDUCE_THRESHOLD = float(os.environ.get('VIX_REDUCE', '25'))
 
-# 🔥 V7 ADAPTIVE VOLUME THRESHOLDS (Per-Asset Class)
-VOLUME_CONFIRM_CRYPTO = float(os.environ.get('VOL_CONFIRM_CRYPTO', '1.2'))       # Crypto: liquide → standard
-VOLUME_CONFIRM_COMMODITIES = float(os.environ.get('VOL_CONFIRM_COMMOD', '0.12'))  # Commodities: /10x (Or, Argent)
-VOLUME_CONFIRM_INDICES = float(os.environ.get('VOL_CONFIRM_INDICES', '0.24'))     # Indices: /5x (SPX)
-VOLUME_CONFIRM_FOREX = float(os.environ.get('VOL_CONFIRM_FOREX', '0.6'))          # Forex: /2x
+# Advanced Features
+MULTI_TF_ENABLED = os.environ.get('MULTI_TF', 'true').lower() == 'true'
+RSI_4H_THRESHOLD = float(os.environ.get('RSI_4H_THRESHOLD', '50'))
 
-# 🛡️ TREND FOLLOWING MODE (V7 Hybrid)
+# Circuit Breaker (L1: -5%, L2: -10%, L3: -20%)
+CIRCUIT_BREAKER_L1 = float(os.environ.get('CB_L1', '-0.05'))
+CIRCUIT_BREAKER_L2 = float(os.environ.get('CB_L2', '-0.10'))
+CIRCUIT_BREAKER_L3 = float(os.environ.get('CB_L3', '-0.20'))
+CB_COOLDOWN_HOURS = float(os.environ.get('CB_COOLDOWN', '48'))
+
+# SOL Specific (Turbo Mode)
+SOL_TRAILING_ACTIVATION = float(os.environ.get('SOL_TRAILING_ACT', '6.0'))
+SOL_TRAILING_STOP = float(os.environ.get('SOL_TRAILING_STOP', '2.5'))
+
+# Volume Confirmation (Adaptive V7)
+VOLUME_CONFIRMATION = float(os.environ.get('VOL_CONFIRM', '1.2'))
+VOLUME_CONFIRM_CRYPTO = float(os.environ.get('VOL_CONFIRM_CRYPTO', '1.2'))
+VOLUME_CONFIRM_COMMODITIES = float(os.environ.get('VOL_CONFIRM_COMMOD', '0.12'))
+VOLUME_CONFIRM_INDICES = float(os.environ.get('VOL_CONFIRM_INDICES', '0.24'))
+VOLUME_CONFIRM_FOREX = float(os.environ.get('VOL_CONFIRM_FOREX', '0.6'))
+
+# Trend Following (V7 Hybrid)
 TREND_FOLLOWING_ENABLED = os.environ.get('TREND_FOLLOWING', 'true').lower() == 'true'
-TREND_RSI_MIN = float(os.environ.get('TREND_RSI_MIN', '55'))  # RSI > 55 for trend buy
-SMA_PERIOD = int(os.environ.get('SMA_PERIOD', '200'))  # SMA200 for trend confirmation
+TREND_RSI_MIN = float(os.environ.get('TREND_RSI_MIN', '55'))
+SMA_PERIOD = int(os.environ.get('SMA_PERIOD', '200'))
 
-# 🚀 V5 ADVANCED OPTIMIZATIONS
+# Logic Controls
 MOMENTUM_FILTER_ENABLED = os.environ.get('MOMENTUM_FILTER', 'true').lower() == 'true'
 DYNAMIC_SIZING_ENABLED = os.environ.get('DYNAMIC_SIZING', 'true').lower() == 'true'
 CORRELATION_CHECK_ENABLED = os.environ.get('CORRELATION_CHECK', 'true').lower() == 'true'
-REVERSAL_TRIGGER_ENABLED = os.environ.get('REVERSAL_TRIGGER', 'true').lower() == 'true' # 🟢 NEW: Green Candle Check
-MAX_CRYPTO_EXPOSURE = int(os.environ.get('MAX_CRYPTO_EXPOSURE', '2'))  # Max crypto trades when correlated
+REVERSAL_TRIGGER_ENABLED = os.environ.get('REVERSAL_TRIGGER', 'true').lower() == 'true'
+MAX_CRYPTO_EXPOSURE = int(os.environ.get('MAX_CRYPTO_EXPOSURE', '2'))
 # ========================================================
 
 def log_trade_to_empire(symbol, action, strategy, price, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0, exchange=None):
@@ -520,7 +503,7 @@ def check_vix_filter():
     try:
         # Use Yahoo Finance API directly via requests
         url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d"
-        headers = {'User-Agent': 'Mozilla/5.0 (compatible; EmpireBot/1.0)'}
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; EmpireV7/1.0)'}
         response = requests.get(url, headers=headers, timeout=5)
         
         if response.status_code != 200:
@@ -676,7 +659,7 @@ def ask_bedrock(symbol, rsi, news_context, portfolio_stats, history):
     current_exposure = portfolio_stats.get('current_pair_exposure', 0)
     
     prompt = f"""
-Vous êtes l'Analyste de Flux de Nouvelles pour l'Empire V5.1.
+Vous êtes l'Analyste de Flux de Nouvelles pour l'Empire V7 (Hybrid Architecture).
 LA DÉCISION TECHNIQUE EST DÉJÀ PRISE : Le système a confirmé que {symbol} est statistiquement prêt pour un achat (RSI à {rsi:.1f}).
 
 VOTRE MISSION UNIQUE :
