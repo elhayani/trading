@@ -152,7 +152,7 @@ echo "🔎 Step 7: Verifying Deployment..."
 echo "----------------------------------------------------------------------"
 
 # Check Lambda
-LAMBDA_NAME=$(aws lambda list-functions --query "Functions[?contains(FunctionName, 'V4Hybrid')].FunctionName" --output text | head -1)
+LAMBDA_NAME=$(aws lambda list-functions --region $REGION --query "Functions[?contains(FunctionName, 'V4Hybrid')].FunctionName" --output text | head -1)
 if [ -n "$LAMBDA_NAME" ]; then
     echo -e "${GREEN}✅ Lambda created: $LAMBDA_NAME${NC}"
 else
@@ -160,7 +160,7 @@ else
 fi
 
 # Check DynamoDB Tables
-STATE_TABLE=$(aws dynamodb list-tables --query "TableNames[?contains(@, 'V4TradingState')]" --output text)
+STATE_TABLE=$(aws dynamodb list-tables --region $REGION --query "TableNames[?contains(@, 'V4TradingState')]" --output text)
 if [ -n "$STATE_TABLE" ]; then
     echo -e "${GREEN}✅ DynamoDB State Table: $STATE_TABLE${NC}"
 else
@@ -168,7 +168,7 @@ else
 fi
 
 # Check EventBridge Rule
-RULE=$(aws events list-rules --name-prefix V4Hybrid --query "Rules[0].Name" --output text)
+RULE=$(aws events list-rules --region $REGION --name-prefix Empire --query "Rules[0].Name" --output text)
 if [ -n "$RULE" ] && [ "$RULE" != "None" ]; then
     echo -e "${GREEN}✅ EventBridge Rule: $RULE${NC}"
 else
@@ -189,6 +189,7 @@ if [ "$test_confirm" == "yes" ]; then
     echo "  → Invoking Lambda..."
     
     aws lambda invoke \
+        --region $REGION \
         --function-name $LAMBDA_NAME \
         --payload '{"test": true}' \
         /tmp/lambda_response.json \
@@ -226,7 +227,7 @@ echo "  3. View EventBridge Schedule:"
 echo "     aws events describe-rule --name $RULE"
 echo ""
 echo "  4. To change to LIVE mode:"
-echo "     aws lambda update-function-configuration \\"
+echo "     aws lambda update-function-configuration --region $REGION \\"
 echo "       --function-name $LAMBDA_NAME \\"
 echo "       --environment Variables={TRADING_MODE=live}"
 echo ""

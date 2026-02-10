@@ -25,13 +25,17 @@ class ExchangeConnector:
             'apiKey': api_key,
             'secret': secret,
             'enableRateLimit': True,
-            'options': {'defaultType': 'future'}  # Default to Futures for V4
+            'options': {
+                'defaultType': 'future',
+                'fetchCurrencies': False
+            }
         }
         
         # Initialize exchange
         try:
             if exchange_id == 'binance':
-                self.exchange = ccxt.binance(config)
+                # 🚀 Use specialized USDM Futures class (Audit #V10.9)
+                self.exchange = ccxt.binanceusdm(config)
                 if testnet:
                     self._setup_binance_demo()
             else:
@@ -41,34 +45,19 @@ class ExchangeConnector:
             logger.info(f"✅ Connected to {exchange_id.upper()} ({'TESTNET' if testnet else 'LIVE'})")
             
         except Exception as e:
-            # Fallback for Binance: if live fails with API key error, try demo
-            if not testnet and exchange_id == 'binance' and "Invalid Api-Key" in str(e):
-                logger.warning(f"⚠️ Live connection failed ({e}). Attempting Binance Demo...")
-                try:
-                    self._setup_binance_demo()
-                    self.exchange.load_markets()
-                    logger.info("✅ Connected to BINANCE DEMO (VAPI)")
-                    return
-                except Exception as demo_err:
-                    logger.error(f"❌ Demo fallback failed: {demo_err}")
-            
-            logger.error(f"❌ Failed to connect to {exchange_id}: {e}")
-            logger.warning("⚠️ Proceeding in Read-Only mode or with limited functionality.")
+            if not testnet:
+                logger.error(f"❌ CRITICAL: Failed to connect to {exchange_id} in LIVE mode: {e}")
+                raise # On veut que le bot s'arrête en cas d'erreur Live
+            else:
+                logger.error(f"❌ Failed to connect to {exchange_id} (Testnet): {e}")
 
     def _setup_binance_demo(self):
-        """Helper to configure Binance Demo/Testnet (Audit #V10.2)"""
+        """Helper to configure Binance Demo/Testnet (Audit #V10.9)"""
+        # On ne fait plus d'override manuel d'URL ici, 
+        # on laisse CCXT gérer via sandbox si testnet est True.
         if hasattr(self.exchange, 'set_sandbox_mode'):
             self.exchange.set_sandbox_mode(True)
             logger.info("🧪 Binance Sandbox Mode enabled")
-        elif hasattr(self.exchange, 'enable_demo_trading'):
-            self.exchange.enable_demo_trading(True)
-            logger.info("🧪 Binance Demo Trading enabled")
-        else:
-            # Manual URL override for VAPI/Testnet
-            target = 'https://vapi.binance.com' if not self.testnet else 'https://testnet.binancefuture.com'
-            self.exchange.urls['api']['fapiPublic'] = target
-            self.exchange.urls['api']['fapiPrivate'] = target
-            logger.info(f"🧪 Binance URL override: {target}")
 
     def create_market_order(self, symbol, side, amount):
         """Execute Market Order"""

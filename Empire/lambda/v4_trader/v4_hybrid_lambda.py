@@ -61,7 +61,7 @@ class TradingConfig:
     target_sl_range: Tuple[float, float] = (-2.0, -5.0) # Tight/Wide SL
     
     # Entry/Exit Thresholds
-    rsi_buy_threshold: float = 42.0
+    rsi_buy_threshold: float = 35.0
     rsi_sell_threshold: float = 78.0
     trailing_tp_pct: float = 1.5
     
@@ -122,6 +122,15 @@ class TradingConfig:
 
 
 
+def to_decimal(obj):
+    """Convert float to Decimal for DynamoDB"""
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    if isinstance(obj, dict):
+        return {k: to_decimal(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_decimal(v) for v in obj]
+    return obj
 # ==================== LOGGING SETUP ====================
 
 logger = logging.getLogger(__name__)
@@ -155,9 +164,12 @@ class AWSClients:
             return
             
         # Configuration
-        self.region = os.getenv('AWS_REGION', 'us-east-1')
+        # Audit #V10.9: Smarter region detection for multi-region failover
+        self.region = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION') or 'us-east-1'
+        logger.info(f"🌐 AWS Client Init in region: {self.region}")
+        
         self.dynamodb = boto3.resource('dynamodb', region_name=self.region)
-        self.bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+        self.bedrock = boto3.client('bedrock-runtime', region_name='us-east-1') # Bedrock often stays in us-east-1
         self.secretsmanager = boto3.client('secretsmanager', region_name=self.region)
         
         # Tables
@@ -226,15 +238,14 @@ class SlotManager:
                     ':max': self.max_slots
                 }
             )
-            
             # 2. Register Heartbeat (for future cleanup of orphans)
             ttl = int((datetime.now(timezone.utc) + timedelta(hours=6)).timestamp())
-            self.aws.state_table.put_item(Item={
+            self.aws.state_table.put_item(Item=to_decimal({
                 'trader_id': f"HEARTBEAT#{self.execution_id}",
                 'Type': 'SLOT_RESERVATION',
                 'TTL': ttl,
                 'Timestamp': datetime.now(timezone.utc).isoformat()
-            })
+            }))
             
             self.slot_acquired = True
             logger.info(f"✅ Slot acquired ({self.execution_id})")
@@ -470,20 +481,34 @@ class MarketStateBuilder:
         except Exception as e:
             logger.error(f"Failed to get open positions: {e}")
             return 0
-    
     def _calculate_max_slots(self, balance: float, vix: float) -> int:
-        """Calculate max slots based on balance & market calm (Audit #V9.4)"""
-        # Base slots (1 per $4k budget to keep it conservative but scalable)
-        base_slots = max(1, int(balance / 4000))
+        """Calculate max slots based on balance & market calm (Audit #V10.9)"""
         
-        # Calm market (VIX < 20) -> Allow up to config max (ex: 5)
-        if vix < 20:
-            return min(base_slots + 2, self.config.max_slots_calm)
-        # Volatile market (VIX > 28) -> Restrict slots
+        # 1. Calcul de base sécurisé
+        try:
+            safe_balance = float(balance) if balance is not None else 0.0
+            base_slots = max(2, int(safe_balance / 1000))
+        except Exception:
+            base_slots = 2
+            safe_balance = 0.0
+
+        # 🔍 LOG DE DIAGNOSTIC ULTRA-SÉCURISÉ
+        try:
+            logger.info(f"📊 [DIAGNOSTIC V10.9] Balance: ${safe_balance:.2f} | Base Slots: {base_slots} | VIX: {vix:.1f}")
+        except:
+            print(f"DIAG_PRINT: bal={safe_balance}, slots={base_slots}")
+
+        # 2. Logique de résultat selon la volatilité
+        res = 2
+        if vix < 22:
+            res = min(base_slots + 2, self.config.max_slots_calm)
         elif vix > 28:
-            return min(base_slots, self.config.max_slots_volatile)
+            res = min(base_slots, self.config.max_slots_volatile)
+        else:
+            res = max(2, base_slots)
         
-        return min(base_slots + 1, 3)
+        logger.info(f"🎰 Slot Calc Final: Result={res}")
+        return res
     
     def _get_btc_performance(self) -> Tuple[float, float, float]:
         """Get BTC performance metrics"""
@@ -562,11 +587,11 @@ class MarketStateBuilder:
     def _cache_vix(self, vix_value: float):
         """Cache VIX value in DynamoDB"""
         try:
-            self.aws.state_table.put_item(Item={
+            self.aws.state_table.put_item(Item=to_decimal({
                 'trader_id': 'VIX_CACHE',
                 'value': str(vix_value),
                 'timestamp': datetime.now(timezone.utc).isoformat()
-            })
+            }))
         except Exception as e:
             logger.warning(f"Failed to cache VIX: {e}")
     
@@ -662,12 +687,11 @@ class MarketStateBuilder:
         try:
             today_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
-            # 🛠️ GSI_ExitDate: Status (PK) + ExitDate (SK) 
-            response = self.aws.trades_table.query(
-                IndexName='GSI_ExitDate',
-                KeyConditionExpression=(
-                    boto3.dynamodb.conditions.Key('Status').eq('CLOSED') &
-                    boto3.dynamodb.conditions.Key('ExitDate').eq(today_date)
+            # 🛠️ Audit #V10.9: Fallback to Scan if GSI_ExitDate is missing
+            response = self.aws.trades_table.scan(
+                FilterExpression=(
+                    boto3.dynamodb.conditions.Attr('Status').eq('CLOSED') &
+                    boto3.dynamodb.conditions.Attr('ExitDate').eq(today_date)
                 )
             )
             
@@ -675,11 +699,10 @@ class MarketStateBuilder:
             
             # 🔄 Handle Pagination (Audit #V9.6)
             while 'LastEvaluatedKey' in response:
-                response = self.aws.trades_table.query(
-                    IndexName='GSI_ExitDate',
-                    KeyConditionExpression=(
-                        boto3.dynamodb.conditions.Key('Status').eq('CLOSED') &
-                        boto3.dynamodb.conditions.Key('ExitDate').eq(today_date)
+                response = self.aws.trades_table.scan(
+                    FilterExpression=(
+                        boto3.dynamodb.conditions.Attr('Status').eq('CLOSED') &
+                        boto3.dynamodb.conditions.Attr('ExitDate').eq(today_date)
                     ),
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
@@ -843,7 +866,7 @@ class TradePersistence:
                 'MarketContext': context.to_dict() # 📊 Gold mine for post-trade analysis
             }
             
-            self.aws.trades_table.put_item(Item=item)
+            self.aws.trades_table.put_item(Item=to_decimal(item))
             logger.info(f"💾 Trade logged: {trade_id}")
             
         except Exception as e:
@@ -923,7 +946,7 @@ class TradePersistence:
             if context:
                 item['MarketContext'] = context.to_dict()
             
-            self.aws.trades_table.put_item(Item=item)
+            self.aws.trades_table.put_item(Item=to_decimal(item))
             
         except Exception as e:
             logger.warning(f"Failed to log skip: {e}")
@@ -962,11 +985,26 @@ class TradingEngine:
             creds = self.aws.get_secret(secret_name)
             
             # Use creds from secrets manager, fallback to env ONLY if NOT in live mode
-            api_key = creds.get('API_KEY') or creds.get('apiKey') or api_key
-            secret = creds.get('SECRET_KEY') or creds.get('secret') or secret
+            if creds:
+                api_key = creds.get('API_KEY') or creds.get('apiKey')
+                secret = creds.get('SECRET_KEY') or creds.get('secret')
+                
+                if api_key and secret:
+                    # Log masked key for diagnostic (Audit #V10.9)
+                    masked_key = f"{api_key[:6]}...{api_key[-4:]}" if api_key else "None"
+                    logger.info(f"✅ Credentials loaded for index: {masked_key}")
+                else:
+                    logger.error(f"❌ Secret {secret_name} found but missing expected keys (API_KEY/SECRET_KEY)")
+            else:
+                logger.error(f"❌ Failed to retrieve secret content from {secret_name}")
             
         testnet = (trading_mode == 'test' or trading_mode == 'paper')
         
+        # 🛡️ Level 3 Safety: Fail Fast if no credentials in live mode
+        if not api_key and trading_mode == 'live':
+            logger.critical("🛑 FATAL: No credentials available for LIVE mode. Check Secrets Manager!")
+            raise RuntimeError("Live mode requires valid credentials")
+
         self.exchange = ExchangeConnector(
             exchange_id='binance',
             api_key=api_key,
@@ -984,18 +1022,16 @@ class TradingEngine:
         """Synchronize DynamoDB ActiveSlots with actual OPEN trades in database"""
         try:
             logger.info("🔄 Reconciling trading slots...")
-            # Query all trades with Status='OPEN' via Index
-            response = self.aws.trades_table.query(
-                IndexName='GSI_OpenByPair',
-                KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN')
+            # Query all trades with Status='OPEN' (Audit #V10.9: Fallback to Scan if Index missing)
+            response = self.aws.trades_table.scan(
+                FilterExpression=boto3.dynamodb.conditions.Attr('Status').eq('OPEN')
             )
             open_trades = response.get('Items', [])
             
             # Handle pagination for reconciliation
             while 'LastEvaluatedKey' in response:
-                response = self.aws.trades_table.query(
-                    IndexName='GSI_OpenByPair',
-                    KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN'),
+                response = self.aws.trades_table.scan(
+                    FilterExpression=boto3.dynamodb.conditions.Attr('Status').eq('OPEN'),
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
                 open_trades.extend(response.get('Items', []))
@@ -1006,12 +1042,12 @@ class TradingEngine:
             # Atomic update to match reality (Audit #V9.7)
             # Using update_item with ConditionExpression could be safer but put_item
             # with LastUpdated is acceptable given the frequency of Lambda execution.
-            self.aws.state_table.put_item(Item={
+            self.aws.state_table.put_item(Item=to_decimal({
                 'trader_id': 'GLOBAL_SLOTS',
                 'ActiveSlots': actual_count,
                 'LastUpdated': datetime.now(timezone.utc).isoformat(),
                 'ReconciledBy': self.execution_id
-            })
+            }))
             logger.info(f"✅ Slots reconciled: {actual_count} active.")
             
         except Exception as e:
@@ -1075,12 +1111,12 @@ class TradingEngine:
         """Apply temporary lock to a symbol"""
         expiry = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
         try:
-            self.aws.state_table.put_item(Item={
+            self.aws.state_table.put_item(Item=to_decimal({
                 'trader_id': f"LOCK#{symbol}",
                 'expiry': expiry,
                 'reason': reason,
                 'timestamp': datetime.now(timezone.utc).isoformat()
-            })
+            }))
             logger.warning(f"🔒 LOCKED {symbol} for {hours}h: {reason}")
         except Exception as e:
             logger.error(f"Failed to lock symbol: {e}")
@@ -1119,22 +1155,21 @@ class TradingEngine:
         """Manage exit logic for open positions (Optimized GSI)"""
         try:
             # 🛠️ GSI_OpenByPair (Status PK + Pair SK)
-            response = self.aws.trades_table.query(
-                IndexName='GSI_OpenByPair',
-                KeyConditionExpression=(
-                    boto3.dynamodb.conditions.Key('Status').eq('OPEN') &
-                    boto3.dynamodb.conditions.Key('Pair').eq(symbol)
+            # 🛠️ Audit #V10.9: Use Scan + Filter instead of missing GSI
+            response = self.aws.trades_table.scan(
+                FilterExpression=(
+                    boto3.dynamodb.conditions.Attr('Status').eq('OPEN') &
+                    boto3.dynamodb.conditions.Attr('Pair').eq(symbol)
                 )
             )
             open_trades = response.get('Items', [])
             
             # 🔄 Handle Pagination (Audit #V9.6)
             while 'LastEvaluatedKey' in response:
-                response = self.aws.trades_table.query(
-                    IndexName='GSI_OpenByPair',
-                    KeyConditionExpression=(
-                        boto3.dynamodb.conditions.Key('Status').eq('OPEN') &
-                        boto3.dynamodb.conditions.Key('Pair').eq(symbol)
+                response = self.aws.trades_table.scan(
+                    FilterExpression=(
+                        boto3.dynamodb.conditions.Attr('Status').eq('OPEN') &
+                        boto3.dynamodb.conditions.Attr('Pair').eq(symbol)
                     ),
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
@@ -1226,20 +1261,26 @@ class TradingEngine:
 
     def _evaluate_entry(self, symbol: str, context: MarketContext) -> Dict:
         """Evaluate entry (Audit #V10.5: Using DecisionEngine)"""
+        asset_class = classify_asset(symbol).lower()
         
         # 1. Technical Analysis (Data Gathering)
         ta_result = self._check_technical_entry(symbol, context)
         if ta_result['status'] != "SIGNAL":
+            # 💡 Descriptive technical log (Audit #V10.9)
+            reason = ta_result.get('reason', ta_result['status'])
+            self.persistence.log_skip(symbol, asset_class, reason, ta_result.get('price', 0), context)
             return ta_result
             
         # 2. Hierarchical Decision Check (Levels 1-3)
         proceed, reason, size_mult = DecisionEngine.evaluate(context, ta_result, symbol)
         if not proceed:
+            self.persistence.log_skip(symbol, asset_class, f"VETO: {reason}", ta_result.get('price', 0), context)
             return {"symbol": symbol, "status": "DECISION_VETO", "reason": reason}
 
         # 3. Slot Manager
         slot_manager = SlotManager(self.aws, context.max_slots, self.execution_id)
         if not slot_manager.acquire():
+            self.persistence.log_skip(symbol, asset_class, "SKIPPED_SLOTS_FULL", ta_result.get('price', 0), context)
             return {"symbol": symbol, "status": "SKIPPED_SLOTS_FULL"}
         
         self.active_slots[symbol] = slot_manager # Store for possible closure later
@@ -1251,7 +1292,7 @@ class TradingEngine:
             ai_result = self._check_ai_advisory(symbol, ta_result['rsi'])
             if ai_result['decision'] == "CANCEL":
                 self.persistence.log_skip(
-                    symbol, AssetClass.CRYPTO.value, 
+                    symbol, asset_class, 
                     f"AI_VETO: {ai_result['reason']}", 
                     ta_result['price'], context
                 )
@@ -1276,15 +1317,21 @@ class TradingEngine:
         """Isolated Technical Analysis Entry Check with High Confidence Filters (Audit #V10.4)"""
         ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=100)
         analysis = analyze_market(ohlcv)
+        if analysis.get('market_context') == 'NO_DATA':
+            return {"symbol": symbol, "status": "NO_DATA"}
+            
         rsi = analysis['indicators']['rsi']
-        price = analysis['current_price']
+        price = analysis.get('current_price', 0)
+        
+        if price == 0:
+            return {"symbol": symbol, "status": "NO_DATA"}
         
         # 1. RSI Extreme Filter
         adaptive_rsi = corridors.get_rsi_threshold_adaptive(symbol, self.config.rsi_buy_threshold)
         logger.info(f"📈 {symbol} Technical: RSI={rsi:.1f} (Target < {adaptive_rsi})")
         
         if rsi >= adaptive_rsi:
-            return {"symbol": symbol, "status": "NO_SIGNAL", "rsi": rsi}
+            return {"symbol": symbol, "status": "NO_SIGNAL", "reason": f"RSI_TOO_HIGH_{rsi:.1f}/{adaptive_rsi:.0f}", "rsi": rsi}
         
         # 2. Volume Analysis (Audit #V10.7: Bonus instead of Veto)
         volume_ok, vol_ratio = (True, 1.0)
@@ -1293,15 +1340,16 @@ class TradingEngine:
             
         # Hard veto only if volume is critically low for non-indices/forex
         if not volume_ok:
-            return {"symbol": symbol, "status": "LOW_VOLUME", "ratio": vol_ratio}
+            return {"symbol": symbol, "status": "LOW_VOLUME", "reason": f"LOW_VOL_RATIO_{vol_ratio:.2f}", "ratio": vol_ratio}
             
         # 3. SMA Neutral Zone Filter (Optimization N°4)
         for sma_val in [context.sma_50, context.sma_200]:
             if sma_val > 0:
                 dist = abs(price - sma_val) / sma_val
                 if dist < self.config.sma_proximity_threshold:
-                    logger.warning(f"🚫 Gray Zone Block: Price too close to SMA ({dist:.2%})")
-                    return {"symbol": symbol, "status": "SMA_GRAY_ZONE"}
+                    reason = f"SMA_GRAY_ZONE_{dist:.3%}"
+                    logger.warning(f"🚫 Gray Zone Block: {symbol} too close to SMA ({dist:.2%})")
+                    return {"symbol": symbol, "status": "SMA_GRAY_ZONE", "reason": reason}
             
         # 4. Final Scoring with Volume Bonus
         final_score = analysis['indicators']['signal_score']
