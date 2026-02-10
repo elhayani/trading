@@ -98,7 +98,7 @@ Maximiser les profits après validation de la sécurité du capital en V5.1/V6.0
 - `Forex/lambda/forex_trader/config.py` - Leverage 20x, TP 4.0x
 - `Indices/lambda/indices_trader/config.py` - TP 5.0x, RSI 52
 - `Commodities/lambda/commodities_trader/config.py` - Trailing Stop ajouté!
-- `Crypto/lambda/v4_trader/v4_hybrid_lambda.py` - R/R 1:2.3
+- `Empire/lambda/v4_trader/v4_hybrid_lambda.py` - R/R 1:2.3
 - Tous les `scripts/deploy.sh` - Paths fixes
 
 ---

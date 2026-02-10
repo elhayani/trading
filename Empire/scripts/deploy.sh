@@ -58,10 +58,10 @@ echo ""
 echo "📦 Step 2: Preparing Lambda Code..."
 echo "----------------------------------------------------------------------"
 
-# Crypto/lambda/v4_trader already contains the source code.
+# Empire/lambda/v4_trader already contains the source code.
 # We no longer need to copy from crypto_trader.
 
-echo -e "${GREEN}✅ Lambda code ready in Crypto/lambda/v4_trader${NC}"
+echo -e "${GREEN}✅ Lambda code ready in Empire/lambda/v4_trader${NC}"
 echo ""
 
 # Step 2.1: Prepare Dependencies Layer

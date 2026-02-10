@@ -9,7 +9,7 @@ import time
 
 # Add path to load market_analysis from lambda
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# Crypto/lambda/v4_trader
+# Empire/lambda/v4_trader
 lambda_dir = os.path.abspath(os.path.join(current_dir, '../lambda/v4_trader'))
 sys.path.append(lambda_dir)
 

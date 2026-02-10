@@ -234,7 +234,7 @@ Trading/
 │   ├── infrastructure/cdk/
 │   └── scripts/deploy.sh           # ✅ Fixed paths
 │
-├── ₿ Crypto/                     # BTC + SOL (V6.1)
+├── 🏛️ Empire/                     # Unified Trading Engine (V7)
 │   ├── lambda/
 │   │   └── v4_trader/
 │   │       └── v4_hybrid_lambda.py # R/R 1:2.3 FIXED
