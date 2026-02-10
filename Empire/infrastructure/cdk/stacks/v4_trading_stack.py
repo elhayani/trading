@@ -110,9 +110,9 @@ class V4TradingStack(Stack):
                 "STATE_TABLE": state_table.table_name,
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "TRADING_MODE": "live",
-                "SECRET_NAME": "Empire/BinanceKeys", # 🛡️ SECURE: No hardcoded keys
+                "SECRET_NAME": "trading/binance", # 🛡️ SECURE: No hardcoded keys
                 "CAPITAL": "1000",
-                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
+                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,EUR/USDT,GBP/USDT,AUD/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
                 "CHECK_INTERVAL": "3600",
                 "EXCHANGE": "binance"
             },
@@ -126,7 +126,7 @@ class V4TradingStack(Stack):
         
         # 🛡️ AWS Secrets Manager Permission
         binance_secret = secretsmanager.Secret.from_secret_name_v2(
-            self, "BinanceKeys", "Empire/BinanceKeys"
+            self, "BinanceKeys", "trading/binance"
         )
         binance_secret.grant_read(trading_lambda)
         
@@ -156,7 +156,7 @@ class V4TradingStack(Stack):
             timeout=Duration.minutes(1),
             memory_size=256,
             environment={
-                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
+                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,EUR/USDT,GBP/USDT,AUD/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
                 "TRADING_MODE": "live",
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "SNS_TOPIC_ARN": status_topic.topic_arn

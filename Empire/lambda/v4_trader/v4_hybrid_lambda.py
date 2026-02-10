@@ -930,18 +930,26 @@ class TradingEngine:
         trading_mode = os.environ.get('TRADING_MODE', 'test')
         secret_name = os.environ.get('SECRET_NAME')
         
+        # 🛡️ Level 1 Safety: Mandatory Secret Name in Live
         if not secret_name and trading_mode == 'live':
             logger.critical("🛑 KILL SWITCH: SECRET_NAME is missing in LIVE mode.")
             raise RuntimeError("Mandatory SECRET_NAME missing")
 
-        api_key = os.environ.get('API_KEY')
-        secret = os.environ.get('SECRET_KEY')
+        # 🛡️ Level 2 Safety: Ignore Env Vars in Live (Audit #V10.5)
+        if trading_mode == 'live':
+            api_key = None
+            secret = None
+        else:
+            api_key = os.environ.get('API_KEY')
+            secret = os.environ.get('SECRET_KEY')
         
         if secret_name:
             logger.info(f"🛡️ Loading credentials from Secrets Manager: {secret_name}")
             creds = self.aws.get_secret(secret_name)
-            api_key = creds.get('API_KEY', api_key) or creds.get('apiKey', api_key)
-            secret = creds.get('SECRET_KEY', secret) or creds.get('secret', secret)
+            
+            # Use creds from secrets manager, fallback to env ONLY if NOT in live mode
+            api_key = creds.get('API_KEY') or creds.get('apiKey') or api_key
+            secret = creds.get('SECRET_KEY') or creds.get('secret') or secret
             
         testnet = (trading_mode == 'test' or trading_mode == 'paper')
         

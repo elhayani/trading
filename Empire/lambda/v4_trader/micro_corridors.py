@@ -154,10 +154,10 @@ INDICES_CORRIDORS = {
 FOREX_EUR_GBP_CORRIDORS = {
     # === SESSION LONDRES (Matin européen) ===
     'LONDON_OPEN': {
-        'start': (8, 0), 'end': (9, 0),
+        'start': (9, 0), 'end': (10, 0),
         'name': '🇬🇧 London Open',
         'regime': MarketRegime.AGGRESSIVE_BREAKOUT,
-        'description': 'Ouverture Londres. Volatilité sur EUR/GBP.',
+        'description': 'Ouverture Londres. Volatilité sur EUR/GBP/AUD.',
         'params': {
             'tp_multiplier': 0.4,
             'sl_multiplier': 0.5,
@@ -169,7 +169,7 @@ FOREX_EUR_GBP_CORRIDORS = {
         }
     },
     'LONDON_MORNING': {
-        'start': (9, 0), 'end': (12, 0),
+        'start': (10, 0), 'end': (12, 0),
         'name': '☕ London Morning',
         'regime': MarketRegime.TREND_FOLLOWING,
         'description': 'Session Londres établie. Tendance claire.',
@@ -469,15 +469,13 @@ SYMBOL_CORRIDOR_MAP = {
     'NDX/USDT': INDICES_CORRIDORS,    # V7 (Nasdaq)
     'DEFI/USDT': INDICES_CORRIDORS,   # V7 (Crypto Index)
     
-    # Forex EUR/GBP
+    # Forex EUR/GBP/AUD
     'EURUSD': FOREX_EUR_GBP_CORRIDORS,
     'GBPUSD': FOREX_EUR_GBP_CORRIDORS,
-    'EUR/USD': FOREX_EUR_GBP_CORRIDORS, # V7 variant
-    'GBP/USD': FOREX_EUR_GBP_CORRIDORS, # V7 variant
-    
-    # Forex JPY
-    'USDJPY': FOREX_JPY_CORRIDORS,
-    'USD/JPY': FOREX_JPY_CORRIDORS, # V7 variant
+    'AUDUSD': FOREX_EUR_GBP_CORRIDORS,
+    'EUR/USDT': FOREX_EUR_GBP_CORRIDORS, 
+    'GBP/USDT': FOREX_EUR_GBP_CORRIDORS, 
+    'AUD/USDT': FOREX_EUR_GBP_CORRIDORS,
     
     # Commodities (V7: Tokenized)
     'PAXG/USDT': COMMODITIES_CORRIDORS,  # Gold
