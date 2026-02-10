@@ -6,6 +6,7 @@ import uuid
 import requests
 import time
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from market_analysis import analyze_market
 from news_fetcher import get_news_context
 from exchange_connector import ExchangeConnector
@@ -20,6 +21,13 @@ try:
     MICRO_CORRIDORS_AVAILABLE = True
 except ImportError:
     MICRO_CORRIDORS_AVAILABLE = False
+
+class MacroRegime(Enum):
+    BULL_TREND = "BULL_TREND"
+    RANGE = "RANGE"
+    HIGH_VOL = "HIGH_VOL"
+    CRASH = "CRASH"
+    ILLIQUID = "ILLIQUID"
 
 # AWS & Logging
 logger = logging.getLogger()
@@ -340,7 +348,10 @@ class MarketState:
         # 4. Golden Window Status
         self.is_golden = self._check_golden_window()
         
-        # 5. Risk Guards (Audit #V8.3)
+        # 5. Market Regime Detection (Audit #V8.6)
+        self.regime = self._determine_macro_regime()
+        
+        # 6. Risk Guards (Audit #V8.3)
         self.daily_pnl = calculate_daily_performance()
         self.daily_pnl_pct = self.daily_pnl / self.balance if self.balance > 0 else 0
         self.risk_blocked = self.daily_pnl_pct <= -MAX_DAILY_LOSS_PCT
@@ -348,21 +359,37 @@ class MarketState:
         if self.risk_blocked:
             logger.critical(f"🛑 RISK BLOCK: Daily Loss {self.daily_pnl_pct:.2%} exceeds limit {MAX_DAILY_LOSS_PCT:.2%}!")
         
-        logger.info(f"✅ V8 MarketState Ready | Slots: {self.current_trades}/{self.max_slots} | VIX: {self.vix['value']:.1f}")
+        logger.info(f"✅ V8.6 MarketState Ready | Regime: {self.regime.value} | VIX: {self.vix['value']:.1f}")
 
     def _fetch_vix_with_retry(self, retries=3):
-        """Fetch VIX with retry logic to prevent sporadic API failures"""
+        """Fetch VIX with retry logic + DynamoDB Fallback (Audit #4)"""
         for i in range(retries):
             try:
                 can_trade, mult, val = check_vix_filter()
                 if val > 0:
+                    # Update cache
+                    state_table.put_item(Item={
+                        'trader_id': 'VIX_CACHE',
+                        'value': str(val),
+                        'timestamp': get_paris_time().isoformat()
+                    })
                     return {"can_trade": can_trade, "multiplier": mult, "value": val}
             except Exception as e:
                 logger.warning(f"⚠️ VIX Retry {i+1}/{retries} failed: {e}")
                 time.sleep(1)
         
+        # 🛡️ Audit #4: Fallback to last known value in DynamoDB
+        try:
+            res = state_table.get_item(Key={'trader_id': 'VIX_CACHE'})
+            item = res.get('Item')
+            if item:
+                val = float(item['value'])
+                logger.info(f"♻️ VIX Fallback loaded from DynamoDB: {val}")
+                return {"can_trade": val < 30, "multiplier": 1.0 if val < 20 else 0.5, "value": val, "fallback": True}
+        except: pass
+
         # Fail-safe: Block if VIX fails repeatedly
-        logger.error("❌ VIX API failed after all retries. Defaulting to SAFETY BLOCK.")
+        logger.error("❌ VIX API failed and no fallback available. SAFETY BLOCK.")
         return {"can_trade": False, "multiplier": 0, "value": 99.0}
 
     def _fetch_btc_context(self, exchange):
@@ -391,6 +418,30 @@ class MarketState:
         is_us = 13 <= hour <= 16
         return is_eu or is_us
 
+    def _determine_macro_regime(self):
+        """
+        🚀 V8.6: Centralized Regime Detection
+        Audit #2.2: Every filter looks at the regime.
+        """
+        # ⚠️ CRASH: Extreme downside
+        if self.btc['level'] in ["L3_SURVIVAL", "L2_HALT"] or self.btc['1h_change'] < -0.05:
+            return MacroRegime.CRASH
+            
+        # 🌋 HIGH_VOL: VIX Spike
+        if self.vix['value'] > 30:
+            return MacroRegime.HIGH_VOL
+            
+        # 🐃 BULL_TREND: Clear uptrend + low vol
+        if self.btc['7d'] > 0.05 and self.btc['24h'] > -0.02 and self.vix['value'] < 22:
+            return MacroRegime.BULL_TREND
+            
+        # 🌑 ILLIQUID: No liquidity window
+        if not self.is_golden:
+            return MacroRegime.ILLIQUID
+            
+        # ⚖️ Default: RANGE
+        return MacroRegime.RANGE
+
     def get_dict(self):
         """Return a dictionary version for legacy code compatibility"""
         return {
@@ -400,7 +451,8 @@ class MarketState:
             "cb": self.btc,
             "btc_1h": self.btc["1h_change"],
             "vix": self.vix,
-            "is_golden": self.is_golden
+            "is_golden": self.is_golden,
+            "regime": self.regime.value # V8.6
         }
 
 def check_circuit_breaker(exchange):
@@ -993,14 +1045,19 @@ def manage_exits(symbol, asset_class, exchange=None, memory_cache=None):
             total_pnl = close_all_positions(open_trades, current_price, "HARD_TP", exchange)
             return f"HARD_TP_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
             
-        #  SOL TURBO TRAILING (Priority 2.5 - For high-momentum SOL trades)
+        # 📈 V8.6: ATR-Based Trailing Stop (Audit #4)
+        atr_pct = 0
+        cache_key = f"{symbol}_1h"
+        if memory_cache is not None and cache_key in memory_cache:
+            atr = memory_cache[cache_key]['analysis']['indicators'].get('atr', 0)
+            atr_pct = (atr / current_price) * 100 if current_price > 0 else 0
+
+        #  SOL TURBO TRAILING (Priority 2.5)
         if 'SOL' in symbol and pnl_pct >= SOL_TRAILING_ACTIVATION:
-            # Track peak profit and apply trailing stop
-            # Store peak in trade metadata if not exists
+            # ... update peak ...
             for trade in open_trades:
                 peak_pnl = float(trade.get('PeakPnL', pnl_pct))
                 if pnl_pct > peak_pnl:
-                    # Update peak
                     empire_table.update_item(
                         Key={'TradeId': trade['TradeId']},
                         UpdateExpression="set PeakPnL = :p",
@@ -1008,39 +1065,38 @@ def manage_exits(symbol, asset_class, exchange=None, memory_cache=None):
                     )
                     peak_pnl = pnl_pct
                 
-                # Check if we've fallen from peak by trailing amount
-                trailing_trigger = peak_pnl - SOL_TRAILING_STOP
+                # Dynamic Trigger: 2.5x ATR or static fallback
+                trail_limit = max(SOL_TRAILING_STOP, atr_pct * 2.5) if atr_pct > 0 else SOL_TRAILING_STOP
+                trailing_trigger = peak_pnl - trail_limit
+                
                 if pnl_pct <= trailing_trigger and trailing_trigger > 0:
-                    logger.info(f"🚀 SOL TURBO TRAILING triggered! Peak: +{peak_pnl:.2f}% | Current: +{pnl_pct:.2f}%")
-                    total_pnl = close_all_positions(open_trades, current_price, "SOL_TURBO_TRAILING", exchange)
-                    return f"SOL_TURBO_TRAILING_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
-            
-            logger.info(f"🚀 SOL in Turbo Zone +{pnl_pct:.2f}%. Trailing active, riding the wave...")
-        
+                    logger.info(f"🚀 SOL TURBO ATR TRAILING triggered! Peak: +{peak_pnl:.2f}% | Current: +{pnl_pct:.2f}%")
+                    total_pnl = close_all_positions(open_trades, current_price, "SOL_ATR_TRAILING", exchange)
+                    return f"SOL_ATR_TRAILING_AT_{pnl_pct:.2f}%"
+
         # 📈 TRAILING STOP CHECK (Priority 3 - RSI confirmation required)
         rsi = None
         if pnl_pct >= TRAILING_TP_PCT:
-            # 🧠 V8.4.1: Use shared cache
-            cache_key = f"{symbol}_1h"
-            if memory_cache is not None and cache_key in memory_cache and memory_cache[cache_key]:
-                cached = memory_cache[cache_key]
-                rsi = cached["analysis"]['indicators']['rsi']
-            else:
-                # 🧠 Fetch full history (200 bars) to satisfy SMA200 in later analysis if needed
-                target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)
-                if not target_ohlcv or len(target_ohlcv) < 14:
-                    rsi = 50 # Default safe RSI
-                else:
-                    analysis = analyze_market(target_ohlcv)
-                    rsi = analysis['indicators']['rsi']
-                    # Update cache for analysis reuse
-                    if memory_cache is not None:
-                        memory_cache[cache_key] = {"ohlcv": target_ohlcv, "analysis": analysis}
+            # Audit #4: If ATR shows expansion, give more room
+            trail_activation = TRAILING_TP_PCT
+            if atr_pct > 0.5: trail_activation += (atr_pct * 0.5) 
             
-            if rsi > RSI_SELL_THRESHOLD:
-                logger.info(f"📈 TRAILING TP ACTIVATED (RSI {rsi:.1f} > {RSI_SELL_THRESHOLD}). Closing at {current_price:.2f}")
-                total_pnl = close_all_positions(open_trades, current_price, "TRAILING_TP", exchange)
-                return f"TRAILING_TP_AT_{pnl_pct:.2f}%_PNL_${total_pnl:.2f}"
+            if pnl_pct >= trail_activation:
+                # 🧠 V8.4.1: Use shared cache
+                if memory_cache is not None and cache_key in memory_cache and memory_cache[cache_key]:
+                    cached = memory_cache[cache_key]
+                    rsi = cached["analysis"]['indicators']['rsi']
+                else:
+                    target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)
+                    if target_ohlcv and len(target_ohlcv) >= 14:
+                        analysis = analyze_market(target_ohlcv)
+                        rsi = analysis['indicators']['rsi']
+                        if memory_cache is not None: memory_cache[cache_key] = {"ohlcv": target_ohlcv, "analysis": analysis}
+                
+                if rsi and rsi > RSI_SELL_THRESHOLD:
+                    logger.info(f"📈 TRAILING TP ACTIVATED (RSI {rsi:.1f} > {RSI_SELL_THRESHOLD}). Closing at {current_price:.2f}")
+                    total_pnl = close_all_positions(open_trades, current_price, "TRAILING_TP", exchange)
+                    return f"TRAILING_TP_AT_{pnl_pct:.2f}%"
         
         # Log status if still held
         rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
@@ -1214,6 +1270,13 @@ def lambda_handler(event, context):
                 # 🔥 V7: Adaptive volume threshold per asset class
                 required_volume = get_volume_threshold_for_asset(asset_class)
                 
+                #  Macro Regime Relaxation (Audit #V8.6)
+                if g_ctx['regime'] == "BULL_TREND":
+                    required_volume *= 0.7 
+                    logger.info(f"🐂 BULL REGIME: Relaxing volume to {required_volume:.2f}x")
+                    score += 5
+                    scoring_details.append("BULL_REGIME_BONUS (+5)")
+
                 if in_golden_window:
                     required_volume = min(required_volume, 1.0)  # More aggressive in golden window
                     dynamic_rsi_threshold = max(dynamic_rsi_threshold, 45) # Allow up to 45
@@ -1268,9 +1331,22 @@ def lambda_handler(event, context):
 
                 # 🚀 3. MOMENTUM SCORER (Max 15 pts)
                 momentum_ok, momentum_trend, ema_diff = check_momentum_filter(target_ohlcv, rsi=rsi)
-                if momentum_ok:
+                
+                # 📈 5. REVERSAL SCORER (Max 10 pts)
+                reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
+
+                if momentum_trend == "BULLISH":
                     score += 15
                     scoring_details.append(f"MOMENTUM_OK (+15) [{momentum_trend}]")
+                    # 💡 Audit #3: If Trend is strong, ignore reversal candle color (Pullback buy)
+                    if g_ctx['regime'] == "BULL_TREND":
+                        score += 5
+                        scoring_details.append("BULL_REGIME_REVERSAL_EXEMPT (+5)")
+                        reversal_ok = True
+                
+                elif momentum_ok:
+                    score += 10
+                    scoring_details.append(f"MOMENTUM_NEUTRAL (+10)")
                 elif rsi < 28:
                     # Counter-trend dip buying allowed if RSI is low
                     score += 5
@@ -1281,13 +1357,15 @@ def lambda_handler(event, context):
                 if signal_strength == "STRONG":
                     score += 15
                     scoring_details.append(f"MULTI_TF_STRONG (+15) [RSI4H:{rsi_4h:.1f}]")
+                elif g_ctx['regime'] == "BULL_TREND":
+                    score += 5
+                    scoring_details.append("BULL_REGIME_MTF_RELAX (+5)")
                 elif signal_strength == "NORMAL" or signal_strength == "WEAK":
                     score += 5
                     scoring_details.append(f"MULTI_TF_CONFRIM (+5)")
 
-                # 📈 5. REVERSAL SCORER (Max 10 pts)
-                reversal_ok, reversal_reason = check_reversal_pattern(target_ohlcv, rsi=rsi)
-                if reversal_ok:
+                # Final Reversal points
+                if reversal_ok and momentum_trend != "BULLISH": # Don't double count if BULLISH
                     score += 10
                     scoring_details.append(f"REVERSAL_OK (+10)")
 
@@ -1315,24 +1393,24 @@ def lambda_handler(event, context):
                             results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
                             continue
                         
-                        current_trades += 1 # 🔄 Update local counter for next assets in loop
+                        slot_acquired = True
+                        current_trades += 1 # 🔄 Update local counter
                         
-                        final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
-                        base_capital = CAPITAL_PER_TRADE * final_size_mult
-                        
-                        calc_tp = HARD_TP_PCT * corridor_tp_mult
-                        calc_sl = STOP_LOSS_PCT * corridor_sl_mult
-                        
-                        adjusted_capital, confidence = calculate_dynamic_position_size(
-                            base_capital, final_score, calc_sl, g_ctx['balance']
-                        )
-                        
-                        # 🚀 V8 EXECUTION ENGINE
                         try:
+                            final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
+                            base_capital = CAPITAL_PER_TRADE * final_size_mult
+                            
+                            calc_tp = HARD_TP_PCT * corridor_tp_mult
+                            calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                            
+                            adjusted_capital, confidence = calculate_dynamic_position_size(
+                                base_capital, final_score, calc_sl, g_ctx['balance']
+                            )
+                            
                             trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
                             size = round(adjusted_capital / current_price, 4)
                             
-                            # 1. Market Buy
+                            # 🚀 V8 EXECUTION ENGINE
                             filled = execute_trade_safe(exchange, symbol, size, 'buy')
                             entry_p = float(filled.get('average', current_price))
                             entry_s = float(filled.get('amount', size))
@@ -1343,9 +1421,9 @@ def lambda_handler(event, context):
                             
                             # 3. Persistence
                             log_trade_to_empire(
-                                trade_id, symbol, "LONG", f"V8_SCORE_{final_score}_CONF_{confidence:.1f}",
+                                trade_id, symbol, "LONG", f"V8_SCORE_{final_score}_REG_{g_ctx['regime']}",
                                 entry_p, entry_s, adjusted_capital, "CONFIRM", 
-                                f"Score: {final_score}/100. {decision.get('reason')}",
+                                f"Score: {final_score}/100. Regime: {g_ctx['regime']}. {decision.get('reason')}",
                                 asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
                                 execution_info=f"EXECUTED_ID_{filled['id']}"
                             )
@@ -1353,6 +1431,9 @@ def lambda_handler(event, context):
                             
                         except Exception as exec_err:
                             logger.error(f"❌ CRITICAL EXECUTION ERROR for {symbol}: {exec_err}")
+                            if slot_acquired:
+                                release_atomic_slot()
+                                current_trades -= 1
                             results.append({"symbol": symbol, "status": "EXECUTION_FAILED", "error": str(exec_err)})
                     else:
                         log_skip_to_empire(symbol, f"AI_VETO: {decision.get('reason')}", current_price, asset_class)
@@ -1402,24 +1483,24 @@ def lambda_handler(event, context):
                                 results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
                                 continue
 
+                            slot_acquired = True
                             current_trades += 1 # 🔄 Update local counter
                             
-                            final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
-                            base_capital = CAPITAL_PER_TRADE * final_size_mult
-                            
-                            calc_tp = HARD_TP_PCT * corridor_tp_mult
-                            calc_sl = STOP_LOSS_PCT * corridor_sl_mult
-                            
-                            adjusted_capital, confidence = calculate_dynamic_position_size(
-                                base_capital, final_score, calc_sl, g_ctx['balance']
-                            )
-                            
-                            # �🚀 V8 EXECUTION ENGINE
                             try:
+                                final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
+                                base_capital = CAPITAL_PER_TRADE * final_size_mult
+                                
+                                calc_tp = HARD_TP_PCT * corridor_tp_mult
+                                calc_sl = STOP_LOSS_PCT * corridor_sl_mult
+                                
+                                adjusted_capital, confidence = calculate_dynamic_position_size(
+                                    base_capital, final_score, calc_sl, g_ctx['balance']
+                                )
+                                
                                 trade_id = f"{asset_class.upper()}-{uuid.uuid4().hex[:8]}"
                                 size = round(adjusted_capital / current_price, 4)
                                 
-                                # 1. Market Buy
+                                # 🚀 V8 EXECUTION ENGINE
                                 filled = execute_trade_safe(exchange, symbol, size, 'buy')
                                 entry_p = float(filled.get('average', current_price))
                                 entry_s = float(filled.get('amount', size))
@@ -1430,9 +1511,9 @@ def lambda_handler(event, context):
                                 
                                 # 3. Persistence
                                 log_trade_to_empire(
-                                    trade_id, symbol, "LONG", f"V7_TREND_{corridor_name}",
+                                    trade_id, symbol, "LONG", f"V8_TREND_{g_ctx['regime']}",
                                     entry_p, entry_s, adjusted_capital, "CONFIRM", 
-                                    f"TREND: Price>{sma200:.0f}(SMA200), RSI={rsi:.1f}. Score: {final_score}. {decision.get('reason')}",
+                                    f"TREND: Price>{sma200:.0f}(SMA200). Score: {final_score}. Regime: {g_ctx['regime']}",
                                     asset_class, tp_pct=round(calc_tp, 2), sl_pct=round(calc_sl, 2),
                                     execution_info=f"EXECUTED_ID_{filled['id']}"
                                 )
@@ -1440,6 +1521,9 @@ def lambda_handler(event, context):
                                 
                             except Exception as exec_err:
                                 logger.error(f"❌ CRITICAL TREND EXECUTION ERROR: {exec_err}")
+                                if slot_acquired:
+                                    release_atomic_slot()
+                                    current_trades -= 1
                                 results.append({"symbol": symbol, "status": "TREND_EXECUTION_FAILED"})
                         else:
                             log_skip_to_empire(symbol, f"TREND_AI_VETO: {decision.get('reason')}", current_price, asset_class)
