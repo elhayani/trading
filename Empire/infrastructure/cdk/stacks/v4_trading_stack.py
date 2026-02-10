@@ -127,9 +127,9 @@ class V4TradingStack(Stack):
             point_in_time_recovery=True
         )
         
-        # 🚀 V8 PERFORMANCE INDEX: Status-index (Audit #V8.4: Optimized Composite Key)
+        # 🚀 V8 PERFORMANCE INDEX: GSI_OpenByPair (Audit #V8.6: Optimized Composite Key)
         unified_trades_table.add_global_secondary_index(
-            index_name="Status-index",
+            index_name="GSI_OpenByPair",
             partition_key=dynamodb.Attribute(name="Status", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="PairTimestamp", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL

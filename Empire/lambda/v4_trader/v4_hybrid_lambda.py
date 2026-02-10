@@ -359,7 +359,10 @@ class MarketState:
         if self.risk_blocked:
             logger.critical(f"🛑 RISK BLOCK: Daily Loss {self.daily_pnl_pct:.2%} exceeds limit {MAX_DAILY_LOSS_PCT:.2%}!")
         
-        logger.info(f"✅ V8.6 MarketState Ready | Regime: {self.regime.value} | VIX: {self.vix['value']:.1f}")
+        # 7. Adaptive Entry Threshold (Audit #5)
+        self.entry_threshold = 65 if self.regime == MacroRegime.BULL_TREND else 80
+        
+        logger.info(f"✅ V8.6 MarketState Ready | Regime: {self.regime.value} | Threshold: {self.entry_threshold} | VIX: {self.vix['value']:.1f}")
 
     def _fetch_vix_with_retry(self, retries=3):
         """Fetch VIX with retry logic + DynamoDB Fallback (Audit #4)"""
@@ -378,14 +381,21 @@ class MarketState:
                 logger.warning(f"⚠️ VIX Retry {i+1}/{retries} failed: {e}")
                 time.sleep(1)
         
-        # 🛡️ Audit #4: Fallback to last known value in DynamoDB
+        # 🛡️ Audit #4: Fallback to last known value in DynamoDB (60min check)
         try:
             res = state_table.get_item(Key={'trader_id': 'VIX_CACHE'})
             item = res.get('Item')
             if item:
                 val = float(item['value'])
-                logger.info(f"♻️ VIX Fallback loaded from DynamoDB: {val}")
-                return {"can_trade": val < 30, "multiplier": 1.0 if val < 20 else 0.5, "value": val, "fallback": True}
+                ts = datetime.fromisoformat(item['timestamp'])
+                age_mins = (get_paris_time() - ts).total_seconds() / 60
+                
+                if age_mins < 60:
+                    logger.info(f"♻️ VIX Fallback (Fresh: {age_mins:.1f}m): {val}")
+                    return {"can_trade": val < 30, "multiplier": 1.0 if val < 20 else 0.5, "value": val}
+                else:
+                    logger.warning(f"⚠️ VIX Cache too old ({age_mins:.1f}m). Using as non-blocking warning.")
+                    return {"can_trade": True, "multiplier": 1.0, "value": val, "warning": "OLD_CACHE"}
         except: pass
 
         # Fail-safe: Block if VIX fails repeatedly
@@ -452,7 +462,8 @@ class MarketState:
             "btc_1h": self.btc["1h_change"],
             "vix": self.vix,
             "is_golden": self.is_golden,
-            "regime": self.regime.value # V8.6
+            "regime": self.regime.value, # V8.6
+            "entry_threshold": self.entry_threshold
         }
 
 def check_circuit_breaker(exchange):
@@ -936,8 +947,8 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication news
         
         return json.loads(completion)
     except Exception as e:
-        logger.error(f"Bedrock Error: {e}")
-        return {"decision": "CANCEL", "reason": "Bedrock AI Error - Safety default", "confidence": 0}
+        logger.warning(f"⚠️ Bedrock Error: {e}. Fail-safe: CONFIRM with Low Confidence (Audit #3.3)")
+        return {"decision": "CONFIRM", "reason": "AWS_API_TIMEOUT_FALLBACK", "confidence": 0.5}
 
 def close_all_positions(open_trades, current_price, reason, exchange=None):
     """Helper to close all open positions with proper PnL calculation"""
@@ -996,7 +1007,7 @@ def manage_exits(symbol, asset_class, exchange=None, memory_cache=None):
     try:
         # Performance Index Query for OPEN trades for this symbol DIRECTLY
         response = empire_table.query(
-            IndexName='Status-index',
+            IndexName='GSI_OpenByPair',
             KeyConditionExpression=(
                 boto3.dynamodb.conditions.Key('Status').eq('OPEN') & 
                 boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
@@ -1097,6 +1108,25 @@ def manage_exits(symbol, asset_class, exchange=None, memory_cache=None):
                     logger.info(f"📈 TRAILING TP ACTIVATED (RSI {rsi:.1f} > {RSI_SELL_THRESHOLD}). Closing at {current_price:.2f}")
                     total_pnl = close_all_positions(open_trades, current_price, "TRAILING_TP", exchange)
                     return f"TRAILING_TP_AT_{pnl_pct:.2f}%"
+
+        # 🚀 ATR-BASED TRAILING (Audit #6) - Pure price-based safety
+        if pnl_pct >= 1.0: # Only if at least 1% profit
+            for trade in open_trades:
+                peak_pnl = float(trade.get('PeakPnL', pnl_pct))
+                if pnl_pct > peak_pnl:
+                    empire_table.update_item(
+                        Key={'TradeId': trade['TradeId']},
+                        UpdateExpression="set PeakPnL = :p",
+                        ExpressionAttributeValues={':p': str(pnl_pct)}
+                    )
+                    peak_pnl = pnl_pct
+                
+                # ATR Trailing: If profit drops more than 1.5x ATR from peak
+                atr_dist = max(1.0, atr_pct * 1.5) if atr_pct > 0 else 1.5
+                if pnl_pct < (peak_pnl - atr_dist):
+                    logger.warning(f"📉 ATR TRAILING: Profit dropped {pnl_pct:.2f}% < {peak_pnl:.2f}% - {atr_dist:.1f}%")
+                    total_pnl = close_all_positions(open_trades, current_price, "ATR_TRAILING_EXIT", exchange)
+                    return f"ATR_TRAILING_AT_{pnl_pct:.2f}%"
         
         # Log status if still held
         rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
@@ -1117,7 +1147,7 @@ def get_portfolio_context(symbol, asset_class='Crypto'):
         # 1. Get current OPEN trades for this specific pair DIRECTLY from index
         # 🚀 No FilterExpression needed anymore! Pure PK+SK query.
         response_open = empire_table.query(
-            IndexName='Status-index',
+            IndexName='GSI_OpenByPair',
             KeyConditionExpression=(
                 boto3.dynamodb.conditions.Key('Status').eq('OPEN') & 
                 boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
@@ -1127,7 +1157,7 @@ def get_portfolio_context(symbol, asset_class='Crypto'):
         
         # 2. Get last CLOSED trade for Cooldown (PK + BeginsWith SK)
         response_closed = empire_table.query(
-            IndexName='Status-index',
+            IndexName='GSI_OpenByPair',
             KeyConditionExpression=(
                 boto3.dynamodb.conditions.Key('Status').eq('CLOSED') & 
                 boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
@@ -1371,9 +1401,9 @@ def lambda_handler(event, context):
 
                 # ======================== DECISION ========================
                 final_score = min(100, score)
-                logger.info(f"⚖️ Final Scoring for {symbol}: {final_score}/100 | Details: {', '.join(scoring_details)}")
+                logger.info(f"⚖️ Final Scoring for {symbol}: {final_score}/100 | Min Req: {g_ctx['entry_threshold']}")
 
-                if final_score >= 70:
+                if final_score >= g_ctx['entry_threshold']:
                     # Final AI confirmation
                     news_symbol = symbol.split('=')[0].split('/')[0]
                     news_ctx = get_news_context(news_symbol)
@@ -1464,9 +1494,9 @@ def lambda_handler(event, context):
                         t_details.append("RSI_STRENGTH (+5)")
 
                     final_score = min(100, t_score)
-                    logger.info(f"⚖️ Trend Scoring for {symbol}: {final_score}/100 | Details: {', '.join(t_details)}")
+                    logger.info(f"⚖️ Trend Scoring for {symbol}: {final_score}/100 | Min Req: {g_ctx['entry_threshold']}")
                     
-                    if final_score >= 70:
+                    if final_score >= g_ctx['entry_threshold']:
                         # AI confirmation
                         news_symbol = symbol.split('=')[0].split('/')[0]
                         news_ctx = get_news_context(news_symbol)
