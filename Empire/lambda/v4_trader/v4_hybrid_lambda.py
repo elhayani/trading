@@ -206,13 +206,14 @@ MAX_CRYPTO_EXPOSURE = int(os.environ.get('MAX_CRYPTO_EXPOSURE', '2'))
 def log_trade_to_empire(trade_id, symbol, action, strategy, entry_price, size, cost, decision, reason, asset_class='Crypto', tp_pct=0, sl_pct=0, execution_info=''):
     """
     🗄️ Persistence Engine (V8): Purely for DynamoDB
-    Logs ready-to-save trade data.
+    Logs ready-to-save trade data with optimized composite indexing.
     """
     try:
         timestamp = get_paris_time().isoformat()
         item = {
             'TradeId': trade_id,
             'Timestamp': timestamp,
+            'PairTimestamp': f"{symbol}#{timestamp}", # 🚀 Composite key for V8.4 GSI
             'AssetClass': asset_class,
             'Pair': symbol,
             'Type': action, 
@@ -245,13 +246,14 @@ def place_take_profit_safe(exchange, symbol, size, tp_price):
         return False
 
 def log_skip_to_empire(symbol, reason, price, asset_class='Crypto'):
-    """Log skipped/no-signal events for the Reporter"""
+    """Log skipped/no-signal events with composite indexing"""
     try:
         timestamp = get_paris_time().isoformat()
         log_id = f"LOG-{uuid.uuid4().hex[:8]}"
         item = {
             'TradeId': log_id,
             'Timestamp': timestamp,
+            'PairTimestamp': f"{symbol}#{timestamp}",
             'AssetClass': asset_class,
             'Pair': symbol,
             'Status': 'SKIPPED',
@@ -964,19 +966,18 @@ def close_all_positions(open_trades, current_price, reason, exchange=None):
         )
     return total_pnl
 
-def manage_exits(symbol, asset_class, exchange=None):
+def manage_exits(symbol, asset_class, exchange=None, memory_cache=None):
     """
-    Gestion des sorties avec:
-    - 🛑 STOP LOSS: -5% (configurable)
-    - 💎 HARD TAKE PROFIT: +5% (configurable, independent of RSI)
-    - 📈 TRAILING STOP: +2% activation + RSI > 75 confirmation
+    Gestion des sorties (V8.4.1 Optimized Query & Cache)
     """
     try:
-        # Performance Index Query for OPEN trades
+        # Performance Index Query for OPEN trades for this symbol DIRECTLY
         response = empire_table.query(
             IndexName='Status-index',
-            KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN'),
-            FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(symbol)
+            KeyConditionExpression=(
+                boto3.dynamodb.conditions.Key('Status').eq('OPEN') & 
+                boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
+            )
         )
         open_trades = response.get('Items', [])
         if not open_trades: 
@@ -1048,8 +1049,22 @@ def manage_exits(symbol, asset_class, exchange=None):
         # 📈 TRAILING STOP CHECK (Priority 3 - RSI confirmation required)
         rsi = None
         if pnl_pct >= TRAILING_TP_PCT:
-            target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=14)
-            rsi = analyze_market(target_ohlcv)['indicators']['rsi']
+            # 🧠 V8.4.1: Use shared cache
+            cache_key = f"{symbol}_1h"
+            if memory_cache is not None and cache_key in memory_cache and memory_cache[cache_key]:
+                cached = memory_cache[cache_key]
+                rsi = cached["analysis"]['indicators']['rsi']
+            else:
+                # 🧠 Fetch full history (200 bars) to satisfy SMA200 in later analysis if needed
+                target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)
+                if not target_ohlcv or len(target_ohlcv) < 14:
+                    rsi = 50 # Default safe RSI
+                else:
+                    analysis = analyze_market(target_ohlcv)
+                    rsi = analysis['indicators']['rsi']
+                    # Update cache for analysis reuse
+                    if memory_cache is not None:
+                        memory_cache[cache_key] = {"ohlcv": target_ohlcv, "analysis": analysis}
             
             if rsi > RSI_SELL_THRESHOLD:
                 logger.info(f"📈 TRAILING TP ACTIVATED (RSI {rsi:.1f} > {RSI_SELL_THRESHOLD}). Closing at {current_price:.2f}")
@@ -1068,28 +1083,33 @@ def manage_exits(symbol, asset_class, exchange=None):
 
 def get_portfolio_context(symbol, asset_class='Crypto'):
     """
-    Get portfolio context — V8: uses GSI Status-index with Timestamp
-    Ensures high performance and correct cooldown detection.
+    Get portfolio context — V8.4: Uses optimized Composite GSI (Status + PairTimestamp)
+    Ref: Audit #14 & #V8.4 (Fill/Cost optimization)
     """
     try:
-        # 1. Get current OPEN trades for this pair
+        # 1. Get current OPEN trades for this specific pair DIRECTLY from index
+        # 🚀 No FilterExpression needed anymore! Pure PK+SK query.
         response_open = empire_table.query(
             IndexName='Status-index',
-            KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('OPEN'),
-            # We filter Pair in memory or via FilterExpression (Pair is not in Index key)
-            FilterExpression=boto3.dynamodb.conditions.Attr('Pair').eq(symbol)
+            KeyConditionExpression=(
+                boto3.dynamodb.conditions.Key('Status').eq('OPEN') & 
+                boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
+            )
         )
         open_trades = response_open.get('Items', [])
         
-        # 2. Get last CLOSED trade for Cooldown (Order by Timestamp DESC)
+        # 2. Get last CLOSED trade for Cooldown (PK + BeginsWith SK)
         response_closed = empire_table.query(
             IndexName='Status-index',
-            KeyConditionExpression=boto3.dynamodb.conditions.Key('Status').eq('CLOSED'),
+            KeyConditionExpression=(
+                boto3.dynamodb.conditions.Key('Status').eq('CLOSED') & 
+                boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
+            ),
             ScanIndexForward=False, # Get latest first
-            Limit=50 # Check last 50 trades
+            Limit=1
         )
-        closed_trades = [t for t in response_closed.get('Items', []) if t.get('Pair') == symbol]
-        last_closed = closed_trades[0] if closed_trades else None
+        last_closed_items = response_closed.get('Items', [])
+        last_closed = last_closed_items[0] if last_closed_items else None
         
         # Determine Truly Last Trade
         last_trade = open_trades[0] if open_trades else last_closed
@@ -1118,11 +1138,15 @@ def lambda_handler(event, context):
         
         # 🔥 V8 GLOBAL CONTEXT (Architecture Context-Aware)
         # We fetch EVERYTHING global once, before the loop
+        # V8: Global Market Context
         state = MarketState(exchange)
         g_ctx = state.get_dict()
         
         current_trades = g_ctx['current_trades']
         max_slots = g_ctx['max_slots']
+        
+        # 🧠 V8.4: In-Memory Execution Cache (Avoid redundant OHLCV/Analysis)
+        memory_cache = {}
         
         # 🔄 V8: Sync DynamoDB Lock with Exchange Reality
         sync_slots_with_exchange(current_trades)
@@ -1133,11 +1157,11 @@ def lambda_handler(event, context):
             
             # Dynamic classification (similar to Dashboard API)
             asset_class = classify_asset(symbol)
-            logger.info(f"� Processing {symbol} ({asset_class})")
+            logger.info(f"🔍 Processing {symbol} ({asset_class})")
             
             try:
                 # 1. GESTION DES SORTIES (Priorité Absolue)
-                exit_status = manage_exits(symbol, asset_class, exchange)
+                exit_status = manage_exits(symbol, asset_class, exchange, memory_cache)
                 if exit_status and "CLOSED" in exit_status:
                     results.append({"symbol": symbol, "status": "EXIT_SUCCESS", "details": exit_status})
                     current_trades = max(0, current_trades - 1) # Free a slot immediately
@@ -1171,12 +1195,26 @@ def lambda_handler(event, context):
                     hours_since = (get_paris_time() - last_time).total_seconds() / 3600
 
                 # 4. ANALYSE & SIGNAL
-                target_ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)  # V7: 200 candles for SMA200
-                if not target_ohlcv or len(target_ohlcv) < 14:
+                # 🧠 V8.4 Persistent Memory Cache (Fetch & Analyze only once per run)
+                cache_key = f"{symbol}_1h"
+                if cache_key not in memory_cache:
+                    ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=200)
+                    if not ohlcv or len(ohlcv) < 14:
+                        memory_cache[cache_key] = None
+                    else:
+                        analysis = analyze_market(ohlcv)
+                        memory_cache[cache_key] = {
+                            "ohlcv": ohlcv,
+                            "analysis": analysis
+                        }
+                
+                cached_data = memory_cache.get(cache_key)
+                if not cached_data:
                     results.append({"symbol": symbol, "status": "SKIPPED_NO_DATA"})
                     continue
-                     
-                analysis = analyze_market(target_ohlcv)
+                
+                target_ohlcv = cached_data["ohlcv"]
+                analysis = cached_data["analysis"]
                 rsi = analysis['indicators']['rsi']
                 current_price = analysis['current_price']
 
