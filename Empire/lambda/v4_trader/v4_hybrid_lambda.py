@@ -1118,12 +1118,12 @@ class TradingEngine:
     def _manage_exits(self, symbol: str, context: MarketContext) -> Optional[str]:
         """Manage exit logic for open positions (Optimized GSI)"""
         try:
-            # 🛠️ GSI_OpenByPair (Status PK)
+            # 🛠️ GSI_OpenByPair (Status PK + Pair SK)
             response = self.aws.trades_table.query(
                 IndexName='GSI_OpenByPair',
                 KeyConditionExpression=(
                     boto3.dynamodb.conditions.Key('Status').eq('OPEN') &
-                    boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
+                    boto3.dynamodb.conditions.Key('Pair').eq(symbol)
                 )
             )
             open_trades = response.get('Items', [])
@@ -1134,7 +1134,7 @@ class TradingEngine:
                     IndexName='GSI_OpenByPair',
                     KeyConditionExpression=(
                         boto3.dynamodb.conditions.Key('Status').eq('OPEN') &
-                        boto3.dynamodb.conditions.Key('PairTimestamp').begins_with(f"{symbol}#")
+                        boto3.dynamodb.conditions.Key('Pair').eq(symbol)
                     ),
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
@@ -1424,25 +1424,25 @@ RÉPONSE JSON : {{ "decision": "CONFIRM" | "CANCEL", "reason": "explication" }}
         }
 
     def _check_volume(self, ohlcv: List, symbol: str) -> Tuple[bool, float]:
-        """Adaptive volume confirmation (Audit #V10.7)"""
+        """
+        Adaptive volume confirmation (Audit #V10.7 Agile)
+        � Bonus Strategy: No longer a hard veto, become a score booster
+        """
         if len(ohlcv) < 20: return True, 1.0
         
-        # 💡 FIX: Bypass volume pour indices/commodities/forex (données API instables)
-        # XAG, PAXG for Commodities; SPX, NDX for Indices; EUR, GBP, AUD for Forex
-        if any(idx in symbol.upper() for idx in ["SPX", "NDX", "EUR", "GBP", "AUD", "XAG", "PAXG", "OIL"]):
-            logger.info(f"ℹ️ Volume check bypassed for {symbol}")
-            return True, 1.0
-
+        # Current and average volume calculation
         current_vol = ohlcv[-1][5]
         avg_vol = sum(c[5] for c in ohlcv[-21:-1]) / 20
         
+        # Fallback for illiquid or broken data
         if avg_vol == 0: return True, 1.0
         
         ratio = current_vol / avg_vol
         logger.info(f"📊 Volume Ratio for {symbol}: {ratio:.2f}x")
         
-        # Seuil réduit à 0.8x pour éviter la paralysie (Audit #V10.7)
-        return ratio > 0.8, ratio
+        # 🛡️ Agile Decision: We never Veto on volume (Audit #V10.7)
+        # We rely on Level 2 (Signal Score) to incorporate this as a bonus.
+        return True, ratio
 
 
 # ==================== LAMBDA HANDLER ====================
