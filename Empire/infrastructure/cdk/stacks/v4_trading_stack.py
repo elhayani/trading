@@ -112,7 +112,8 @@ class V4TradingStack(Stack):
                 "TRADING_MODE": "live",
                 "SECRET_NAME": "trading/binance", # 🛡️ SECURE: No hardcoded keys
                 "CAPITAL": "1000",
-                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,EUR/USDT,GBP/USDT,AUD/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
+                "SYMBOLS": "BTCUSDT,ETHUSDT,SOLUSDT,PAXGUSDT,SPXUSDT",
+                "RSI_THRESHOLD": "35",
                 "CHECK_INTERVAL": "3600",
                 "EXCHANGE": "binance"
             },
@@ -156,7 +157,7 @@ class V4TradingStack(Stack):
             timeout=Duration.minutes(1),
             memory_size=256,
             environment={
-                "SYMBOLS": "BTC/USDT,ETH/USDT,SOL/USDT,EUR/USDT,GBP/USDT,AUD/USDT,PAXG/USDT,XAG/USDT,OIL/USDT,SPX/USDT,NDX/USDT",
+                "SYMBOLS": "BTCUSDT,ETHUSDT,SOLUSDT,PAXGUSDT,SPXUSDT",
                 "TRADING_MODE": "live",
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
