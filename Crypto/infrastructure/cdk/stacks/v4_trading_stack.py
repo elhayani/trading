@@ -88,12 +88,12 @@ class V4TradingStack(Stack):
             memory_size=512,  # 512 MB
             environment={
                 "STATE_TABLE": state_table.table_name,
-                "HISTORY_TABLE": history_table.table_name,
-                "TRADING_MODE": "test",  # Set to 'test' for Cloud Simulation
+                "HISTORY_TABLE": "EmpireTradesHistory",
+                "TRADING_MODE": "live",  # 🚀 LIVE TRADING ACTIVATED
                 "API_KEY": "8GMSKB5dEktu58yrd3P5NCNabI9mDHIY8zpvnO7ZXsIW3NnEzjD7Ppf5cZeoOCnC",
                 "SECRET_KEY": "2V89JGWnqPdEL1ilbwx1va6r14Lc9g78ZufY3OJdQrjhRdZhE1DTc3nVBI6Y7sju",
                 "CAPITAL": "1000",
-                "SYMBOLS": "SOL/USDT,EUR/USDT,GBP/USDT,AUD/USDT,PAXG/USDT,XAG/USDT,DEFI/USDT",
+                "SYMBOLS": "SOL/USDT,PAXG/USDT,XAG/USDT,SPX/USDT",
                 "CHECK_INTERVAL": "3600",  # 1 hour
                 "EXCHANGE": "binance"
             },
@@ -103,8 +103,7 @@ class V4TradingStack(Stack):
         # Grant DynamoDB permissions
         state_table.grant_read_write_data(trading_lambda)
         history_table.grant_read_write_data(trading_lambda)
-        
-        # Grant Permission to EmpireCryptoV4 (Created here for Isolation)
+        # Grant Permission to EmpireCryptoV4 (Legacy)
         empire_history_table = dynamodb.Table(
             self, "EmpireCryptoTable",
             table_name="EmpireCryptoV4",
@@ -116,9 +115,11 @@ class V4TradingStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
             point_in_time_recovery=True
         )
-        empire_history_table.grant_write_data(trading_lambda)
-        empire_history_table.grant_read_data(trading_lambda)
+        empire_history_table.grant_read_write_data(trading_lambda)
         
+        # Grant access to unified EmpireTradesHistory table
+        unified_trades_table = dynamodb.Table.from_table_name(self, "UnifiedTradesTable", "EmpireTradesHistory")
+        unified_trades_table.grant_read_write_data(trading_lambda)
         # Define other tables for Reporting (Forex, Indices, Commodities)
         # We define them here so CDK creates them if they don't exist, and we can grant permissions.
         
@@ -175,7 +176,7 @@ class V4TradingStack(Stack):
             timeout=Duration.minutes(1),
             memory_size=256,
             environment={
-                "SYMBOLS": "SOL/USDT,EUR/USDT,GBP/USDT,AUD/USDT,PAXG/USDT,XAG/USDT,DEFI/USDT",
+                "SYMBOLS": "SOL/USDT,PAXG/USDT,XAG/USDT,SPX/USDT",
                 "TRADING_MODE": "live",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
             },
@@ -234,21 +235,46 @@ class V4TradingStack(Stack):
         # EventBridge Rules
         # =====================================================================
         
-        # 1. Trading Bot (Every Hour)
-        trading_rule = events.Rule(
-            self, "V4TradingSchedule",
-            rule_name="V4HybridHourlyCron",
-            description="Trigger V4 HYBRID trader every hour",
-            schedule=events.Schedule.cron(
-                minute="0",
-                hour="*",
-                month="*",
-                week_day="*",
-                year="*"
-            ),
+        # 1. ECO Rule (Minuit - 06h Paris UTC+1 -> 23h-05h UTC) - 20 min
+        eco_rule = events.Rule(
+            self, "EmpireEcoRule",
+            rule_name="EmpireEcoRule",
+            description="ECO Mode: 20 min interval (00-06h Paris)",
+            schedule=events.Schedule.expression("cron(0/20 23-4 * * ? *)"),
             enabled=True
         )
-        trading_rule.add_target(targets.LambdaFunction(trading_lambda))
+        eco_rule.add_target(targets.LambdaFunction(trading_lambda))
+
+        # 2. STANDARD AM Rule (06h - 13h55 Paris UTC+1 -> 05h-12h55 UTC) - 5 min
+        std_am_rule = events.Rule(
+            self, "EmpireStandardAMRule",
+            rule_name="EmpireStandardAMRule",
+            description="STANDARD AM: 5 min interval (06h-14h Paris)",
+            schedule=events.Schedule.expression("cron(0/5 5-12 * * ? *)"),
+            enabled=True
+        )
+        std_am_rule.add_target(targets.LambdaFunction(trading_lambda))
+
+        # 3. TURBO Rule (14h00 - 16h00 Paris UTC+1 -> 13h-15h UTC) - 1 min
+        # Covers US Open (14h30/15h30 Paris depending on season, here broadly 13-14 UTC is 14-16h Paris winter)
+        turbo_rule = events.Rule(
+            self, "EmpireTurboRule",
+            rule_name="EmpireTurboRule",
+            description="TURBO SPX: 1 min interval (14h-16h Paris)",
+            schedule=events.Schedule.expression("cron(* 13-14 * * ? *)"),
+            enabled=True
+        )
+        turbo_rule.add_target(targets.LambdaFunction(trading_lambda))
+
+        # 4. STANDARD PM Rule (16h - Minuit Paris UTC+1 -> 15h-23h UTC) - 5 min
+        std_pm_rule = events.Rule(
+            self, "EmpireStandardPMRule",
+            rule_name="EmpireStandardPMRule",
+            description="STANDARD PM: 5 min interval (16h-Minuit Paris)",
+            schedule=events.Schedule.expression("cron(0/5 15-22 * * ? *)"),
+            enabled=True
+        )
+        std_pm_rule.add_target(targets.LambdaFunction(trading_lambda))
         
         # 2. Reporting Bot (Every 30 mins, 9h-21h)
         reporting_rule = events.Rule(
@@ -327,8 +353,8 @@ def lambda_handler(event, context):
         
         CfnOutput(
             self, "ScheduleRuleName",
-            value=trading_rule.rule_name,
-            description="EventBridge Cron Rule Name"
+            value=eco_rule.rule_name,
+            description="EventBridge Eco Rule Name (Main)"
         )
         
         CfnOutput(
