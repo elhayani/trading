@@ -30,6 +30,60 @@ bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 EMPIRE_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireTradesHistory') # Unified Table V7
 empire_table = dynamodb.Table(EMPIRE_TABLE)
 
+STATE_TABLE = os.environ.get('STATE_TABLE', 'V4TradingState')
+state_table = dynamodb.Table(STATE_TABLE)
+
+# --- V8 ATOMIC SLOT MANAGEMENT ---
+def sync_slots_with_exchange(real_count):
+    """Sync DynamoDB counter with real exchange position count"""
+    try:
+        state_table.put_item(
+            Item={
+                'trader_id': 'GLOBAL_LOCK',
+                'ActiveSlots': real_count,
+                'LastSync': get_paris_time().isoformat()
+            }
+        )
+        logger.info(f"🔄 Slots synced with Exchange: {real_count}")
+    except Exception as e:
+        logger.error(f"❌ Failed to sync slots: {e}")
+
+def acquire_atomic_slot(max_slots):
+    """Try to increment ActiveSlots in DynamoDB atomically"""
+    try:
+        state_table.update_item(
+            Key={'trader_id': 'GLOBAL_LOCK'},
+            UpdateExpression="SET ActiveSlots = if_not_exists(ActiveSlots, :zero) + :one",
+            ConditionExpression="if_not_exists(ActiveSlots, :zero) < :max",
+            ExpressionAttributeValues={
+                ':one': 1,
+                ':zero': 0,
+                ':max': max_slots
+            }
+        )
+        logger.info("🔒 Atomic Slot ACQUIRED")
+        return True
+    except Exception as e:
+        # ConditionalCheckFailedException or others
+        logger.warning(f"⏸️ Atomic Slot REJECTED: Slot limit {max_slots} reached or race condition.")
+        return False
+
+def release_atomic_slot():
+    """Decrement ActiveSlots in DynamoDB atomically"""
+    try:
+        state_table.update_item(
+            Key={'trader_id': 'GLOBAL_LOCK'},
+            UpdateExpression="SET ActiveSlots = if_not_exists(ActiveSlots, :zero) - :one",
+            ConditionExpression="ActiveSlots > :zero",
+            ExpressionAttributeValues={
+                ':one': 1,
+                ':zero': 0
+            }
+        )
+        logger.info("🔓 Atomic Slot RELEASED")
+    except Exception as e:
+        logger.error(f"❌ Failed to release slot: {e}")
+
 def get_paris_time():
     """Returns current Paris time (UTC+1)"""
     # Use timezone-aware UTC to fix deprecation warning
@@ -215,46 +269,90 @@ def is_golden_window(timestamp_iso=None):
         logger.error(f"Golden Window check error: {e}")
         return False
 
-# --- V8 GLOBAL CONTEXT CACHE ---
-def fetch_global_market_context(exchange):
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+# --- V8 GLOBAL CONTEXT CACHE (MarketState Class) ---
+class MarketState:
     """
-    🏛️ Empire V8 Core: Fetch all global data ONCE
-    Reduces API calls and ensures consistency across all 8 assets.
+    🏛️ Empire V8 Core: Class-based Global State
+    Fetches all global data ONCE at startup with retries and fail-safes.
+    Ref: Audit 1 #2 & Audit 2 #15
     """
-    logger.info("🌍 Fetching Global Market Context (V8 Cache)...")
-    
-    # 1. Balance & Slots
-    balance = exchange.get_balance_usdt()
-    positions_count = exchange.get_open_positions_count()
-    max_slots = get_max_slots(balance)
-    
-    # 2. Circuit Breaker (BTC Performance)
-    cb_can_trade, cb_size_mult, cb_level, btc_24h, btc_7d = check_circuit_breaker(exchange)
-    
-    # 3. BTC Crash Filter (1h)
-    btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
-    btc_1h_change = 0
-    if btc_ohlcv and len(btc_ohlcv) >= 2:
-        btc_1h_change = (btc_ohlcv[-1][4] - btc_ohlcv[-2][4]) / btc_ohlcv[-2][4]
-    
-    # 4. VIX Filter
-    vix_can_trade, vix_mult, vix_val = check_vix_filter()
-    
-    # 5. Golden Window
-    golden = is_golden_window()
-    
-    context = {
-        "balance": balance,
-        "current_trades": positions_count,
-        "max_slots": max_slots,
-        "cb": {"can_trade": cb_can_trade, "multiplier": cb_size_mult, "level": cb_level, "24h": btc_24h, "7d": btc_7d},
-        "btc_1h": btc_1h_change,
-        "vix": {"can_trade": vix_can_trade, "multiplier": vix_mult, "value": vix_val},
-        "is_golden": golden
-    }
-    
-    logger.info(f"✅ V8 Context Ready: Slots {positions_count}/{max_slots} | VIX: {vix_val:.1f} | BTC 24h: {btc_24h:.2%}")
-    return context
+    def __init__(self, exchange):
+        logger.info("🧠 Initializing Empire V8 MarketState...")
+        self.timestamp = datetime.now(ZoneInfo('Europe/Paris'))
+        
+        # 1. Balance & Slots (Audit #15)
+        self.balance = exchange.get_balance_usdt()
+        self.current_trades = exchange.get_open_positions_count()
+        self.max_slots = get_max_slots(self.balance)
+        
+        # 2. VIX with Retry Logic (Audit #2)
+        self.vix = self._fetch_vix_with_retry()
+        
+        # 3. BTC Context (Circuit Breaker + Crash Filter)
+        self.btc = self._fetch_btc_context(exchange)
+        
+        # 4. Golden Window Status
+        self.is_golden = self._check_golden_window()
+        
+        logger.info(f"✅ V8 MarketState Ready | Slots: {self.current_trades}/{self.max_slots} | VIX: {self.vix['value']:.1f}")
+
+    def _fetch_vix_with_retry(self, retries=3):
+        """Fetch VIX with retry logic to prevent sporadic API failures"""
+        for i in range(retries):
+            try:
+                can_trade, mult, val = check_vix_filter()
+                if val > 0:
+                    return {"can_trade": can_trade, "multiplier": mult, "value": val}
+            except Exception as e:
+                logger.warning(f"⚠️ VIX Retry {i+1}/{retries} failed: {e}")
+                time.sleep(1)
+        
+        # Fail-safe: Block if VIX fails repeatedly
+        logger.error("❌ VIX API failed after all retries. Defaulting to SAFETY BLOCK.")
+        return {"can_trade": False, "multiplier": 0, "value": 99.0}
+
+    def _fetch_btc_context(self, exchange):
+        """Fetch BTC performance data for CB and Crash filters"""
+        cb_can_trade, cb_mult, cb_level, btc_24h, btc_7d = check_circuit_breaker(exchange)
+        
+        # 1h Crash Filter
+        btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=5)
+        btc_1h_change = 0
+        if btc_ohlcv and len(btc_ohlcv) >= 2:
+            btc_1h_change = (btc_ohlcv[-1][4] - btc_ohlcv[-2][4]) / btc_ohlcv[-2][4]
+            
+        return {
+            "can_trade": cb_can_trade,
+            "multiplier": cb_mult,
+            "level": cb_level,
+            "24h": btc_24h,
+            "7d": btc_7d,
+            "1h_change": btc_1h_change
+        }
+
+    def _check_golden_window(self):
+        """Check if currently in a high-liquidity golden window"""
+        hour = self.timestamp.hour
+        is_eu = 7 <= hour <= 10
+        is_us = 13 <= hour <= 16
+        return is_eu or is_us
+
+    def get_dict(self):
+        """Return a dictionary version for legacy code compatibility"""
+        return {
+            "balance": self.balance,
+            "current_trades": self.current_trades,
+            "max_slots": self.max_slots,
+            "cb": self.btc,
+            "btc_1h": self.btc["1h_change"],
+            "vix": self.vix,
+            "is_golden": self.is_golden
+        }
 
 def check_circuit_breaker(exchange):
     """
@@ -787,6 +885,9 @@ def close_all_positions(open_trades, current_price, reason, exchange=None):
                 exchange.cancel_all_orders(symbol)
                 logger.info("✅ Position Closed & Orders Cancelled")
                 
+                # 🔓 V8: Release Atomic Slot
+                release_atomic_slot()
+                
             except Exception as close_err:
                 logger.error(f"❌ CLOSE EXECUTION FAILED: {close_err}")
                 # We still mark as closed in DB to avoid infinite retry loop, but log error
@@ -945,9 +1046,14 @@ def lambda_handler(event, context):
         
         # 🔥 V8 GLOBAL CONTEXT (Architecture Context-Aware)
         # We fetch EVERYTHING global once, before the loop
-        g_ctx = fetch_global_market_context(exchange)
+        state = MarketState(exchange)
+        g_ctx = state.get_dict()
+        
         current_trades = g_ctx['current_trades']
         max_slots = g_ctx['max_slots']
+        
+        # 🔄 V8: Sync DynamoDB Lock with Exchange Reality
+        sync_slots_with_exchange(current_trades)
         
         for raw_symbol in symbols_to_check:
             symbol = raw_symbol.strip()
@@ -1117,6 +1223,11 @@ def lambda_handler(event, context):
                     
                     decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
                     if decision.get('decision') == "CONFIRM":
+                        # 🔒 V8: Atomic Slot Acquisition (Last Barrier)
+                        if not acquire_atomic_slot(max_slots):
+                            results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
+                            continue
+                            
                         final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
                         adjusted_capital, confidence = calculate_dynamic_position_size(
@@ -1173,6 +1284,11 @@ def lambda_handler(event, context):
                     
                     decision = ask_bedrock(symbol, rsi, news_ctx, portfolio_stats, history)
                     if decision.get('decision') == "CONFIRM":
+                        # 🔒 V8: Atomic Slot Acquisition (Last Barrier)
+                        if not acquire_atomic_slot(max_slots):
+                            results.append({"symbol": symbol, "status": "SKIPPED_SLOT_RACE_LOSS"})
+                            continue
+
                         final_size_mult = g_ctx['vix']['multiplier'] * g_ctx['cb']['multiplier'] * corridor_risk_mult
                         base_capital = CAPITAL_PER_TRADE * final_size_mult
                         adjusted_capital, confidence = calculate_dynamic_position_size(
