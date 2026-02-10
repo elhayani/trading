@@ -1,302 +1,100 @@
-# 📝 Empire Trading System - Changelog
-
-Historique détaillé des versions et mises à jour du système Empire.
+# 📋 CHANGELOG — Empire Trading System
 
 ---
 
-## 🆕 [V6.1] - 2026-02-08 - "Maximum Performance"
+## V7.0 — "Unified Architecture" (2026-02-10) 🏛️
 
-### 🎯 Objectif
-Maximiser les profits après validation de la sécurité du capital en V5.1/V6.0.
+### 🔥 Refonte Majeure : Super-Lambda Unifiée
 
-### ✅ Nouveautés Majeures
+**Avant** : 4 Lambdas séparées (Crypto, Forex, Indices, Commodities) → conflits, throttling, coûts x4.
+**Après** : 1 seule Lambda traite 8 actifs séquentiellement → zéro conflit, coût /4.
 
-#### Optimisations Par Bot
+#### Architecture
+- **Super-Lambda** : Boucle séquentielle `BTC → ETH → SOL → PAXG → XAG → OIL → SPX → NDX`
+- **Smart Scheduling** : 4 règles CRON adaptatives (ECO / Standard AM / Turbo / Standard PM)
+- **Turbo Mode** : Scan toutes les **1 minute** pendant l'ouverture US (14h-16h Paris)
+- **Renommage** : `Crypto/` → `Empire/` (reflète l'architecture unifiée)
 
-**💱 FOREX**
-- ✅ **LEVERAGE**: Réduit de 30x → **20x** (+33% sécurité)
-- ✅ **R/R**: TP 3.5x → **4.0x** ATR (+14% profit potentiel)
-- ✅ **MAX POSITIONS**: Limite à 2 simultanées (contrôle exposition)
-- ✅ **TRAILING**: Activation 0.5% → **0.4%** (réactivité)
-- ✅ **RSI**: 45 → **42** (meilleure sélectivité)
+#### Actifs (8 au total)
+| Classe | Actifs |
+|--------|--------|
+| Crypto | BTC/USDT, ETH/USDT, SOL/USDT |
+| Commodities | PAXG/USDT (Or), XAG/USDT (Argent), OIL/USDT (Pétrole) |
+| Indices | SPX/USDT (S&P 500), NDX/USDT (Nasdaq) |
 
-**📈 INDICES**
-- ✅ **S&P 500**: TP 4.5x → **5.0x** ATR (+11%)
-- ✅ **NASDAQ**: TP 5.0x → **5.5x** ATR (aggressif)
-- ✅ **RSI S&P**: 55 → **52** (optimisation)
-- ✅ **TRAILING**: 1.0% → **0.8%** activation (plus rapide)
-- ✅ **SL TIGHTER**: 1.5x → **1.4x** ATR (protection)
+#### Nettoyage
+- Suppression de 40+ fichiers obsolètes (JSON de test, docs V6, scripts, backups)
+- Suppression de 6 dossiers dupliqués (`lambda/`, `shared/`, `monitoring/`, `tests/`, `scripts/`, `docs/`)
+- Destruction des 3 stacks AWS legacy (`CommoditiesTradingStack`, `ForexTradingStack`, `IndicesTradingStack`)
+- Suppression du code mort (`predictability_index.py`, `trailing_stop.py`, `v4_hybrid_lambda_optimized.py`)
 
-**🛢️ COMMODITIES** (Plus grosse mise à jour!)
-- ✅ **RÉVOLUTION**: Trailing Stop ajouté (manquait en V6.0!)
-- ✅ **GOLD TP**: 3.0x → **4.5x** ATR (+50% potentiel!)
-- ✅ **GOLD SL**: 3.0x → **2.5x** ATR (serré)
-- ✅ **GOLD TRAILING**: 2% activation, 1% distance
-- ✅ **OIL TP**: 4.0x → **5.0x** ATR (+25%)
-- ✅ **OIL SL**: 2.0x → **1.8x** ATR
-- ✅ **OIL TRAILING**: 3% activation, 1.5% distance
+#### Code
+- Fix `datetime.utcnow()` → `datetime.now(timezone.utc)` (deprecation warning)
+- Suppression imports inutilisés (`predictability_index`)
+- Nettoyage commentaires V5/V6 → standardisation V7
+- Volume adaptatif par classe d'actif (Crypto 1.2x, Commodities 0.12x, Indices 0.24x)
+- Corridors micro ajoutés pour PAXG, XAG, OIL, SPX, NDX
+- Table DynamoDB unifiée : `EmpireTradesHistory`
 
-**₿ CRYPTO** (Fix critique!)
-- ✅ **CRITICAL FIX**: R/R 1:1 → **1:2.3** (+130%!)
-  - SL: -5.0% → **-3.5%** (protection meilleure)
-  - TP: +5.0% → **+8.0%** (profit maximisé)
-- ✅ **MAX EXPOSURE**: 3 → **2** positions max
-- ✅ **CAPITAL/TRADE**: $133 → **$200** (scaling)
-- ✅ **RSI BUY**: 45 → **42** (meilleure entrée)
-- ✅ **SOL TRAILING**: 10% → **6%** activation (turbo)
-- ✅ **SOL DISTANCE**: 3% → **2.5%** (serré)
-
-### 🐛 Corrections Critiques
-
-#### 1. Exit Management Bug (MAJEUR)
-- **Impact**: Trades ne se fermaient JAMAIS dans backtests
-- **Cause**: `manage_exits()` appelé conditionnellement
-- **Fix**: Architecture **two-phase** déployée
-  - Phase 1: Check exits INCONDITIONNELLEMENT
-  - Phase 2: Analyze entries conditionnellement
-- **Validation**: 365 jours backtests (43-46% exit rate ✅)
-- **Fichiers modifiés**:
-  - `Forex/lambda/forex_trader/lambda_function.py`
-  - `Indices/lambda/indices_trader/lambda_function.py`
-  - `Commodities/lambda/commodities_trader/lambda_function.py`
-
-#### 2. Mock DynamoDB Signature
-- **Impact**: Erreur `update_item()` dans backtests
-- **Fix**: Signature kwargs corrigée
-- **Fichier**: `Systeme_Test_Bedrock/s3_adapters.py`
-
-#### 3. Deployment Scripts Paths
-- **Impact**: Déploiements échouaient (path incorrect)
-- **Fix**: Chemins relatifs corrigés
-- **Fichiers**: Tous les `scripts/deploy.sh`
-
-### 📊 Validation (Backtests 365 jours - 2025)
-
-| Bot | Trades | Exits | Exit Rate | Status |
-|-----|--------|-------|-----------|--------|
-| **Forex** | 28 | 12 | **43%** | ✅ Validé |
-| **Commodities** | 202 | 92 | **46%** | ✅ Validé |
-| **Indices** | 5* | ? | ? | ⚠️ Data limitée |
-| **Crypto** | - | - | - | ⏳ En cours |
-
-*Note: YFinance limite les données 1h pour indices à ~60 jours.
-
-### 🚀 Déploiement
-- **Date**: 2026-02-08 21:14-21:20 UTC
-- **Région**: eu-west-3 (Paris)
-- **Bots déployés**: 4/4 (Forex, Indices, Commodities, Crypto)
-- **Status**: ✅ LIVE & OPERATIONAL
-
-### 📁 Fichiers Ajoutés
-- `V6_1_BACKTEST_RESULTS.md` - Résultats validation 365j
-- `V6_1_OPTIMIZATION_REPORT.md` - Détails optimisations
-- `QUICK_START.md` - Guide démarrage rapide
-- `CHANGELOG.md` - Ce fichier
-
-### 📁 Fichiers Modifiés
-- `README.md` - Mise à jour V6.1 complète
-- `Forex/lambda/forex_trader/config.py` - Leverage 20x, TP 4.0x
-- `Indices/lambda/indices_trader/config.py` - TP 5.0x, RSI 52
-- `Commodities/lambda/commodities_trader/config.py` - Trailing Stop ajouté!
-- `Empire/lambda/v4_trader/v4_hybrid_lambda.py` - R/R 1:2.3
-- Tous les `scripts/deploy.sh` - Paths fixes
+#### Fichiers modifiés
+- `Empire/lambda/v4_trader/v4_hybrid_lambda.py` — Moteur unifié
+- `Empire/lambda/v4_trader/micro_corridors.py` — Corridors multi-actifs
+- `Empire/lambda/v4_trader/macro_context.py` — Suppression GC=F, CL=F
+- `Empire/infrastructure/cdk/stacks/v4_trading_stack.py` — 4 CRON rules + 8 SYMBOLS
+- `Empire/scripts/deploy.sh` — Mise à jour chemins
 
 ---
 
-## [V6.0] - 2026-02-07 - "Profit Maximizer"
+## V6.2 — "P&L Fix Edition" (2026-02-08)
 
-### 🎯 Objectif
-Débloquer le potentiel de gains après sécurisation du capital en V5.1.
-
-### ✅ Nouveautés
-
-#### 1. Universal Trailing Stop
-- Moteur de trailing stop partagé par Forex/Indices/Commodities
-- Activation dynamique en profit
-- Suivi automatique du prix
-- Turbo mode pour pumps violents
-- Breakeven rapide à 0 risque
-
-#### 2. Risk/Reward Optimisé
-- **Forex**: TP augmenté 2.5x → **3.5x** ATR
-- **Indices**: TP augmenté 2.5x → **4.5x** ATR
-- **Commodities**: TP et SL ajustés pour volatilité
-- Ratio R/R minimum 1:3 visé
-
-#### 3. Backtest Engine Perfectionné
-- Bug critique dans simulation Max Exposure corrigé
-- Fidélité 100% avec comportement Lambda production
-- Backtests plus réalistes
-
-### 📁 Fichiers Ajoutés
-- `shared/modules/trailing_stop.py` - Exit manager universel
-- `V6_EXIT_FIX_REPORT.md` - Documentation bug exits
-
-### 🚀 Déploiement
-- **Date**: 2026-02-07
-- **Status**: ✅ Deployed
+### 🚨 Correction Critique
+- **Bug** : P&L calculé sur `Size` (quantité) au lieu de `Cost` (valeur USD)
+- **Impact** : Profits affichés 1000x trop petits
+- **Fix** : `pnl_dollars = (pnl_pct / 100) * position_value`
 
 ---
 
-## [V5.1] - 2026-01-15 - "Fortress Edition"
+## V6.1 — "Maximum Performance" (2026-02-08)
 
-### 🎯 Objectif
-Sécuriser le capital avec filtres de qualité avancés.
+### Optimisations R/R
+- Crypto : R/R 1:1 → **1:2.3** (SL -3.5%, TP +8.0%)
+- Forex : R/R 1:3.5 → **1:4.0**, Leverage 30x → 20x
+- Indices : R/R 1:4.5 → **1:5.0**
+- Commodities : R/R 1:3.0 → **1:4.5**, Trailing Stop ajouté
 
-### ✅ Nouveautés
-
-#### 1. Macro Context Intelligence
-- Analyse DXY, US10Y, VIX avant trade
-- Arrêt automatique si Risk-Off
-- Module: `macro_context.py`
-
-#### 2. Predictability Index
-- Score technique 0-100 pour filtrer marchés erratiques
-- Quarantine automatique des actifs "sales"
-- Module: `predictability_index.py`
-
-#### 3. Golden Windows
-- Trading uniquement heures haute liquidité
-- Filtre Londres/NY
-- Module: `trading_windows.py`
-
-#### 4. Position Sizing Cumulatif
-- Intérêts composés: taille augmente avec capital
-- Module: `position_sizing.py`
-
-### 📁 Fichiers Ajoutés
-- `shared/modules/macro_context.py`
-- `shared/modules/predictability_index.py`
-- `shared/modules/trading_windows.py`
-- `shared/modules/micro_corridors.py`
-
-### 🚀 Déploiement
-- **Date**: 2026-01-15
-- **Status**: ✅ Deployed
+### Corrections
+- Fix exit management (architecture two-phase)
+- Fix Mock DynamoDB signature pour backtests
+- Fix deployment scripts paths
 
 ---
 
-## [V5.0] - 2025-12-20 - "Bedrock AI Integration"
+## V6.0 — "Profit Maximizer" (2026-02-07)
 
-### 🎯 Objectif
-Ajouter validation IA via AWS Bedrock (Claude Sonnet).
-
-### ✅ Nouveautés
-
-#### 1. Devils Advocate Validation
-- Validation IA de chaque signal avant exécution
-- Analyse macro context + technique
-- Score de confiance 0-100
-
-#### 2. Architecture Multi-Asset
-- Déploiement AWS Lambda par asset class
-- DynamoDB pour historique trades
-- EventBridge cron horaire
-
-### 📁 Fichiers Ajoutés
-- `Forex/` - Bot Forex avec Bedrock
-- `Indices/` - Bot Indices avec Bedrock
-- `Commodities/` - Bot Commodities avec Bedrock
-- `Crypto/` - Bot Crypto V4 Hybrid
-
-### 🚀 Déploiement
-- **Date**: 2025-12-20
-- **Région**: eu-west-3
-- **Status**: ✅ Deployed
+- Trailing Stop universel pour tous les actifs
+- SOL Turbo Mode (activation 6%, distance 2.5%)
+- Dynamic Position Sizing (Kelly simplifié)
 
 ---
 
-## [V4.0] - 2025-10-01 - "Crypto Hybrid System"
+## V5.1 — "Fortress Edition" (2026-01-15)
 
-### 🎯 Objectif
-Système Crypto combinant Trend Following + Capitulation Buying.
-
-### ✅ Nouveautés
-- Dual strategy (Trend + Capitulation)
-- Multi-coin support (BTC, SOL)
-- Binance API integration
+- Micro-Corridors (paramètres adaptatifs par heure/actif)
+- Circuit Breaker 3 niveaux (L1/L2/L3 sur BTC)
+- Momentum Filter (EMA 20/50 cross)
+- Correlation Check (limite exposition crypto)
+- Reversal Trigger (Green Candle filter)
 
 ---
 
-## [V3.0] - 2025-07-15 - "Forex Expansion"
+## V5.0 — "Bedrock AI" (2025-12-20)
 
-### 🎯 Objectif
-Extension au Forex avec major pairs.
-
-### ✅ Nouveautés
-- EUR/USD, GBP/USD, USD/JPY support
-- Leverage 30x
-- ATR-based SL/TP
+- Intégration AWS Bedrock (Claude 3 Haiku)
+- Devil's Advocate AI validation
+- Multi-Timeframe confirmation (1h + 4h)
+- VIX Filter (blocage si > 30)
+- Golden Windows (heures de haute liquidité)
 
 ---
 
-## [V2.0] - 2025-04-01 - "Indices Quant"
-
-### 🎯 Objectif
-Ajout stratégie Indices (Nasdaq/S&P).
-
-### ✅ Nouveautés
-- Momentum quantitatif
-- RSI + Bollinger Bands
-- Yahoo Finance data source
-
----
-
-## [V1.0] - 2024-12-01 - "Initial Release"
-
-### 🎯 Objectif
-Système initial Commodities (Gold/Oil).
-
-### ✅ Features
-- Trend & Breakout strategy
-- AWS Lambda deployment
-- DynamoDB persistence
-
----
-
-## 📊 Comparaison Performance (R/R Ratios)
-
-| Version | Forex | Indices | Commodities | Crypto |
-|---------|-------|---------|-------------|--------|
-| **V6.1** | **1:4.0** | **1:5.0** | **1:4.5** | **1:2.3** |
-| V6.0 | 1:3.5 | 1:4.5 | 1:3.0 | ❌ 1:1.0 |
-| V5.1 | 1:2.5 | 1:2.5 | 1:2.5 | 1:1.0 |
-| V5.0 | 1:2.0 | 1:2.0 | 1:2.0 | 1:1.0 |
-
-### Amélioration Totale V1.0 → V6.1
-- **Forex**: +100% (1:2.0 → 1:4.0)
-- **Indices**: +150% (1:2.0 → 1:5.0)
-- **Commodities**: +125% (1:2.0 → 1:4.5)
-- **Crypto**: +130% (1:1.0 → 1:2.3)
-
----
-
-## 🔮 Roadmap Future Versions
-
-### V6.2 - "Portfolio Rebalancing" (Q1 2026)
-- [ ] Auto-rebalancing entre asset classes
-- [ ] Corrélation matrix analysis
-- [ ] Dynamic capital allocation
-
-### V6.5 - "Machine Learning Integration" (Q2 2026)
-- [ ] ML-based entry timing
-- [ ] Reinforcement learning for exits
-- [ ] Predictive volatility modeling
-
-### V7.0 - "Multi-Exchange Expansion" (Q3 2026)
-- [ ] Integration Bybit, OKX
-- [ ] Arbitrage opportunities
-- [ ] Cross-exchange portfolio view
-
----
-
-## 📞 Contact & Support
-
-**Auteur**: Empire Trading Systems
-**Email**: [Contact via GitHub]
-**Documentation**: [README.md](README.md)
-
----
-
-**© 2024-2026 Empire Trading Systems**
-*Dernière mise à jour: 2026-02-08*
+**© 2026 Empire Trading Systems**
