@@ -58,8 +58,8 @@ class TradingConfig:
     cb_level_3: float = -0.20   # -20%
     
     # Features (Audit #V9.8: Env-loadable)
-    volume_confirmation_enabled: bool = os.getenv('VOLUME_CONFIRM', 'true').lower() == 'true'
-    ai_confirmation_enabled: bool = os.getenv('AI_CONFIRM', 'true').lower() == 'true'
+    volume_confirmation_enabled: bool = True
+    ai_confirmation_enabled: bool = True
     
     @classmethod
     def from_env(cls):
