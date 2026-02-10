@@ -273,17 +273,7 @@ class SlotManager:
         finally:
             self.slot_acquired = False
     
-    @contextmanager
-    def acquire_context(self):
-        """Context manager for guaranteed cleanup"""
-        acquired = self.acquire()
-        try:
-            yield acquired
-        finally:
-            # Note: We usually don't release immediately unless the trade fails or finishes.
-            # But in the V9 cycle, entries/exits are separate.
-            # If we acquired a slot for an ENTRY but failed, we release.
-            pass
+
 
 
 # ==================== MARKET STATE ====================
@@ -1210,25 +1200,35 @@ class TradingEngine:
         if not slot_manager.acquire():
             return {"symbol": symbol, "status": "SKIPPED_SLOTS_FULL"}
         
-        self.active_slots[symbol] = slot_manager # ✅ Store for closure
+        self.active_slots[symbol] = slot_manager # Store for possible closure later
 
+        # 3. Dynamic Execution (Audit #V10.2: Guaranteed Release)
+        keep_slot = False
         try:
-            # 3. AI Advisory
+            # A. AI Advisory
             ai_result = self._check_ai_advisory(symbol, ta_result['rsi'])
             if ai_result['decision'] == "CANCEL":
-                slot_manager.release()
-                del self.active_slots[symbol]
-                self.persistence.log_skip(symbol, AssetClass.CRYPTO.value, f"AI_VETO: {ai_result['reason']}", ta_result['price'], context)
+                self.persistence.log_skip(
+                    symbol, AssetClass.CRYPTO.value, 
+                    f"AI_VETO: {ai_result['reason']}", 
+                    ta_result['price'], context
+                )
                 return {"symbol": symbol, "status": "AI_VETO", "reason": ai_result['reason']}
 
-            # 4. Finalize Execution
-            return self._execute_v9_entry(symbol, context, ta_result['price'], ai_result)
+            # B. Finalize Execution
+            result = self._execute_v9_entry(symbol, context, ta_result['price'], ai_result)
+            keep_slot = True # ✅ Mark as successfully opened to prevent release
+            return result
 
         except Exception as e:
-            logger.error(f"Entry failed: {e}")
-            slot_manager.release()
-            self.active_slots.pop(symbol, None)
+            logger.error(f"❌ Entry process failed for {symbol}: {e}")
             return {"symbol": symbol, "status": "ERROR", "msg": str(e)}
+            
+        finally:
+            if not keep_slot:
+                logger.info(f"🔓 Releasing slot for {symbol} (Entry not completed)")
+                slot_manager.release()
+                self.active_slots.pop(symbol, None)
 
     def _check_technical_entry(self, symbol: str, context: MarketContext) -> Dict:
         """Isolated Technical Analysis Entry Check with High Confidence Filters (Audit #V10.4)"""
