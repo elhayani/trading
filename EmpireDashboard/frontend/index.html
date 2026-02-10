@@ -552,7 +552,7 @@
             if (currentTab === 'live') {
                 thead.innerHTML = `
                     <tr class="text-slate-400 text-xs uppercase border-b border-slate-700">
-                        <th class="p-4">Time</th><th class="p-4">Asset</th><th class="p-4">Type</th><th class="p-4">Size</th><th class="p-4">Entry</th><th class="p-4">Margin (xLev)</th><th class="p-4 text-right">PnL %</th><th class="p-4 text-right">PnL €</th><th class="p-4">Status</th><th class="p-4 text-right">Action</th>
+                        <th class="p-4">Time</th><th class="p-4">Asset</th><th class="p-4">Type</th><th class="p-4">Size</th><th class="p-4">Entry</th><th class="p-4">Margin (xLev)</th><th class="p-4 text-right">PnL %</th><th class="p-4 text-right">PnL €</th><th class="p-4">Status</th><th class="p-4">Reason</th><th class="p-4 text-right">Action</th>
                     </tr>
                 `;
             } else if (currentTab === 'cloudwatch') {
@@ -571,7 +571,7 @@
 
             const dataToRender = currentTab === 'cloudwatch' ? cloudwatchLogs : trades;
             if (dataToRender.length === 0) {
-                const colSpan = currentTab === 'live' ? 10 : (currentTab === 'cloudwatch' ? 5 : 11);
+                const colSpan = currentTab === 'live' ? 11 : (currentTab === 'cloudwatch' ? 5 : 11);
                 tbody.innerHTML = `<tr><td colspan="${colSpan}" class="p-8 text-center text-slate-500">No data recorded yet.</td></tr>`;
                 return;
             }
@@ -592,6 +592,7 @@
 
                     const margin = parseFloat(trade.Margin || (trade.Notional / (trade.Leverage || 1)) || 0);
                     const leverage = trade.Leverage || 1;
+                    const reason = trade.AI_Reason || "Position réelle sur Binance";
 
                     tr.innerHTML = `
                         <td class="p-4 text-slate-400 font-mono text-xs">${new Date(trade.Timestamp).toLocaleString()}</td>
@@ -603,6 +604,7 @@
                         <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">${pnlPercent.toFixed(2)}%</td>
                         <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">€${pnlVal.toFixed(2)}</td>
                         <td class="p-4"><span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs">${status}</span></td>
+                        <td class="p-4"><div class="text-[10px] text-slate-400" style="max-width: 250px; overflow-wrap: break-word;">${reason}</div></td>
                         <td class="p-4 text-right">
                             ${status === 'OPEN' ? `<button onclick="closeTrade('${trade.Pair}', '${trade.Type}', ${qty})" class="text-[10px] font-bold px-2 py-1 rounded border border-blue-500/20 text-blue-400 hover:bg-blue-500/10">CLOSE</button>` : ''}
                         </td>
@@ -636,7 +638,7 @@
                         <td class="p-4 font-mono text-blue-300">€${cost.toFixed(2)}</td>
                         <td class="p-4 font-mono text-purple-300">€${value.toFixed(2)}</td>
                         <td class="p-4"><span class="px-2 py-1 rounded text-xs ${status === 'CLOSED' ? 'bg-slate-500/20 text-slate-400' : 'bg-blue-500/20 text-blue-400'}">${status}</span></td>
-                        <td class="p-4" style="max-width: 300px; overflow-wrap: break-word;">${reason}</td>
+                        <td class="p-4"><div class="text-[10px] text-slate-400" style="max-width: 300px; overflow-wrap: break-word;">${reason}</div></td>
                         <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">${pnlPercent.toFixed(2)}%</td>
                         <td class="p-4 text-right ${pnlVal >= 0 ? 'text-green-400' : 'text-red-400'} font-bold">€${pnlVal.toFixed(2)}</td>
                     `;

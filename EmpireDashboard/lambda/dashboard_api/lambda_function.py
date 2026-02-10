@@ -143,6 +143,10 @@ def fetch_binance_positions(exchange):
                 else:
                     trade_type = 'LONG'
                 
+                def normalize_symbol(s):
+                    if not s: return ""
+                    return s.replace('/', '').replace(':', '').replace('-', '').replace('USDT', '').upper()
+                
                 # Dynamic classification (Crypto, Forex, Indices, Commodities)
                 symbol = pos['symbol']
                 asset_class = classify_asset(symbol)
@@ -516,11 +520,15 @@ def lambda_handler(event, context):
                             limit=3
                         ).get('logStreams', [])
                         
+                        # Filter logs for last 48 hours
+                        cutoff_ms = int((datetime.now() - timedelta(hours=48)).timestamp() * 1000)
+                        
                         for s in streams:
                             events = logs_client.get_log_events(
                                 logGroupName=lg,
                                 logStreamName=s['logStreamName'],
-                                limit=50,
+                                limit=100,
+                                startTime=cutoff_ms,
                                 startFromHead=False
                             ).get('events', [])
                             
@@ -571,6 +579,24 @@ def lambda_handler(event, context):
                 reconcile_trades(all_trades_from_db, live_positions, binance_ex)
             except Exception as e:
                 print(f"⚠️ Reconciliation Error: {e}")
+
+        # Enrich live positions with AI_Reason from DB if possible
+        def normalize_symbol(s):
+            if not s: return ""
+            return s.replace('/', '').replace(':', '').replace('-', '').replace('USDT', '').upper()
+
+        for lp in live_positions:
+            lp_norm = normalize_symbol(lp.get('Pair'))
+            # On cherche un trade OPEN dont le symbole normalisé correspond
+            matching_db_trade = next((t for t in all_trades_from_db 
+                                   if normalize_symbol(t.get('Pair')) == lp_norm 
+                                   and t.get('Status', '').upper() == 'OPEN'), None)
+            
+            if matching_db_trade:
+                # On prend la raison la plus complète disponible
+                db_reason = matching_db_trade.get('AI_Reason') or matching_db_trade.get('Reason')
+                if db_reason:
+                    lp['AI_Reason'] = db_reason
 
         # 3. Allocation Breakdown Logic
         if year_filter and year_filter != 'ALL':
@@ -688,9 +714,13 @@ def lambda_handler(event, context):
         else:
             equity_data = calculate_equity_curve(all_trades_from_db, base_capital_for_graph)
 
-        # 6. Recent Trades with Price Enrichment
+        # 6. Recent Trades with Price Enrichment (Limited to last 48h for the table)
         trades_filtered = [t for t in all_trades_from_db if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
-        raw_recent = sorted(trades_filtered, key=lambda x: x.get('Timestamp', ''), reverse=True)[:50]
+        
+        cutoff_48h = (datetime.now() - timedelta(hours=48)).isoformat()
+        raw_recent = [t for t in trades_filtered if t.get('Timestamp', '') > cutoff_48h]
+        raw_recent = sorted(raw_recent, key=lambda x: x.get('Timestamp', ''), reverse=True)
+        
         recent_trades = live_positions + raw_recent
 
         for trade in recent_trades:
