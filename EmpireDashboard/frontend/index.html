@@ -199,6 +199,10 @@
                     class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white">
                     📜 TRADE HISTORY (DynamoDB)
                 </button>
+                <button onclick="switchTab('skipped')" id="tab-skipped"
+                    class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white">
+                    🚫 SKIPPED
+                </button>
                 <button onclick="switchTab('cloudwatch')" id="tab-cloudwatch"
                     class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white">
                     ☁️ CLOUDWATCH
@@ -280,6 +284,7 @@
 
         let chartInstance = null;
         let allTrades = []; // Store all trades for filtering
+        let skippedTrades = []; // Last 50 skips
         let cloudwatchLogs = []; // Store system logs
         let currentTab = 'live';
         let currentSubTab = 'ALL';
@@ -289,10 +294,11 @@
 
             const liveBtn = document.getElementById('tab-live');
             const histBtn = document.getElementById('tab-history');
+            const skipBtn = document.getElementById('tab-skipped');
             const cwBtn = document.getElementById('tab-cloudwatch');
             const filters = document.getElementById('history-filters');
 
-            [liveBtn, histBtn, cwBtn].forEach(btn => {
+            [liveBtn, histBtn, skipBtn, cwBtn].forEach(btn => {
                 if (btn) btn.className = "px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white";
             });
 
@@ -434,6 +440,7 @@
             document.getElementById('totalTrades').innerText = stats.total_trades || 0;
             updateChart(data.equity_curve || []);
             allTrades = data.recent_trades || [];
+            skippedTrades = data.skipped_trades || [];
             applyFilters();
             updateAllocations(data.allocations || {}, stats.current_equity);
         }
@@ -607,6 +614,14 @@
                         <th class="p-4 text-right font-semibold">Stream</th>
                     </tr>
                 `;
+            } else if (currentTab === 'skipped') {
+                thead.innerHTML = `
+                    <tr class="text-slate-500 text-[10px] uppercase tracking-wider border-b border-white/5 bg-white/2">
+                        <th class="p-4 text-left font-semibold">Time (UTC)</th>
+                        <th class="p-4 text-left font-semibold">Asset / Symbol</th>
+                        <th class="p-4 text-left font-semibold">Reason for Skip</th>
+                    </tr>
+                `;
             } else {
                 thead.innerHTML = `
                     <tr class="text-slate-500 text-[10px] uppercase tracking-wider border-b border-white/5 bg-white/2">
@@ -617,9 +632,9 @@
                 `;
             }
 
-            const dataToRender = currentTab === 'cloudwatch' ? cloudwatchLogs : trades;
+            const dataToRender = currentTab === 'cloudwatch' ? cloudwatchLogs : (currentTab === 'skipped' ? skippedTrades : trades);
             if (dataToRender.length === 0) {
-                const colSpan = currentTab === 'live' ? 11 : (currentTab === 'cloudwatch' ? 5 : 3);
+                const colSpan = currentTab === 'live' ? 11 : (currentTab === 'cloudwatch' ? 5 : (currentTab === 'skipped' ? 3 : 3));
                 tbody.innerHTML = `<tr><td colspan="${colSpan}" class="p-8 text-center text-slate-500">No data recorded yet.</td></tr>`;
                 return;
             }
@@ -745,6 +760,21 @@
                         <td class="p-4 align-top"><span class="${levelClass} px-2 py-1 rounded text-[10px] font-bold">${trade.Type || 'INFO'}</span></td>
                         <td class="p-4 align-top font-mono text-xs text-slate-300" style="max-width: 600px; overflow-wrap: break-word;">${trade.Message || '-'}</td>
                         <td class="p-4 align-top text-right text-[10px] text-slate-600 font-mono">${(trade.Stream || '').substring(0, 20)}</td>
+                    `;
+                } else if (currentTab === 'skipped') {
+                    tr.innerHTML = `
+                        <td class="p-4 align-top text-slate-500 font-mono text-xs whitespace-nowrap">${dateStr}</td>
+                        <td class="p-4 align-top font-bold text-white">
+                            <div class="flex items-center gap-2">
+                                <span class="bg-white/5 w-6 h-6 flex items-center justify-center rounded text-xs">${icon}</span>
+                                <span class="tracking-tight">${trade.Pair || trade.Symbol || 'UNK'}</span>
+                            </div>
+                        </td>
+                        <td class="p-4 align-top">
+                            <div class="text-[10px] text-slate-400 leading-relaxed italic border-l-2 border-white/5 pl-3" style="max-width: 600px; overflow-wrap: break-word;">
+                                ${trade.AI_Reason || trade.reason || 'Reason not provided'}
+                            </div>
+                        </td>
                     `;
                 }
                 tbody.appendChild(tr);

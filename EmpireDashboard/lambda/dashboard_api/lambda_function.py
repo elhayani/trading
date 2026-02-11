@@ -811,7 +811,12 @@ def lambda_handler(event, context):
                     trade['CurrentPrice'] = current_price
                     trade['Value'] = float(trade.get('Size', 0) or 0) * current_price
 
-        # 7. Final Response
+        # 7. Skipped Trades (Audit #V11.6: Last 50 Skips)
+        # We extract these separately to avoid them being hidden by the "4+ occurrences" filter of the history tab
+        skipped_trades = [t for t in all_trades_from_db if (t.get('Status', '').upper() == 'SKIPPED' or 'SKIP' in t.get('Status', '').upper())]
+        skipped_trades = sorted(skipped_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:50]
+
+        # 8. Final Response
         response_body = {
             'stats': {
                 'total_pnl': round(total_pnl, 2),
@@ -822,6 +827,7 @@ def lambda_handler(event, context):
             'allocations': allocations,
             'equity_curve': equity_data,
             'recent_trades': recent_trades,
+            'skipped_trades': skipped_trades,
             'year': year_filter or 'ALL',
             'debug': {
                 'ccxt_available': CCXT_AVAILABLE,
