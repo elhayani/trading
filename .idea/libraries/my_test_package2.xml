@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="my-test-package2">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/Empire/infrastructure/cdk/cdk.out/asset.415a18b915f962a94e76aa9d204d21beb2dc7a1ada2e50141e73deead570a062/python/pkg_resources/tests/data/my-test-package-zip/my-test-package.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

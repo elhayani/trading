@@ -6,21 +6,22 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 from decimal import Decimal
 from datetime import datetime, timedelta
+import concurrent.futures
 
 # Initialize DynamoDB Client
 dynamodb = boto3.resource('dynamodb')
 config_table_name = os.environ.get('CONFIG_TABLE', 'EmpireConfig')
-
-# Tables to scan : On prend TOUT pour ne rien rater
-TABLES_TO_SCAN = [
-    "EmpireTradesHistory", 
-    "EmpireCryptoV4", 
-    "EmpireForexHistory", 
-    "EmpireIndicesHistory", 
-    "EmpireCommoditiesHistory"
-]
-
 config_table = dynamodb.Table(config_table_name)
+ 
+# Unified History Table
+TABLES_TO_SCAN = ["EmpireTradesHistory"]
+
+# Global cache to mitigate API Gateway 30s timeout and DDB scan costs
+_TRADES_CACHE = {
+    'items': [],
+    'timestamp': datetime.min
+}
+CACHE_TTL_SECONDS = 60
 
 # Binance API (for real balance)
 try:
@@ -29,6 +30,11 @@ try:
 except ImportError:
     CCXT_AVAILABLE = False
     print("⚠️ CCXT not available, will use calculated balances")
+
+def normalize_symbol(s):
+    """Global Helper pour la réconciliation"""
+    if not s: return ""
+    return s.replace('/', '').replace(':', '').replace('-', '').replace('USDT', '').upper()
 
 def get_binance_exchange():
     """Initialise l'objet exchange Binance (priorité au mode DEMO)"""
@@ -143,10 +149,6 @@ def fetch_binance_positions(exchange):
                 else:
                     trade_type = 'LONG'
                 
-                def normalize_symbol(s):
-                    if not s: return ""
-                    return s.replace('/', '').replace(':', '').replace('-', '').replace('USDT', '').upper()
-                
                 # Dynamic classification (Crypto, Forex, Indices, Commodities)
                 symbol = pos['symbol']
                 asset_class = classify_asset(symbol)
@@ -232,21 +234,24 @@ def reconcile_trades(db_trades, binance_positions, exchange):
 
     table = dynamodb.Table('EmpireTradesHistory')
     
-    # 1. Map active Binance symbols
-    # binance_positions = list of dicts with 'Pair' (e.g. BTC/USDT)
-    active_symbols = [p['Pair'] for p in binance_positions]
+    # 1. Map active Binance symbols (use set for O(1) lookup)
+    active_symbols_norm = {normalize_symbol(p['Pair']) for p in binance_positions}
     
-    # 2. Filter DB trades that are supposedly OPEN for ALL asset classes
+    # 2. Filter DB trades that are supposedly OPEN
     db_open_trades = [t for t in db_trades if t.get('Status', '').upper() == 'OPEN']
     
+    reconciled_count = 0
+    MAX_RECONCILE_PER_CALL = 5 # Limit to prevent timeout
+
     for trade in db_open_trades:
-        # Normalize DB pair name for comparison
+        if reconciled_count >= MAX_RECONCILE_PER_CALL:
+            break
+            
         db_pair_norm = normalize_symbol(trade.get('Pair'))
-        
-        # Check if normalized symbol exists in live active symbols
-        is_active = any(normalize_symbol(ap) == db_pair_norm for ap in active_symbols)
+        is_active = db_pair_norm in active_symbols_norm
 
         if not is_active:
+            reconciled_count += 1
             print(f"🔍 Auto-Sync: Closing detected for {trade['Pair']} (TradeId: {trade.get('TradeId')})")
             
             # Fetch current price as exit price
@@ -267,14 +272,14 @@ def reconcile_trades(db_trades, binance_positions, exchange):
             
             # Update DynamoDB
             try:
-                # Use Decimal for DynamoDB
-                pnl_decimal = Decimal(str(round(pnl, 2)))
-                exit_decimal = Decimal(str(exit_price))
+                # Use Decimal for DynamoDB - Solid string conversion + clean rounding
+                pnl_decimal = Decimal(str(round(float(pnl), 2)))
+                exit_decimal = Decimal(str(float(exit_price)))
                 
                 table.update_item(
                     Key={
-                        'TradeId': trade['TradeId'],
-                        'Timestamp': trade['Timestamp']
+                        'TradeId': str(trade['TradeId']),
+                        'Timestamp': str(trade['Timestamp'])
                     },
                     UpdateExpression="SET #s = :s, ExitPrice = :ep, PnL = :p, ClosedAt = :c, AI_Reason = :r",
                     ExpressionAttributeNames={'#s': 'Status'},
@@ -282,7 +287,7 @@ def reconcile_trades(db_trades, binance_positions, exchange):
                         ':s': 'CLOSED',
                         ':ep': exit_decimal,
                         ':p': pnl_decimal,
-                        ':c': get_paris_time().isoformat(),
+                        ':c': str(get_paris_time().isoformat()),
                         ':r': "Auto-Reconciled: Closed on Binance"
                     }
                 )
@@ -316,42 +321,77 @@ def fetch_current_price(symbol, asset_class):
         print(f"Error fetching price for {symbol}: {e}")
         return 0.0
 
+def safe_float(val, default=0.0):
+    try:
+        if val is None: return default
+        return float(val)
+    except:
+        return default
+
 class DecimalEncoder(json.JSONEncoder):
-    """Helper class to convert Decimal items to float for JSON compatibility"""
+    """Helper class to convert Decimal and datetime items for JSON compatibility"""
     def default(self, obj):
         if isinstance(obj, Decimal):
             return float(obj)
+        if isinstance(obj, (datetime, set)):
+            if isinstance(obj, set): return list(obj)
+            return obj.isoformat()
         return super(DecimalEncoder, self).default(obj)
 
-def get_all_trades():
-    """Scan all 4 trading tables (same logic as reporter.py)"""
-    all_items = []
-    for table_name in TABLES_TO_SCAN:
-        try:
-            table = dynamodb.Table(table_name)
-            response = table.scan()
-            items = response.get('Items', [])
+def scan_table_worker(table_name):
+    """Worker function for parallel DDB scanning (No Pagination to avoid timeout)"""
+    try:
+        table = dynamodb.Table(table_name)
+        response = table.scan() # Returns up to 1MB
+        return response.get('Items', [])
+    except Exception as e:
+        print(f"❌ Error scanning {table_name}: {e}")
+        return []
+
+def get_all_trades(start_time=None):
+    """Scan trading table (SEQUENTIAL & SAFE)"""
+    global _TRADES_CACHE
+    
+    now = datetime.utcnow()
+    # Purge/Cutoff sync: Last 3 days starting from midnight UTC
+    cutoff_date = (now - timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff_str = cutoff_date.isoformat()
+
+    if (now - _TRADES_CACHE['timestamp']).total_seconds() < CACHE_TTL_SECONDS:
+        print("🕯️ Using trades cache (TTL hit)")
+        return [t for t in _TRADES_CACHE['items'] if t.get('Timestamp', '') >= cutoff_str]
+
+    print(f"⚡ Cache expired, scanning EmpireTradesHistory (Since {cutoff_str})...")
+    
+    # Sequential Scan for stability
+    # Use FilterExpression to reduce data transfer if possible, but keeping it simple for now
+    try:
+        raw_items = scan_table_worker("EmpireTradesHistory")
+    except Exception as e:
+        print(f"❌ Scan failed: {e}")
+        return []
+
+    processed = []
+    for item in raw_items:
+        ts = item.get('Timestamp', '')
+        if ts < cutoff_str: continue 
+
+        if start_time and (datetime.utcnow() - start_time).total_seconds() > 25:
+            break
+
+        # ROBUST CONVERSION
+        if 'PnL' in item: item['PnL'] = safe_float(item.get('PnL'))
+        if 'Size' in item: item['Size'] = safe_float(item.get('Size'))
+        if 'EntryPrice' in item: item['EntryPrice'] = safe_float(item.get('EntryPrice'))
+        if 'CurrentPrice' in item: item['CurrentPrice'] = safe_float(item.get('CurrentPrice'))
+        
+        item['Source'] = 'DYNAMO'
+        processed.append(item)
             
-            def process_items(chunk):
-                processed = []
-                for item in chunk:
-                    if 'PnL' in item: item['PnL'] = float(item['PnL'])
-                    if 'Size' in item: item['Size'] = float(item['Size'])
-                    if 'EntryPrice' in item: item['EntryPrice'] = float(item['EntryPrice'])
-                    if 'CurrentPrice' in item: item['CurrentPrice'] = float(item['CurrentPrice'])
-                    item['Source'] = 'DYNAMO'
-                    processed.append(item)
-                return processed
-
-            all_items.extend(process_items(items))
-
-            # Handle pagination
-            while 'LastEvaluatedKey' in response:
-                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-                all_items.extend(process_items(response.get('Items', [])))
-        except Exception as e:
-            print(f"Error scanning {table_name}: {e}")
-    return all_items
+    processed.sort(key=lambda x: x.get('Timestamp', ''), reverse=True)
+    _TRADES_CACHE['items'] = processed
+    _TRADES_CACHE['timestamp'] = now
+    return processed
 
 
 
@@ -378,7 +418,7 @@ def calculate_equity_curve(trades, initial_capital=1000.0):
          equity_curve.append({'x': start_date, 'y': initial_capital})
 
     for trade in sorted_trades:
-        pnl = float(trade.get('PnL', 0.0))
+        pnl = safe_float(trade.get('PnL', 0.0))
         current_equity += pnl
         equity_curve.append({
             'x': trade.get('Timestamp'),
@@ -399,6 +439,7 @@ def get_live_mode_status(asset_class):
     return False
 
 def lambda_handler(event, context):
+    start_time = datetime.utcnow()
     print(f"📊 Dashboard API Request: {json.dumps(event)}")
 
     # Standard CORS Headers for all responses
@@ -510,69 +551,83 @@ def lambda_handler(event, context):
 
         # --- LAMBDA CLOUDWATCH LOGS (/lambda-logs) ---
         if '/lambda-logs' in path:
+            def fetch_group_logs(lg_name):
+                try:
+                    streams = logs_client.describe_log_streams(
+                        logGroupName=lg_name,
+                        orderBy='LastEventTime',
+                        descending=True,
+                        limit=2 # Just latest 2 streams
+                    ).get('logStreams', [])
+                    
+                    group_logs = []
+                    # Purge/Limit: Last 3 days starting from midnight UTC
+                    cutoff_date = (datetime.utcnow() - timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    cutoff_ms = int(cutoff_date.timestamp() * 1000)
+                    
+                    for s in streams:
+                        events = logs_client.get_log_events(
+                            logGroupName=lg_name,
+                            logStreamName=s['logStreamName'],
+                            limit=30, # "Bride" per stream
+                            startTime=cutoff_ms,
+                            startFromHead=False
+                        ).get('events', [])
+                        
+                        for ev in events:
+                            message = ev['message'].strip()
+                            if not message: continue
+                            
+                            is_error = any(kw in message.upper() for kw in ['ERROR', 'EXCEPTION', 'FAIL', 'CRITICAL', 'FATAL', '520'])
+                            
+                            if is_error:
+                                group_logs.append({
+                                    'Timestamp': datetime.fromtimestamp(ev['timestamp']/1000).isoformat(),
+                                    'Source': lg_name.split('/')[-1],
+                                    'Type': 'ERROR',
+                                    'Message': message[:1000],
+                                    'Stream': s['logStreamName']
+                                })
+                    return group_logs
+                except Exception as e:
+                    print(f"⚠️ Skip log group {lg_name}: {e}")
+                    return []
+
             try:
-                log_groups = [
+                # Actual Log Groups from Audit #V11.2
+                target_groups = [
                     '/aws/lambda/V4HybridLiveTrader',
-                    '/aws/lambda/V4StatusReporter'
+                    '/aws/lambda/V4StatusReporter',
+                    '/aws/lambda/ForexLiveTrader',
+                    '/aws/lambda/IndicesLiveTrader',
+                    '/aws/lambda/CommoditiesLiveTrader'
                 ]
                 
                 all_logs = []
-                for lg in log_groups:
-                    try:
-                        streams = logs_client.describe_log_streams(
-                            logGroupName=lg,
-                            orderBy='LastEventTime',
-                            descending=True,
-                            limit=3
-                        ).get('logStreams', [])
-                        
-                        # Filter logs for last 48 hours
-                        cutoff_ms = int((datetime.now() - timedelta(hours=48)).timestamp() * 1000)
-                        
-                        for s in streams:
-                            events = logs_client.get_log_events(
-                                logGroupName=lg,
-                                logStreamName=s['logStreamName'],
-                                limit=100,
-                                startTime=cutoff_ms,
-                                startFromHead=False
-                            ).get('events', [])
-                            
-                            for ev in events:
-                                message = ev['message']
-                                is_error = any(kw in message.upper() for kw in ['ERROR', 'EXCEPTION', 'FAIL', 'CRITICAL', '500'])
-                                
-                                all_logs.append({
-                                    'Timestamp': datetime.fromtimestamp(ev['timestamp']/1000).isoformat(),
-                                    'Source': lg.split('/')[-1],
-                                    'Type': 'ERROR' if is_error else 'INFO',
-                                    'Message': message,
-                                    'Stream': s['logStreamName']
-                                })
-                    except Exception as le:
-                        print(f"⚠️ Error fetching logs for {lg}: {le}")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    results = list(executor.map(fetch_group_logs, target_groups))
+                    for res in results:
+                        all_logs.extend(res)
                 
+                # Sort by timestamp descending
                 all_logs.sort(key=lambda x: x['Timestamp'], reverse=True)
+                
                 return {
                     'statusCode': 200,
                     'headers': cors_headers,
-                    'body': json.dumps({'logs': all_logs[:100]})
+                    'body': json.dumps({'logs': all_logs[:150]}) # Final "Bride"
                 }
             except Exception as e:
-                print(f"🔥 CloudWatch Logs Error: {e}")
-                return {
-                    'statusCode': 500,
-                    'headers': cors_headers,
-                    'body': json.dumps({'error': str(e)})
-                }
+                print(f"🔥 logs final fail: {e}")
+                return { 'statusCode': 500, 'headers': cors_headers, 'body': json.dumps({'error': str(e)}) }
 
 
         # --- STATS LOGIC (/stats or default) ---
         query_params = event.get('queryStringParameters') or {}
         year_filter = query_params.get('year')
 
-        # 1. Fetch All Trades from DDB
-        all_trades_from_db = get_all_trades()
+        # 1. Fetch All Trades from DDB (Parallel & Safe)
+        all_trades_from_db = get_all_trades(start_time=start_time)
 
         # 2. Get Real-time Data from Binance
         binance_ex = get_binance_exchange()
@@ -581,15 +636,15 @@ def lambda_handler(event, context):
 
         # AUTO-RECONCILIATION
         if binance_ex:
-            try:
-                reconcile_trades(all_trades_from_db, live_positions, binance_ex)
-            except Exception as e:
-                print(f"⚠️ Reconciliation Error: {e}")
-
-        # Enrich live positions with AI_Reason from DB if possible
-        def normalize_symbol(s):
-            if not s: return ""
-            return s.replace('/', '').replace(':', '').replace('-', '').replace('USDT', '').upper()
+            # Watchdog check (API GW 30s limit)
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            if elapsed < 20:
+                try:
+                    reconcile_trades(all_trades_from_db, live_positions, binance_ex)
+                except Exception as e:
+                    print(f"⚠️ Reconciliation Error: {e}")
+            else:
+                print(f"⚠️ Skipping reconciliation to avoid timeout (Elapsed: {elapsed}s)")
 
         for lp in live_positions:
             lp_norm = normalize_symbol(lp.get('Pair'))
@@ -633,7 +688,7 @@ def lambda_handler(event, context):
             db_actual = [t for t in asset_trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
             db_closed = [t for t in db_actual if t.get('Status', '').upper() != 'OPEN']
             
-            closed_pnl = sum(float(t.get('PnL', 0.0)) for t in db_closed)
+            closed_pnl = sum(safe_float(t.get('PnL', 0.0)) for t in db_closed)
             closed_count = len(db_closed)
             
             pnl = closed_pnl
@@ -642,7 +697,7 @@ def lambda_handler(event, context):
             source = 'CALCULATED'
 
             if asset_class == 'Crypto':
-                unrealized = sum(float(p.get('PnL', 0)) for p in crypto_live)
+                unrealized = sum(safe_float(p.get('PnL', 0)) for p in crypto_live)
                 pnl = closed_pnl + unrealized
                 open_count = len(crypto_live)
                 if binance_balance is not None:
@@ -652,7 +707,7 @@ def lambda_handler(event, context):
                     current = CRYPTO_FALLBACK + pnl
 
             elif asset_class == 'Commodities':
-                unrealized = sum(float(p.get('PnL', 0)) for p in commo_live)
+                unrealized = sum(safe_float(p.get('PnL', 0)) for p in commo_live)
                 pnl = closed_pnl + unrealized
                 open_count = len(commo_live)
                 if binance_balance is not None:
@@ -662,7 +717,7 @@ def lambda_handler(event, context):
                     current = COMMODITIES_FALLBACK + pnl
 
             elif asset_class == 'Forex':
-                unrealized = sum(float(p.get('PnL', 0)) for p in forex_live)
+                unrealized = sum(safe_float(p.get('PnL', 0)) for p in forex_live)
                 pnl = closed_pnl + unrealized
                 open_count = len(forex_live)
                 if binance_balance is not None:
@@ -672,7 +727,7 @@ def lambda_handler(event, context):
                     current = FOREX_FALLBACK + pnl
 
             elif asset_class == 'Indices':
-                unrealized = sum(float(p.get('PnL', 0)) for p in indices_live)
+                unrealized = sum(safe_float(p.get('PnL', 0)) for p in indices_live)
                 pnl = closed_pnl + unrealized
                 open_count = len(indices_live)
                 if binance_balance is not None:
@@ -705,7 +760,7 @@ def lambda_handler(event, context):
         clean_db_actual = [t for t in clean_db_actual if not (t.get('AssetClass') == 'Crypto' and t.get('Status') == 'OPEN')]
         all_stats_trades = live_positions + clean_db_actual
         
-        win_count = sum(1 for t in all_stats_trades if float(t.get('PnL', 0.0)) > 0)
+        win_count = sum(1 for t in all_stats_trades if safe_float(t.get('PnL', 0.0)) > 0)
         total_count = len(all_stats_trades)
         win_rate = (win_count / total_count * 100) if total_count > 0 else 0
 
@@ -715,7 +770,7 @@ def lambda_handler(event, context):
         if year_filter and year_filter != 'ALL':
             trades_year = [t for t in all_trades_from_db if t.get('Timestamp', '').startswith(year_filter)]
             trades_before = [t for t in all_trades_from_db if t.get('Timestamp', '') < f"{year_filter}-01-01"]
-            pnl_before = sum(float(t.get('PnL', 0.0)) for t in trades_before if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL'])
+            pnl_before = sum(safe_float(t.get('PnL', 0.0)) for t in trades_before if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL'])
             equity_data = calculate_equity_curve(trades_year, base_capital_for_graph + pnl_before)
         else:
             equity_data = calculate_equity_curve(all_trades_from_db, base_capital_for_graph)
@@ -727,12 +782,30 @@ def lambda_handler(event, context):
         
         cutoff_48h = (datetime.now() - timedelta(hours=48)).isoformat()
         raw_recent = [t for t in trades_filtered if t.get('Timestamp', '') > cutoff_48h]
-        raw_recent = sorted(raw_recent, key=lambda x: x.get('Timestamp', ''), reverse=True)
         
+        # --- AUDIT V11.4: Grouping & Filtering by Occurrences (Backend optimization) ---
+        # "N'affiche pas qd c'est moins de 4" - Reduce payload by only sending significant groups
+        occurrence_counts = {}
+        for t in all_trades_from_db:
+            pair = t.get('Pair') or t.get('Symbol') or 'UNK'
+            reason = t.get('ExitReason') or t.get('AI_Reason') or t.get('reason') or '-'
+            key = f"{pair}||{reason}"
+            occurrence_counts[key] = occurrence_counts.get(key, 0) + 1
+        
+        # Filter raw_recent history trades based on global occurrence count
+        raw_recent = [t for t in raw_recent if occurrence_counts.get(f"{t.get('Pair') or t.get('Symbol') or 'UNK'}||{t.get('ExitReason') or t.get('AI_Reason') or t.get('reason') or '-'}", 0) >= 4]
+        
+        raw_recent = sorted(raw_recent, key=lambda x: x.get('Timestamp', ''), reverse=True)
         recent_trades = live_positions + raw_recent
 
         for trade in recent_trades:
-            if trade.get('Status') == 'OPEN':
+            # Watchdog check inside loop
+            if (datetime.utcnow() - start_time).total_seconds() > 27:
+                print("🚨 Early exit from price enrichment to beat timeout")
+                break
+
+            # Optimization: Skip price fetch if markPrice was already provided by Binance
+            if trade.get('Status') == 'OPEN' and not trade.get('CurrentPrice'):
                 current_price = fetch_current_price(trade.get('Pair'), trade.get('AssetClass', 'Unknown'))
                 if current_price > 0:
                     trade['CurrentPrice'] = current_price

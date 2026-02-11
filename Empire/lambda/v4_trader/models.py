@@ -1,14 +1,17 @@
 from enum import Enum
 
 class MarketRegime(Enum):
-    """Unified Market Regime classification"""
+    """Unified Market Regime classification (Audit Fix P2.12)"""
     # Technical Regimes
-    BULL_TREND = "bull_trend"
-    BEAR_TREND = "bear_trend"
-    HIGH_VOLATILITY = "high_volatility"
-    RANGE_BOUND = "range_bound"
-    CRASH = "crash"
-    RECOVERY = "recovery"
+    BULL_TREND = "BULL_TREND"
+    BEAR_TREND = "BEAR_TREND"
+    HIGH_VOLATILITY = "HIGH_VOLATILITY"
+    RANGE_BOUND = "RANGE_BOUND"
+    CRASH = "CRASH"
+    RECOVERY = "RECOVERY"
+    NORMAL = "NORMAL"
+    RISK_OFF = "RISK_OFF"
+    BEARISH = "BEARISH"
     
     # Corridor/Session Regimes
     AGGRESSIVE_BREAKOUT = "AGGRESSIVE_BREAKOUT"
@@ -21,7 +24,7 @@ class MarketRegime(Enum):
 
 class AssetClass(Enum):
     """Asset classification"""
-    CRYPTO = "crypto"
-    FOREX = "forex"
-    COMMODITIES = "commodities"
-    INDICES = "indices"
+    CRYPTO = "Crypto"
+    FOREX = "Forex"
+    COMMODITIES = "Commodities"
+    INDICES = "Indices"

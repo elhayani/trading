@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="v4_trader">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/Empire/lambda/v4_trader.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

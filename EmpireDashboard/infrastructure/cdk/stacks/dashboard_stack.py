@@ -71,8 +71,8 @@ class EmpireDashboardStack(Stack):
             handler="lambda_function.lambda_handler",
             code=lambda_.Code.from_asset("../../lambda/dashboard_api"),  # Relative to cdk dir
             layers=[ccxt_layer],
-            timeout=Duration.seconds(30),
-            memory_size=512,  # Increased for CCXT + DynamoDB scans
+            timeout=Duration.seconds(60),
+            memory_size=1024,  # More CPU for parallel scans
             environment={
                 "TABLE_NAME": trades_table.table_name,
                 "CONFIG_TABLE": config_table.table_name

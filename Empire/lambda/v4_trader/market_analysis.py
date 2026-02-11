@@ -1,129 +1,113 @@
 import pandas as pd
 import numpy as np
 import logging
+from typing import Tuple, Dict, List
+
+# Absolute imports (Critique #1 New)
+import config
+from config import TradingConfig
+import models
+from models import AssetClass
 
 logger = logging.getLogger(__name__)
 
-def calculate_rsi(series, period=14):
+def classify_asset(symbol: str) -> AssetClass:
+    s = symbol.upper().replace('/', '')
+    if any(k in s for k in ['SPX', 'NDX', 'US30', 'GSPC', 'IXIC', 'GER40', 'FTSE', 'DAX', 'VIX']): 
+        return AssetClass.INDICES
+    if any(k in s for k in ['PAXG', 'XAG', 'XAU', 'OIL', 'WTI', 'USOIL', 'GOLD', 'SILVER', 'BRENT', 'XPT', 'XPD']): 
+        return AssetClass.COMMODITIES
+    forex_chars = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD', 'SGD', 'NZD']
+    if any(k in s for k in forex_chars) and 'USDT' not in s:
+        return AssetClass.FOREX
+    return AssetClass.CRYPTO
+
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    
-    # 🛠️ Fix: RSI division by zero (Audit #V10.3)
-    # If loss is 0, price only went up or stayed flat -> RSI 100
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50.0)  # Audit Fix: Neutral (50), not overbought (100)
+    return rsi.fillna(50.0)
 
-def calculate_sma(series, period):
+def calculate_sma(series: pd.Series, period: int) -> pd.Series:
     return series.rolling(window=period).mean()
 
-def calculate_atr(high, low, close, period=14):
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
-def analyze_market(ohlcv_data):
-    """
-    Analyzes market data using plain pandas/numpy (no pandas_ta/numba/llvmlite).
-    """
-    if not ohlcv_data or len(ohlcv_data) == 0:
-        return {
-            'indicators': {
-                'rsi': 50.0, 'sma_50': 0.0, 'sma_200': 0.0, 'atr': 0.0, 
-                'long_term_trend': 'NEUTRAL', 'signal_score': 0
-            }, 
-            # 'patterns': [],  # REMOVED
-            'current_price': 0.0,
-            'market_context': 'NO_DATA'
-        }
+def detect_volatility_spike(ohlcv: List, atr_current: float, atr_avg: float, asset_class: AssetClass = AssetClass.CRYPTO) -> Tuple[bool, str]:
+    if len(ohlcv) < 10: return False, "OK"
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['close'] = df['close'].astype(float)
+    last_change_1h = (df.iloc[-1]['close'] - df.iloc[-2]['close']) / df.iloc[-2]['close']
+    atr_ratio = atr_current / atr_avg if atr_avg > 0 else 1.0
+    
+    thresholds = {
+        AssetClass.CRYPTO:      {'1h': 0.025, 'atr': 2.5},
+        AssetClass.FOREX:       {'1h': 0.005, 'atr': 2.0},
+        AssetClass.INDICES:     {'1h': 0.010, 'atr': 2.2},
+        AssetClass.COMMODITIES: {'1h': 0.015, 'atr': 2.3}
+    }
+    cfg = thresholds.get(asset_class, thresholds[AssetClass.CRYPTO])
+    if abs(last_change_1h) > cfg['1h']: return True, f"PRICE_SPIKE_1H_{last_change_1h:.2%}"
+    if atr_ratio > cfg['atr']: return True, f"ATR_SPIKE_{atr_ratio:.1f}x"
+    return False, "OK"
 
-    # Convert to DataFrame
-    df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = AssetClass.CRYPTO) -> Dict:
+    if not ohlcv or len(ohlcv) < TradingConfig.MIN_REQUIRED_CANDLES:
+        logger.error(f"[ERROR] INSUFFICIENT DATA for {symbol}")
+        raise ValueError(f"Need {TradingConfig.MIN_REQUIRED_CANDLES} candles.")
+
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['close'] = df['close'].astype(float)
     df['high'] = df['high'].astype(float)
     df['low'] = df['low'].astype(float)
     
-    # Audit Fix: Block trades on insufficient data for valid SMA_200 (250 for safety)
-    if len(df) < 250:
-        logger.warning(f"🚫 Insufficient data ({len(df)} candles < 250): Blocking trade.")
-        return {
-            'indicators': {
-                'rsi': 50.0, 'sma_50': 0.0, 'sma_200': 0.0, 'atr': 0.0,
-                'long_term_trend': 'NEUTRAL', 'signal_score': 0
-            },
-            'current_price': float(df.iloc[-1]['close']) if len(df) > 0 else 0.0,
-            'market_context': 'INSUFFICIENT_DATA'
-        }
+    df['RSI'] = calculate_rsi(df['close'])
+    df['SMA_50'] = calculate_sma(df['close'], 50)
+    df['SMA_200'] = calculate_sma(df['close'], 200)
+    df['ATR'] = calculate_atr(df['high'], df['low'], df['close'])
     
-    # Calculate Indicators
-    # patterns = []  # REMOVED
-    df['RSI'] = calculate_rsi(df['close'], period=14)
-    df['SMA_50'] = calculate_sma(df['close'], period=50)
-    df['SMA_200'] = calculate_sma(df['close'], period=200)
-    df['ATR'] = calculate_atr(df['high'], df['low'], df['close'], period=14)
-    
-    # Latest values
     current = df.iloc[-1]
+    current_atr = float(current['ATR']) if not pd.isna(current['ATR']) else 0.0
+    avg_atr = float(df.iloc[-30:]['ATR'].mean()) if len(df) >= 30 else current_atr
     
-    indicators = {
-        'rsi': 50.0,
-        'sma_50': 0.0,
-        'sma_200': 0.0,
-        'atr': 0.0,
-        'long_term_trend': 'NEUTRAL'
-    }
+    is_spike, spike_reason = detect_volatility_spike(ohlcv, current_atr, avg_atr, asset_class)
+    if is_spike:
+        return {
+            'indicators': {'atr': current_atr},
+            'current_price': float(current['close']),
+            'market_context': f'VOLATILITY_SPIKE: {spike_reason}',
+            'signal_type': 'NEUTRAL', 'score': 0, 'atr': current_atr, 'price': float(current['close'])
+        }
 
-    try:
-        indicators.update({
-            'rsi': float(current['RSI']) if not pd.isna(current['RSI']) else 50.0,
-            'sma_50': float(current['SMA_50']) if not pd.isna(current['SMA_50']) else 0.0,
-            'sma_200': float(current['SMA_200']) if not pd.isna(current['SMA_200']) else 0.0,
-            'atr': float(current['ATR']) if not pd.isna(current['ATR']) else 0.0,
-            'long_term_trend': 'BULLISH' if current['close'] > current['SMA_200'] and not pd.isna(current['SMA_200']) else 'BEARISH'
-        })
-    except Exception as e:
-        logger.warning(f"⚠️ Error mapping indicators: {e}")
+    rsi_val = float(current['RSI'])
+    trend = 'BULLISH' if current['close'] > current['SMA_200'] else 'BEARISH'
     
-    # Signal Score Calculation (Level 2: Technical Validation)
-    # 0-100 score based on RSI, Trend, and Patterns
+    base_config = {
+        AssetClass.CRYPTO:      {'buy': 32, 'sell': 65, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO},
+        AssetClass.FOREX:       {'buy': 35, 'sell': 62, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_FOREX},
+        AssetClass.INDICES:     {'buy': 35, 'sell': 60, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_INDICES},
+        AssetClass.COMMODITIES: {'buy': 35, 'sell': 68, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_COMMODITIES}
+    }
+    cfg = base_config.get(asset_class, base_config[AssetClass.CRYPTO])
+    # Simplified score logic
     score = 0
-    rsi_val = indicators['rsi']
+    if rsi_val <= cfg['buy']: score = 70
+    elif rsi_val >= cfg['sell']: score = 70
     
-    # RSI Component (Max 50 pts) - Bidirectional scoring (Audit Fix)
-    if rsi_val < 30: score += 50      # Strong oversold (Long signal)
-    elif rsi_val < 40: score += 40    # Moderate oversold
-    elif rsi_val < 50: score += 20    # Mild oversold
-    elif rsi_val > 80: score += 50    # Strong overbought (Short signal)
-    elif rsi_val > 68: score += 40    # Moderate overbought (V10.9.1)
-    
-    # Trend Component (Max 30 pts)
-    if indicators['long_term_trend'] == 'BULLISH':
-        score += 30
-    elif indicators['long_term_trend'] == 'BEARISH' and rsi_val > 68:
-        score += 25  # Bearish trend + overbought = strong short
-        
-    indicators['signal_score'] = score
-    
-    # Signal Type Detection (Audit Fix V11: Bidirectional)
     signal_type = 'NEUTRAL'
-    LONG_THRESHOLD = 60
-    SHORT_THRESHOLD = 55
-    
-    if rsi_val < 40 and score >= LONG_THRESHOLD:
-        signal_type = 'LONG'
-    elif rsi_val > 68 and score >= SHORT_THRESHOLD:
-        signal_type = 'SHORT'
+    if rsi_val <= cfg['buy'] and score >= cfg['min_score']: signal_type = 'LONG'
+    elif rsi_val >= cfg['sell'] and score >= (cfg['min_score'] - 5): signal_type = 'SHORT'
     
     return {
-        'indicators': indicators,
-        # 'patterns': patterns, # REMOVED
+        'indicators': {'rsi': rsi_val, 'atr': current_atr},
         'current_price': float(current['close']),
-        'market_context': f"RSI={indicators['rsi']:.1f} | Trend={indicators['long_term_trend']} | Score={score}",
-        'signal_type': signal_type,
-        'score': score,                 # Audit Fix: Exposed at root
-        'atr': indicators['atr'],       # Audit Fix: Exposed for decision_engine
-        'price': float(current['close']) # Audit Fix: Alias for compatibility
+        'market_context': f"RSI={rsi_val:.1f} | Trend={trend}",
+        'signal_type': signal_type, 'score': score, 'atr': current_atr, 'price': float(current['close'])
     }

@@ -1,112 +1,101 @@
-"""
-Empire Decision Engine V11 - Safety Hardened
-=============================================
-4-Level hierarchy with integrated RiskManager.
-"""
-
 import logging
-from typing import Dict, Tuple
-from models import MarketRegime
-import micro_corridors as corridors
+from typing import Dict, Tuple, Union, Optional
+
+# Absolute imports (Critique #1 New)
+import models
+from models import AssetClass, MarketRegime
+import risk_manager
 from risk_manager import RiskManager
+import config
+from config import TradingConfig
+import micro_corridors as corridors
 
 logger = logging.getLogger(__name__)
 
-
 class DecisionEngine:
     """
-    Centralized 4-Level Decision Architecture (V11 Safety Hardened)
-    
-    Level 1: Macro Veto (Global Safety)
-    Level 2: Technical Validation (Signal Quality ≥ 60)
-    Level 3: Micro Timing (Corridor Awareness)
-    Level 4: Risk-Based Position Sizing (RiskManager)
+    Validation engine with absolute imports.
     """
 
-    def __init__(self, commission_rate: float = 0.001):
-        self.risk_manager = RiskManager()
-        self.commission_rate = commission_rate
+    def __init__(self, risk_manager: RiskManager):
+        self.risk_manager = risk_manager
 
-    @staticmethod
-    def evaluate(context, ta_result: Dict, symbol: str) -> Tuple[bool, str, float]:
-        """
-        Lightweight evaluation (backward-compatible).
-        Returns: (proceed: bool, reason: str, size_multiplier: float)
-        Used by existing callers that don't need full risk sizing.
-        """
+    def evaluate(
+        self,
+        context: Dict,
+        ta_result: Dict,
+        symbol: str,
+        asset_class: AssetClass = AssetClass.CRYPTO,
+        news_score: float = 0.0,
+        macro_regime: str = "NORMAL"
+    ) -> Tuple[bool, str, float]:
+        if not context.get('can_trade', True):
+            return False, "MACRO_STOP", 0.0
 
-        # LEVEL 1: MACRO VETO (Absolute Block)
-        if not context.can_trade:
-            return False, "MACRO_VETO", 0.0
+        base_thresholds = {
+            AssetClass.CRYPTO: TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO,
+            AssetClass.INDICES: TradingConfig.MIN_TECHNICAL_SCORE_INDICES,
+            AssetClass.FOREX: TradingConfig.MIN_TECHNICAL_SCORE_FOREX,
+            AssetClass.COMMODITIES: TradingConfig.MIN_TECHNICAL_SCORE_COMMODITIES
+        }
+        min_score = base_thresholds.get(asset_class, TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO)
 
-        # LEVEL 2: TECHNICAL VALIDATION (Signal Quality)
+        if macro_regime in ['RISK_OFF', 'BEARISH']:
+            min_score += TradingConfig.RISK_OFF_HURDLE
+        elif macro_regime == 'CRASH':
+            min_score += TradingConfig.CRASH_HURDLE
+
         score = ta_result.get('score', 0)
-        if score < 60:  # Audit Fix V11: restored to 60
-            logger.warning(f"🚫 Level 2 Veto: Signal score {score}/100 < 60")
-            return False, f"LOW_TECHNICAL_SCORE_{score}", 0.0
+        if score < min_score:
+            return False, f"LOW_SCORE_{score}", 0.0
 
-        # LEVEL 3: MICRO TIMING (Corridor Check)
-        params = corridors.get_corridor_params(symbol)
-        regime = params.get('regime')
-        if regime == MarketRegime.CLOSED:
-            logger.info(f"⏳ Level 3 Block: Market CLOSED for {symbol}")
-            return False, f"BAD_TIMING_{regime}", 0.0
+        corridor = corridors.get_corridor_params(symbol)
+        if corridor.get('regime') == MarketRegime.CLOSED:
+            return False, "MARKET_CLOSED", 0.0
 
-        # LOW_LIQUIDITY = reduce size 50% instead of veto
-        liquidity_multiplier = 0.5 if regime == MarketRegime.LOW_LIQUIDITY else 1.0
-        if regime == MarketRegime.LOW_LIQUIDITY:
-            logger.info(f"⚠️ Low liquidity for {symbol} - reducing size 50%")
-
-        # LEVEL 4: MACRO ADJUSTMENT (Sizing) - Capped at 1.0
-        confidence = context.confidence_score
-        confidence = max(0.3, min(1.0, confidence)) * liquidity_multiplier
-
-        return True, "PROCEED", confidence
+        confidence = score / 100.0
+        if news_score > 0.3: confidence *= 1.2
+        elif news_score < -0.3: confidence *= 0.8
+        
+        return True, "PROCEED", min(1.0, confidence)
 
     def evaluate_with_risk(
         self,
-        context,
+        context: Dict,
         ta_result: Dict,
         symbol: str,
         capital: float,
         direction: str = "LONG",
-    ) -> Dict:
-        """
-        Full evaluation with risk-based position sizing.
-        Returns a Dict with proceed, reason, quantity, stop_loss, risk_dollars, estimated_commission.
-        """
-
-        # Run Levels 1-3
-        proceed, reason, confidence = self.evaluate(context, ta_result, symbol)
+        asset_class: AssetClass = AssetClass.CRYPTO,
+        news_score: float = 0.0,
+        macro_regime: str = "NORMAL"
+    ) -> Dict[str, Union[bool, str, float]]:
+        proceed, reason, confidence = self.evaluate(
+            context, ta_result, symbol, 
+            asset_class=asset_class,
+            news_score=news_score,
+            macro_regime=macro_regime
+        )
+        
         if not proceed:
             return {"proceed": False, "reason": reason, "quantity": 0}
 
-        # LEVEL 4: RISK-BASED SIZING
         entry_price = ta_result.get("price", 0)
         atr = ta_result.get("atr", 0)
+        
+        stop_loss = self.risk_manager.calculate_stop_loss(entry_price, atr, direction)
 
-        # If ATR is not directly in ta_result, try indicators
-        if atr == 0 and "indicators" in ta_result:
-            atr = ta_result["indicators"].get("atr", 0)
-
-        # Dynamic Stop-Loss from ATR
-        stop_loss = RiskManager.calculate_stop_loss(entry_price, atr, direction)
-
-        # Position size from RiskManager
         sizing = self.risk_manager.calculate_position_size(
             capital=capital,
             entry_price=entry_price,
             stop_loss_price=stop_loss,
             confidence=confidence,
-            atr=atr  # Audit Fix: Critical for stop safety check
+            atr=atr,
+            direction=direction
         )
 
         if sizing["blocked"]:
-            return {
-                "proceed": False,
-                "reason": f"RISK_BLOCKED_{sizing['reason']}",
-                "quantity": 0,
-            }
+            return {"proceed": False, "reason": f"RISK_BLOCKED_{sizing['reason']}", "quantity": 0}
 
         return {
             "proceed": True,

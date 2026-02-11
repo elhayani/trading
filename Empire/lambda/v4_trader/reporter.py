@@ -3,7 +3,10 @@ import os
 import boto3
 import logging
 import requests
-from datetime import datetime, timedelta
+import html
+import pytz
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from exchange_connector import ExchangeConnector
 
@@ -13,16 +16,20 @@ logger.setLevel(logging.INFO)
 
 # AWS Clients
 dynamodb = boto3.resource('dynamodb')
-ses = boto3.client('ses', region_name='eu-west-3')
+PARIS_TZ = pytz.timezone('Europe/Paris')
 
 def get_paris_time():
-    """Returns current Paris time (UTC+1 for winter)"""
-    return datetime.utcnow() + timedelta(hours=1)
+    """Returns current Paris time using pytz (Audit Fix #4)"""
+    return datetime.now(PARIS_TZ)
 
-# Tables à scanner
+# Configuration from Environment (Audit Fix #3, #10)
 MAIN_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireTradesHistory')
-TABLES_TO_SCAN = [MAIN_TABLE, "EmpireCryptoV4", "EmpireForexHistory", "EmpireIndicesHistory", "EmpireCommoditiesHistory"]
-RECIPIENT = "zelhayani@gmail.com"
+DEFAULT_TABLES = f"{MAIN_TABLE},EmpireCryptoV4,EmpireForexHistory,EmpireIndicesHistory,EmpireCommoditiesHistory"
+TABLES_TO_SCAN = os.environ.get('REPORTER_TABLES', DEFAULT_TABLES).split(',')
+RECIPIENT = os.environ.get('RECIPIENT_EMAIL', 'zelhayani@gmail.com')
+INITIAL_BUDGET = float(os.environ.get('INITIAL_BUDGET', '20000.0'))
+SES_REGION = os.environ.get('AWS_REGION', 'eu-west-3')
+ses = boto3.client('ses', region_name=SES_REGION)
 
 def fetch_yahoo_price_lite(symbol):
     """Récupère le prix pour Forex/Indices/Commodities via Yahoo Finance"""
@@ -30,18 +37,22 @@ def fetch_yahoo_price_lite(symbol):
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=4)
+        response.raise_for_status()
         data = response.json()
         return float(data['chart']['result'][0]['meta']['regularMarketPrice'])
-    except:
+    except Exception as e:
+        logger.error(f"⚠️ Yahoo Price Error ({symbol}): {e}")
         return 0.0
 
 def get_quote_currency(pair, asset_class):
-    if asset_class == 'Forex': 
+    # Normalize for robust comparison (Audit Fix)
+    ac = str(asset_class or "").lower()
+    if ac == 'forex': 
         return pair[3:] if len(pair) == 6 else 'USD'
-    if asset_class == 'Crypto':
+    if ac == 'crypto':
         if pair.endswith('USDT') or pair.endswith('USD'): return 'USD'
         if pair.endswith('EUR'): return 'EUR'
-    if asset_class in ['Indices', 'Commodities']:
+    if ac in ['indices', 'commodities']:
         if pair.startswith('^FCHI'): return 'EUR' # CAC40
         return 'USD'
     return 'USD'
@@ -53,19 +64,70 @@ def get_eur_rate(quote_currency):
         sym = 'USD' if quote_currency == 'USDT' else quote_currency
         rate = fetch_yahoo_price_lite(f"EUR{sym}=X")
         return rate if rate > 0 else 1.0
-    except:
+    except Exception as e:
+        logger.warning(f"⚠️ EUR Rate Error ({quote_currency}): {e}")
         return 1.0
 
+def normalize_trade(item: dict) -> dict:
+    """
+    Normalize fields from various versions (snake_case vs PascalCase) (Audit Fix #1).
+    Ensures consistency across all tables.
+    """
+    def to_float(val, default=0.0):
+        try:
+            return float(val) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+
+    # Mapping logic: check snake_case (current V11) then PascalCase (Legacy)
+    res = {
+        'symbol': item.get('symbol') or item.get('Pair') or 'UNKNOWN',
+        'status': item.get('status') or item.get('Status') or 'UNKNOWN',
+        'asset_class': (item.get('asset_class') or item.get('AssetClass') or 'Unknown').capitalize(),
+        'entry_price': to_float(item.get('entry_price') or item.get('EntryPrice')),
+        'side': (item.get('side') or item.get('Type') or 'LONG').upper(),
+        'size': to_float(item.get('size') or item.get('Size') or item.get('quantity')),
+        'cost': to_float(item.get('cost') or item.get('Cost')),
+        'pnl': to_float(item.get('pnl') or item.get('PnL')),
+        'exit_reason': item.get('exit_reason') or item.get('ExitReason') or item.get('Exit_Reason') or '',
+        'timestamp': item.get('timestamp') or item.get('Timestamp') or '',
+        'exit_price': to_float(item.get('exit_price') or item.get('ExitPrice')),
+        'trade_id': item.get('trade_id') or item.get('Trade_ID') or 'N/A'
+    }
+    
+    # Financial Consistency Check (Audit Fix Round 4)
+    # If cost is 0 but entry/size exist, recalculate
+    if res['cost'] == 0 and res['entry_price'] > 0 and res['size'] > 0:
+        res['cost'] = res['entry_price'] * res['size']
+    
+    # If PnL is 0 and status is CLOSED, attempt to estimate if possible
+    if res['pnl'] == 0 and res['status'].upper() in ['CLOSED', 'EXIT', 'SL', 'TP'] and res['exit_price'] > 0:
+        if res['side'] == 'LONG':
+            res['pnl'] = (res['exit_price'] - res['entry_price']) * res['size']
+        else:
+            res['pnl'] = (res['entry_price'] - res['exit_price']) * res['size']
+
+    return res
+
 def get_all_trades():
+    """Fetches all trades from multiple tables with pagination (Audit Fix #2)"""
     all_items = []
     for table_name in TABLES_TO_SCAN:
         try:
             table = dynamodb.Table(table_name)
-            # Scan all items (Limit/Filter optimization can be added later as tables grow)
-            response = table.scan() 
-            all_items.extend(response.get('Items', []))
+            response = table.scan()
+            data = response.get('Items', [])
+            
+            # Pagination loop
+            while 'LastEvaluatedKey' in response:
+                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+                data.extend(response.get('Items', []))
+                
+            # Normalize items immediately
+            all_items.extend([normalize_trade(i) for i in data])
+            logger.info(f"✅ Fetched {len(data)} items from {table_name}")
         except Exception as e:
-            logger.error(f"Error scanning {table_name}: {e}")
+            logger.error(f"❌ Error scanning table {table_name}: {e}")
     return all_items
 
 def lambda_handler(event, context):
@@ -73,74 +135,88 @@ def lambda_handler(event, context):
     
     try:
         all_trades = get_all_trades()
+        if not all_trades:
+            logger.warning("⚠️ No trades found in any table.")
+            return {"status": "EMPTY_RESOURCES"}
+
         exchange = ExchangeConnector('binance')
-        
+        price_cache = {}  # Audit Fix #5: Avoid Redundant API Calls
+
+        def get_current_price(pair, asset_class):
+            if pair in price_cache:
+                return price_cache[pair]
+            
+            try:
+                # Robust case-insensitive check
+                ac = str(asset_class or "").capitalize()
+                if ac == 'Crypto':
+                    price = float(exchange.fetch_ticker(pair)['last'])
+                else:
+                    price = fetch_yahoo_price_lite(pair)
+                    if price == 0 and asset_class == 'Forex':
+                        price = fetch_yahoo_price_lite(pair + "=X")
+                
+                price_cache[pair] = price
+                return price
+            except Exception as e:
+                logger.error(f"Error fetching price for {pair}: {e}")
+                return 0.0
+
         # 1. Active Positions (Status = OPEN)
-        open_trades = [t for t in all_trades if t.get('Status') == 'OPEN']
+        open_trades = [t for t in all_trades if t['status'] == 'OPEN']
         
         # Group Active by Asset Class
         categories = {} 
         for t in open_trades:
-            ac = t.get('AssetClass', 'Unknown')
+            ac = t['asset_class']
             if ac not in categories: categories[ac] = {}
-            pair = t.get('Pair')
+            pair = t['symbol']
             if pair not in categories[ac]: categories[ac][pair] = []
             categories[ac][pair].append(t)
 
         # --- FINANCIAL SUMMARY ---
-        INITIAL_BUDGET = 20000.0  # Default Initial Capital Assumption
         total_buy = 0.0
         total_sell = 0.0
         realized_pnl = 0.0
         unrealized_pnl = 0.0
         open_positions_value = 0.0
         
-        # Calculate totals from history (Closed Trades) and current open costs
+        # Calculate totals
         for t in all_trades:
-            status = t.get('Status', 'OPEN')
+            status = t['status']
             if status == 'SKIPPED': continue
             
             # Cost basis
-            try:
-                cost = float(t.get('Cost', 0) or 0)
-                # Fallback if Cost is missing but we have EntryPrice * Size
-                if cost == 0:
-                    qty = float(t.get('Size', 0) or 0)
-                    entry = float(t.get('EntryPrice', 0) or 0)
-                    cost = qty * entry
-            except:
-                cost = 0.0
+            cost = t['cost']
+            if cost == 0:
+                cost = t['size'] * t['entry_price']
             
             total_buy += cost
             
             if status != 'OPEN':
-                # For closed trades, Value is the exit value
-                try:
-                    val = float(t.get('Value', 0)) # Usually updated on close
-                    # If Value missing, try ExitPrice * Size
-                    if val == 0:
-                        exit_price = float(t.get('ExitPrice', 0) or 0)
-                        qty = float(t.get('Size', 0) or 0)
-                        val = exit_price * qty
-                except:
-                    val = cost # Fallback break-even
+                # For closed trades, calculate exit value
+                exit_price = t['exit_price']
+                val = exit_price * t['size']
+                if val == 0:
+                    val = cost # Fallback
                 
                 total_sell += val
                 
                 # Realized PnL
-                try:
-                    pnl = float(t.get('PnL', 0))
-                except:
-                    pnl = val - cost
+                pnl = t['pnl']
+                if pnl == 0 and val > 0:
+                    # Infer PnL if not explicitly stated
+                    if t['side'] == 'SHORT':
+                        pnl = cost - val
+                    else:
+                        pnl = val - cost
                 realized_pnl += pnl
 
         html_sections = ""
         
-        # We will add Unrealized PnL during the Active Positions loop
-        
         # --- SECTION 1: ACTIVE POSITIONS ---
         for ac, pairs in categories.items():
-            html_sections += f"<div class='section-title'>{ac.upper()} - POSITIONS ACTIVES</div>"
+            html_sections += f"<div class='section-title'>{html.escape(ac.upper())} - POSITIONS ACTIVES</div>"
             html_sections += """<table class="empire-table">
                 <thead><tr>
                     <th style='text-align:left'>ACTIF</th>
@@ -153,18 +229,12 @@ def lambda_handler(event, context):
                 </tr></thead><tbody>"""
             
             for pair, trades_list in pairs.items():
-                if ac == 'Crypto':
-                    try:
-                        curr_price = float(exchange.fetch_ticker(pair)['last'])
-                    except:
-                        curr_price = 0.0
-                else:
-                    curr_price = fetch_yahoo_price_lite(pair)
-                    if curr_price == 0 and ac == 'Forex': curr_price = fetch_yahoo_price_lite(pair + "=X")
+                curr_price = get_current_price(pair, ac)
 
-                total_qty = sum(float(t.get('Size', 0)) for t in trades_list)
-                avg_entry = sum(float(t['EntryPrice']) for t in trades_list) / len(trades_list) if trades_list else 0
-                direction = trades_list[0].get('Type', 'LONG').upper()
+                total_qty = sum(t['size'] for t in trades_list)
+                # Audit Fix #6: Weighted Average Entry Price
+                avg_entry = sum(t['entry_price'] * t['size'] for t in trades_list) / total_qty if total_qty > 0 else 0
+                direction = trades_list[0]['side']
 
                 # Conversion Currency Logic
                 quote_currency = get_quote_currency(pair, ac)
@@ -181,31 +251,35 @@ def lambda_handler(event, context):
                     pnl_eur = curr_val_notional - entry_val_notional
 
                 # Cost & Display Value
-                # Use DB Cost (Margin) if available, else fallback to Entry Notional
-                db_cost = sum(float(t.get('Cost', 0)) for t in trades_list)
-                if db_cost > 0:
-                    pos_cost = db_cost
-                else:
+                pos_cost = sum(t['cost'] for t in trades_list)
+                if pos_cost == 0:
                     pos_cost = entry_val_notional
                 
-                # Ensure Arithmetic Consistency: Value = Cost + PnL
+                # Value = Cost + PnL
                 pos_value = pos_cost + pnl_eur
                 
                 unrealized_pnl += pnl_eur
                 open_positions_value += pos_value
                 
-                pnl_pct = ((curr_price - avg_entry) / avg_entry * 100) if direction == 'LONG' else ((avg_entry - curr_price) / avg_entry * 100)
+                # Audit Fix #7: Correct PnL % calculation
+                if avg_entry > 0 and curr_price > 0:
+                    if direction == 'LONG':
+                        pnl_pct = ((curr_price - avg_entry) / avg_entry * 100)
+                    else:
+                        pnl_pct = ((avg_entry - curr_price) / avg_entry * 100)
+                else:
+                    pnl_pct = 0.0
                 
                 if ac == 'Crypto': qty_fmt = f"{total_qty:.4f}"
                 elif ac == 'Forex': qty_fmt = f"{total_qty:,.0f}"
                 else: qty_fmt = f"{total_qty:.2f}"
 
-                color = "#10B981" if pnl_pct > 0 else "#EF4444"
+                color = "#10B981" if pnl_eur >= 0 else "#EF4444"
 
                 html_sections += f"""
                 <tr>
-                    <td style="font-weight:bold;">{pair}</td>
-                    <td style="text-align:center;"><span class="badge {direction}">{direction}</span></td>
+                    <td style="font-weight:bold;">{html.escape(pair)}</td>
+                    <td style="text-align:center;"><span class="badge {html.escape(direction)}">{html.escape(direction)}</span></td>
                     <td style="text-align:right;">{qty_fmt}</td>
                     <td style="text-align:right;">€{pos_cost:,.2f}</td>
                     <td style="text-align:right;">€{pos_value:,.2f}</td>
@@ -214,16 +288,6 @@ def lambda_handler(event, context):
                 </tr>"""
             html_sections += "</tbody></table>"
 
-        # Final Budget Calculation
-        # Budget Current = Initial + Realized PnL + Unrealized PnL
-        # Note: 'Total Buy' includes Open positions cost, 'Total Sell' is only closed.
-        # Cash = Initial - Total Buy (Outflow) + Total Sell (Inflow)
-        # Equity = Cash + Open Positions Value
-        #        = Initial - Total Buy + Total Sell + Open Positions Value
-        #        = Initial - (Closed Buy + Open Cost) + Total Sell + Open Value
-        #        = Initial - Closed Buy + Total Sell - Open Cost + Open Value
-        #        = Initial + Realized PnL + Unrealized PnL
-        
         current_budget = INITIAL_BUDGET + realized_pnl + unrealized_pnl
         
         # Build Summary HTML
@@ -254,34 +318,39 @@ def lambda_handler(event, context):
         if not open_trades:
             html_sections += "<div style='text-align:center;padding:30px;color:#94a3b8;'>💤 Aucune position active</div>"
 
-        # --- TRIGGER & TIME WINDOWS ---
+        # --- TRIGGER & TIME WINDOWS (Audit Fix #4) ---
         now = get_paris_time()
         trigger_lookback = now - timedelta(minutes=30)
+        daily_lookback = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        paris_now = now
-        daily_lookback = paris_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=1)  # Convert back to UTC for scan? Actually Dynamo uses Paris time now.
-        # Wait, if Dynamo stores Paris time, lookback should be in Paris time.
-        daily_lookback = paris_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        recent_events = []
+        todays_events = []
         
-        trigger_lookback_iso = trigger_lookback.isoformat()
-        daily_lookback_iso = daily_lookback.isoformat()
-        
-        # Check for RECENT EVENTS (All events including SKIPPED for analysis)
-        recent_events = [
-            t for t in all_trades 
-            if t.get('Timestamp', '') > trigger_lookback_iso
-        ]
-        
-        # If no recent events at all, SKIP sending email
+        for t in all_trades:
+            ts_str = t['timestamp']
+            if not ts_str:
+                continue
+            try:
+                # Parse and normalize to Paris time for reliable comparison
+                ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                ts_paris = ts_dt.astimezone(PARIS_TZ)
+                
+                if ts_paris >= trigger_lookback:
+                    recent_events.append(t)
+                if ts_paris >= daily_lookback:
+                    todays_events.append(t)
+            except Exception as e:
+                logger.warning(f"Could not parse timestamp {ts_str}: {e}")
+
+        # If no recent events (at all, including SKIPPED), skip the email (Audit Fix #9)
         if not recent_events:
-            logger.info("💤 No events in last 30m. Skipping report.")
+            logger.info("💤 No recent events (30m). Skipping report.")
             return {"status": "SKIPPED_NO_CHANGE"}
             
-        logger.info(f"🚀 Triggered! {len(recent_events)} events found (including SKIPPED for analysis).")
+        logger.info(f"🚀 Triggered! {len(recent_events)} recent events found.")
 
         # --- SECTION: JOURNAL DU JOUR (Today's Activity) ---
-        todays_events = [t for t in all_trades if t.get('Timestamp', '') > daily_lookback_iso]
-        todays_events = sorted(todays_events, key=lambda x: x.get('Timestamp', ''), reverse=True)
+        todays_events = sorted(todays_events, key=lambda x: x['timestamp'], reverse=True)
         
         if todays_events:
             html_sections += f"<div class='section-title' style='border-left-color: #f59e0b;'>JOURNAL DU JOUR ({now.strftime('%d/%m')})</div>"
@@ -294,55 +363,51 @@ def lambda_handler(event, context):
                 </tr></thead><tbody>"""
             
             for ev in todays_events:
-                ts = ev.get('Timestamp', '')
+                ts = ev['timestamp']
                 try:
-                    # Parse timestamp
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     time_str = dt.strftime('%H:%M')
                 except:
-                    time_str = ts[-8:-3]
+                    time_str = ts[-8:-3] if len(ts) > 8 else ts
                 
-                pair = ev.get('Pair', 'N/A')
-                status = ev.get('Status', 'UNKNOWN')
-                tipo = ev.get('Type', 'INFO')
+                pair = ev['symbol']
+                status = ev['status']
+                tipo = ev['side']
                 
-                # Determine Event Description & Color
                 if status == 'OPEN':
-                    event_desc = f"🟢 <b>OPEN {tipo}</b>"
+                    event_desc = f"🟢 <b>OPEN {html.escape(tipo)}</b>"
                     row_bg = "#f0fdf4"
-                elif 'CLOSED' in status or status == 'TP' or status == 'SL':
-                    reason = ev.get('ExitReason', 'EXIT')
-                    pnl = float(ev.get('PnL', 0)) if ev.get('PnL') else 0
-                    event_desc = f"🔴 <b>CLOSED ({reason})</b>"
+                elif 'CLOSED' in status or status in ['TP', 'SL']:
+                    reason = ev['exit_reason'] or 'EXIT'
+                    event_desc = f"🔴 <b>CLOSED ({html.escape(reason)})</b>"
                     row_bg = "#fef2f2"
                 elif status == 'SKIPPED':
-                    reason = ev.get('ExitReason', '') or ev.get('AI_Reason', '')
-                    event_desc = f"⚪ <i>Skipped: {reason}</i>"
+                    reason = ev['exit_reason'] or 'SKIPPED'
+                    event_desc = f"⚪ <i>Skipped: {html.escape(reason)}</i>"
                     row_bg = "#ffffff"
                 else:
-                    event_desc = f"{status}"
+                    event_desc = f"{html.escape(status)}"
                     row_bg = "#ffffff"
                 
                 # PnL Display
                 pnl_disp = ""
-                if ev.get('PnL'):
-                    val = float(ev.get('PnL'))
-                    color = "#16a34a" if val > 0 else "#dc2626"
-                    pnl_disp = f"<span style='color:{color};font-weight:bold;'>{val:+.2f}€</span>"
+                pnl_val = ev['pnl']
+                if pnl_val != 0:
+                    color = "#16a34a" if pnl_val > 0 else "#dc2626"
+                    pnl_disp = f"<span style='color:{color};font-weight:bold;'>{pnl_val:+.2f}€</span>"
 
                 html_sections += f"""
                 <tr style="background-color:{row_bg};">
                     <td style="color:#64748b; font-size:11px;">{time_str}</td>
-                    <td style="font-weight:bold;">{pair}</td>
+                    <td style="font-weight:bold;">{html.escape(pair)}</td>
                     <td style="font-size:11px; color:#334155;">{event_desc}</td>
                     <td style="text-align:right;">{pnl_disp}</td>
                 </tr>"""
             html_sections += "</tbody></table>"
 
         # --- SECTION 2: RECENT AI TRADES (Last 10) ---
-        # Exclude SKIPPED events (they are shown in ACTIVITÉ RÉCENTE)
-        actual_trades = [t for t in all_trades if t.get('Status') != 'SKIPPED']
-        recent_trades = sorted(actual_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:10]
+        actual_trades = [t for t in all_trades if t['status'] != 'SKIPPED']
+        recent_trades = sorted(actual_trades, key=lambda x: x['timestamp'], reverse=True)[:10]
         
         if recent_trades:
             html_sections += "<div class='section-title' style='border-left-color: #8b5cf6;'>RECENT AI TRADES</div>"
@@ -361,115 +426,73 @@ def lambda_handler(event, context):
                 </tr></thead><tbody>"""
                 
             for t in recent_trades:
-                # Format Date
-                ts = t.get('Timestamp', '')
+                ts = t['timestamp']
                 try:
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     date_str = dt.strftime('%d/%m %H:%M')
                 except:
                     date_str = ts[:16]
 
-                pair = t.get('Pair')
-                asset_class = t.get('AssetClass', 'Unknown')
-                direction = t.get('Type', 'LONG').upper()
+                pair = t['symbol']
+                ac = t['asset_class']
+                direction = t['side']
+                status = t['status']
+                exit_reason = t['exit_reason']
                 
-                status = t.get('Status', 'OPEN')
-                exit_reason = t.get('ExitReason', '')
+                qty = t['size']
+                entry_price = t['entry_price']
                 
-                # Get prices and quantities
-                qty = float(t.get('Size', 0) or 0)
-                entry_price = float(t.get('EntryPrice', 0) or 0)
-                exit_price = float(t.get('ExitPrice', 0) or 0)
+                # Price Cache use
+                current_price = get_current_price(pair, ac)
+                exit_price = t['exit_price'] if status != 'OPEN' else current_price
+                if exit_price == 0: exit_price = current_price
                 
-                # Format quantity based on asset class
-                if asset_class == 'Crypto': qty_fmt = f"{qty:.4f}" if qty > 0 else "-"
-                elif asset_class == 'Forex': qty_fmt = f"{qty:,.0f}" if qty > 0 else "-"
-                else: qty_fmt = f"{qty:.2f}" if qty > 0 else "-"
-                
-                # Cost and Value
-                cost = float(t.get('Cost', 0) or 0)
+                quote_currency = get_quote_currency(pair, ac)
+                eur_rate = get_eur_rate(quote_currency)
                 
                 if status == 'OPEN':
-                    # For open positions, get current price and calculate on fly
-                    if asset_class == 'Crypto':
-                        try:
-                            current_price = float(exchange.fetch_ticker(pair)['last'])
-                        except:
-                            current_price = entry_price
-                    else:
-                        current_price = fetch_yahoo_price_lite(pair)
-                        if current_price == 0: current_price = fetch_yahoo_price_lite(pair + "=X")
-                        if current_price == 0: current_price = entry_price
-                    exit_price = current_price
-
-                    # Correct Currency Conversion for OPEN trades
-                    quote_currency = get_quote_currency(pair, asset_class)
-                    eur_rate = get_eur_rate(quote_currency)
-                    
                     curr_val_notional = (qty * current_price) / eur_rate
                     entry_val_notional = (qty * entry_price) / eur_rate
-                    
-                    # PnL Calc
-                    if direction == 'SHORT':
-                        pnl_eur = entry_val_notional - curr_val_notional
-                    else:
-                        pnl_eur = curr_val_notional - entry_val_notional
-                    
-                    # Fallback Cost
-                    if cost == 0: cost = entry_val_notional
-                    
-                    # Consistent Value
+                    pnl_eur = (entry_val_notional - curr_val_notional) if direction == 'SHORT' else (curr_val_notional - entry_val_notional)
+                    cost = t['cost'] if t['cost'] > 0 else entry_val_notional
+                    value = cost + pnl_eur
+                else:
+                    cost = t['cost'] if t['cost'] > 0 else (qty * entry_price) / eur_rate
+                    pnl_eur = t['pnl'] if t['pnl'] != 0 else (exit_price * qty / eur_rate - cost)
                     value = cost + pnl_eur
 
+                # Audit Fix #7: Correct PnL % calculation for recent trades
+                if entry_price > 0 and exit_price > 0:
+                    if direction == 'LONG':
+                        pnl_pct = ((exit_price - entry_price) / entry_price * 100)
+                    else:
+                        pnl_pct = ((entry_price - exit_price) / entry_price * 100)
                 else:
-                    # CLOSED/TP/SL: Trust DB values
-                    value = float(t.get('Value', 0))
-                    if cost == 0: cost = qty * entry_price # Fallback (might be raw, beware)
-                    pnl_eur = float(t.get('PnL', 0)) if t.get('PnL') else (value - cost)
-                pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 and exit_price > 0 else 0
-                if direction == 'SHORT': pnl_pct = -pnl_pct
-                
-                # Format displays
-                is_trade = status in ['OPEN', 'CLOSED', 'TP', 'SL']
-                
-                # PRIX (Unitaire au moment du signal/trade)
-                price_fmt = f"${entry_price:,.2f}" if entry_price > 0 else "-"
-                
-                # Only show financial details for actual trades
-                # PRIX ACHAT = COST (Total)
-                entry_fmt = f"€{cost:,.2f}" if (is_trade and cost > 0) else "-"
-                # PRIX ACTUEL/VENTE = VALUE (Total)
-                exit_fmt = f"€{value:,.2f}" if (is_trade and value > 0) else "-"
-                
-                qty_fmt = qty_fmt if is_trade else "-"
+                    pnl_pct = 0.0
                 
                 # Format status badge
                 if status == 'OPEN':
                     status_badge = '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:4px;font-size:10px;">OPEN</span>'
-                elif exit_reason == 'STOP_LOSS':
+                elif exit_reason == 'STOP_LOSS' or status == 'SL':
                     status_badge = '<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-size:10px;">SL</span>'
-                elif exit_reason == 'TAKE_PROFIT':
+                elif exit_reason == 'TAKE_PROFIT' or status == 'TP':
                     status_badge = '<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:4px;font-size:10px;">TP</span>'
-                elif 'CLOSED' in status:
-                     status_badge = '<span style="background:#e2e8f0;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;">CLOSED</span>'
                 else:
-                    # SKIPPED or INFO
-                    status_badge = f'<span style="background:#f1f5f9;color:#64748b;padding:2px 6px;border-radius:4px;font-size:10px;">{status[:4]}</span>'
+                    status_badge = f'<span style="background:#e2e8f0;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;">{html.escape(status[:6])}</span>'
                 
-                # Format PnL
-                pnl_color = '#16a34a' if pnl_eur >= 0 else '#dc2626'
-                pnl_pct_str = f'<span style="color:{pnl_color};font-weight:bold;">{pnl_pct:+.2f}%</span>' if (is_trade and exit_price > 0) else '-'
-                pnl_eur_str = f'<span style="color:{pnl_color};font-weight:bold;">{pnl_eur:+.2f}€</span>' if (is_trade and pnl_eur != 0) else '-'
+                color = '#16a34a' if pnl_eur >= 0 else '#dc2626'
+                pnl_pct_str = f'<span style="color:{color};font-weight:bold;">{pnl_pct:+.2f}%</span>'
+                pnl_eur_str = f'<span style="color:{color};font-weight:bold;">{pnl_eur:+.2f}€</span>'
 
                 html_sections += f"""
                 <tr>
                     <td style="color:#64748b; font-size:11px;">{date_str}</td>
-                    <td style="font-weight:bold;">{pair}</td>
-                    <td style="font-family:monospace; color:#0ea5e9;">{price_fmt}</td>
-                    <td style="text-align:center;"><span class="badge {direction}">{direction}</span></td>
-                    <td style="text-align:right;">{qty_fmt}</td>
-                    <td style="text-align:right;">{entry_fmt}</td>
-                    <td style="text-align:right;">{exit_fmt}</td>
+                    <td style="font-weight:bold;">{html.escape(pair)}</td>
+                    <td style="font-family:monospace; color:#0ea5e9;">${entry_price:,.2f}</td>
+                    <td style="text-align:center;"><span class="badge {html.escape(direction)}">{html.escape(direction)}</span></td>
+                    <td style="text-align:right;">{qty:,.4f}</td>
+                    <td style="text-align:right;">€{cost:,.2f}</td>
+                    <td style="text-align:right;">€{value:,.2f}</td>
                     <td style="text-align:center;">{status_badge}</td>
                     <td style="text-align:right;">{pnl_pct_str}</td>
                     <td style="text-align:right;">{pnl_eur_str}</td>
@@ -500,10 +523,17 @@ def lambda_handler(event, context):
         </body></html>
         """
         
+        if not open_trades and not todays_events:
+            logger.info("💤 No significant activity to report. Skipping email.")
+            return {"status": "SKIPPED_NO_CONTENT"}
+
         ses.send_email(
             Source=RECIPIENT,
             Destination={'ToAddresses': [RECIPIENT]},
-            Message={'Subject': {'Data': f"🏛️ Empire Alert: {len(recent_events)} New Updates"}, 'Body': {'Html': {'Data': html_body}}}
+            Message={
+                'Subject': {'Data': f"🏛️ Empire Report: {len(open_trades)} Open | {len(todays_events)} Today"},
+                'Body': {'Html': {'Data': html_body}}
+            }
         )
         logger.info("[SUCCESS] Email Sent.")
         return {"status": "SUCCESS"}
