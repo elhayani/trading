@@ -52,12 +52,19 @@ class ExchangeConnector:
                 logger.error(f"❌ Failed to connect to {exchange_id} (Testnet): {e}")
 
     def _setup_binance_demo(self):
-        """Helper to configure Binance Demo/Testnet (Audit #V10.9)"""
-        # On ne fait plus d'override manuel d'URL ici, 
-        # on laisse CCXT gérer via sandbox si testnet est True.
+        """Helper to configure Binance Demo/Testnet (Audit Fix #B2)"""
         if hasattr(self.exchange, 'set_sandbox_mode'):
             self.exchange.set_sandbox_mode(True)
-            logger.info("🧪 Binance Sandbox Mode enabled")
+        
+        # Explicit override to ensure Testnet URLs are used
+        # This fixes issues where set_sandbox_mode might not update all endpoints
+        if self.exchange.options.get('defaultType') == 'future':
+             self.exchange.urls['api'] = {
+                 'public': 'https://testnet.binancefuture.com/fapi/v1',
+                 'private': 'https://testnet.binancefuture.com/fapi/v1',
+             }
+        
+        logger.info(f"🧪 Binance Sandbox Mode enabled. API: {self.exchange.urls['api']}")
 
     def create_market_order(self, symbol, side, amount):
         """Execute Market Order"""

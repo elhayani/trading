@@ -203,45 +203,17 @@ class V4TradingStack(Stack):
         # EventBridge Rules (Timezone consideration: Crons are UTC)
         # =====================================================================
         
-        # 1. ECO Rule (Paris 00h-06h -> UTC 23h-05h)
-        eco_rule = events.Rule(
-            self, "EmpireEcoRule",
-            rule_name="EmpireEcoRule",
-            description="ECO Mode: 20 min interval",
-            schedule=events.Schedule.expression("cron(0/20 23-4 * * ? *)"),
+        # Global Heartbeat Rule (Every 1 minute)
+        # Monitors market, manages exits, and checks entry signals continuously.
+        # Note: News fetching is cached internally for 15 mins to save costs.
+        global_rule = events.Rule(
+            self, "EmpireGlobalMonitoring",
+            rule_name="EmpireGlobalMonitoring",
+            description="Global Heartbeat: 1 min interval",
+            schedule=events.Schedule.expression("cron(* * * * ? *)"),
             enabled=True
         )
-        eco_rule.add_target(targets.LambdaFunction(trading_lambda))
-
-        # 2. STANDARD AM Rule (Paris 06h-14h -> UTC 05h-13h)
-        std_am_rule = events.Rule(
-            self, "EmpireStandardAMRule",
-            rule_name="EmpireStandardAMRule",
-            description="STANDARD AM: 5 min interval",
-            schedule=events.Schedule.expression("cron(0/5 5-12 * * ? *)"),
-            enabled=True
-        )
-        std_am_rule.add_target(targets.LambdaFunction(trading_lambda))
-
-        # 3. TURBO Rule (Paris 14h-16h US Open -> UTC 13h-15h)
-        turbo_rule = events.Rule(
-            self, "EmpireTurboRule",
-            rule_name="EmpireTurboRule",
-            description="TURBO US Open: 1 min interval",
-            schedule=events.Schedule.expression("cron(* 13-14 * * ? *)"),
-            enabled=True
-        )
-        turbo_rule.add_target(targets.LambdaFunction(trading_lambda))
-
-        # 4. STANDARD PM Rule (Paris 16h-00h -> UTC 15h-23h)
-        std_pm_rule = events.Rule(
-            self, "EmpireStandardPMRule",
-            rule_name="EmpireStandardPMRule",
-            description="STANDARD PM: 5 min interval",
-            schedule=events.Schedule.expression("cron(0/5 15-22 * * ? *)"),
-            enabled=True
-        )
-        std_pm_rule.add_target(targets.LambdaFunction(trading_lambda))
+        global_rule.add_target(targets.LambdaFunction(trading_lambda))
         
         # Reporting Bot (Every 30 mins)
         reporting_rule = events.Rule(
