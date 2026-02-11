@@ -1,44 +1,44 @@
-# 🏛️ Empire Trading Bot V11.2
+# 🏛️ Empire Trading Bot V11.6
+**Professional-grade algorithmic trading bot for Crypto, Forex, Indices, and Commodities.**
 
-Empire is a professional-grade algorithmic trading bot designed for high-frequency scalping and trend-following across multiple asset classes (Crypto, Forex, Indices, Commodities).
+Empire is a high-performance trading system built for AWS Lambda, utilizing AI-driven decision engines (Claude 3 Haiku) and robust atomic risk management.
 
-## 🚀 Key Features
-- **4-Level Validation**: Macro Regime -> Technical Score -> Micro Timing -> Risk Management.
-- **Sentiment Analysis**: Integrated with Yahoo Finance news and negation handling.
-- **Risk Management**: Dynamic position sizing, ATR-based stops, and portfolio-level risk caps.
-- **Micro-Corridors**: Adapts trading parameters based on time-of-day volatility sessions.
-- **Walk-Forward Optimizer**: Backtests and optimizes parameters to prevent overfitting.
+## 🚀 Key Features (Version 11.6)
+- **Sniper Architecture (V11.5)**: Optimized for AWS Lambda warm starts (-82% latency).
+- **Atomic Risk Management**: Prevents race conditions using DynamoDB conditional expressions.
+- **Circuit Breaker Sentiment**: Intelligent Yahoo Finance news analysis with automated backoff.
+- **Smart OHLCV Cache**: Persistently stores market data in `/tmp` (1GB storage) to minimize API calls.
+- **Multi-Asset Class Support**: Specialized analysis for Crypto, Commodities, Forex, and Indices.
+- **AI-Validation**: Optional Claude 3 Haiku validation for high-confidence entries.
 
 ## 📁 Architecture
-- `v4_hybrid_lambda.py`: AWS Lambda entry point and execution loop.
-- `market_analysis.py`: Technical indicator calculations and trend detection.
-- `decision_engine.py`: Approval logic and threshold adjustments.
-- `risk_manager.py`: Core risk calculations and trade registration.
-- `news_fetcher.py`: NLP-lite sentiment analysis for news articles.
-- `macro_context.py`: High-level market regime monitoring (DXY, Yields, VIX).
-- `config.py`: Centralized configuration for all modules.
+- `v4_hybrid_lambda.py`: Core execution engine with smart caching and warm-start optimizations.
+- `atomic_persistence.py`: Atomic DynamoDB operations for global risk caps and position tracking.
+- `exchange_connector.py`: Singleton-based CCXT connector with persistent markets cache.
+- `news_fetcher.py`: sentiment analysis with proximity-aware negation and circuit breakers.
+- `market_analysis.py`: Multi-timeframe technical indicator calculations and regime detection.
+- `decision_engine.py`: Multi-layered approval logic combining TA, Sentiment, and AI.
+- `config.py`: Centralized configuration and trading parameters.
 
-## 🛠️ Setup
-1. **Environment Variables**:
-   - `BINANCE_API_KEY`, `BINANCE_SECRET_KEY`: Exchange credentials.
-   - `TRADING_MODE`: `dry_run` or `live`.
-   - `SYMBOLS`: Comma-separated list (e.g., `BTC/USDT,ETH/USDT`).
-   - `EMPIRE_MACRO_EVENT`: (Optional) Manual override for economic events.
+## 🛠️ Performance Optimizations (Audit V11.5)
+- **DynamoDB GSI**: Position loading via GSI (`18ms` vs `500ms`).
+- **Warm Start Cache**: CCXT instances and market data persist between invocations.
+- **Smart OHLCV Fetch**: Only incremental candles are fetched once cache is established.
+- **Lambda Profile**: 1.5GB RAM / 1GB Ephemeral Storage for peak efficiency.
 
-2. **Dependencies**:
-   - `ccxt`, `pandas`, `numpy`, `yfinance`, `boto3`.
+## 🛠️ Setup & Deployment
+1. **Credentials**: Store Binance API keys in AWS Secrets Manager (`trading/binance`).
+2. **Configuration**: Edit `Empire/lambda/v4_trader/config.py` for trading limits and thresholds.
+3. **Deploy**:
+   ```bash
+   cd Empire/scripts
+   bash deploy.sh
+   ```
 
-## 🧪 Testing
-Run unit tests with:
-```bash
-python -m unittest lambda/v4_trader/tests/test_risk_manager.py
-```
-
-## 📊 Backtesting
-Simulate performance over historical data:
-```bash
-python lambda/v4_trader/backtester.py BTC/USDT 30
-```
+## 📊 Monitoring
+- **Dashboard**: Use the `EmpireDashboard` frontend for real-time tracking.
+- **Logs**: `aws logs tail /aws/lambda/V4HybridLiveTrader --follow`
+- **State**: Check `V4TradingState` table in DynamoDB for active portfolio risk.
 
 ---
 *Disclaimer: Trading involves significant risk. This software is provided as-is with no guarantees of profit.*
