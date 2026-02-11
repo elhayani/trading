@@ -57,6 +57,14 @@ class V4TradingStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
             point_in_time_recovery=True
         )
+
+        # ✅ GSI Optimized Query (Audit #V11.5)
+        state_table.add_global_secondary_index(
+            index_name="status-timestamp-index",
+            partition_key=dynamodb.Attribute(name="status", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="timestamp", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL
+        )
         
         # Unified History Table (EmpireTradesHistory) - USE FROM_TABLE_NAME if it exists
         # This avoiding deployment failures if the table already exists.
