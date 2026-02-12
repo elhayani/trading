@@ -69,38 +69,52 @@ echo ""
 echo "📚 Step 2.1: Building Dependency Layer..."
 echo "----------------------------------------------------------------------"
 
-LAYER_DIR="lambda/layer/python"
-rm -rf lambda/layer
-mkdir -p $LAYER_DIR
-
-echo "  → Installing CCXT & YFinance..."
-# Install using manylinux2014_x86_64 for AWS Lambda compatibility
-pip3 install \
-    --platform manylinux2014_x86_64 \
-    --target $LAYER_DIR \
-    --implementation cp \
-    --python-version 3.12 \
-    --only-binary=:all: \
-    --upgrade \
-    ccxt yfinance requests pandas numpy
-
-# Optimize CCXT size: Keep only essential files if possible, but don't break imports
-echo "  → Optimizing CCXT size..."
-# find $LAYER_DIR/ccxt -maxdepth 1 -type f -name "*.py" ! -name "binance.py" ! -name "__init__.py" -delete
-if [ -d "$LAYER_DIR/ccxt/async_support" ]; then
-    rm -rf $LAYER_DIR/ccxt/async_support
+# Check if layer already exists
+if [ -d "lambda/layer/python" ] && [ "$(ls -A lambda/layer/python 2>/dev/null)" ]; then
+    echo -e "${YELLOW}⚠️  Dependency layer already exists${NC}"
+    read -p "Reinstall dependencies? (yes/no) [default: no]: " install_deps
+    install_deps=${install_deps:-no}
+else
+    install_deps="yes"
+    echo "  → No existing layer found, will install dependencies"
 fi
 
-# Cleanup heavy libs (keeping pandas/numpy)
-rm -rf $LAYER_DIR/scipy $LAYER_DIR/docutils $LAYER_DIR/boto3 $LAYER_DIR/botocore
-# Cleanup non-essential heavy libs
-rm -rf $LAYER_DIR/numba $LAYER_DIR/llvmlite
+if [ "$install_deps" == "yes" ]; then
+    LAYER_DIR="lambda/layer/python"
+    rm -rf lambda/layer
+    mkdir -p $LAYER_DIR
 
-# Cleanup cache/dist info to save space
-find $LAYER_DIR -name "__pycache__" -type d -exec rm -rf {} +
-# find $LAYER_DIR -name "*.dist-info" -type d -exec rm -rf {} +
+    echo "  → Installing CCXT & YFinance..."
+    # Install using manylinux2014_x86_64 for AWS Lambda compatibility
+    pip3 install \
+        --platform manylinux2014_x86_64 \
+        --target $LAYER_DIR \
+        --implementation cp \
+        --python-version 3.12 \
+        --only-binary=:all: \
+        --upgrade \
+        ccxt yfinance requests pandas numpy
 
-echo -e "${GREEN}✅ Layer prepared in lambda/layer${NC}"
+    # Optimize CCXT size: Keep only essential files if possible, but don't break imports
+    echo "  → Optimizing CCXT size..."
+    # find $LAYER_DIR/ccxt -maxdepth 1 -type f -name "*.py" ! -name "binance.py" ! -name "__init__.py" -delete
+    if [ -d "$LAYER_DIR/ccxt/async_support" ]; then
+        rm -rf $LAYER_DIR/ccxt/async_support
+    fi
+
+    # Cleanup heavy libs (keeping pandas/numpy)
+    rm -rf $LAYER_DIR/scipy $LAYER_DIR/docutils $LAYER_DIR/boto3 $LAYER_DIR/botocore
+    # Cleanup non-essential heavy libs
+    rm -rf $LAYER_DIR/numba $LAYER_DIR/llvmlite
+
+    # Cleanup cache/dist info to save space
+    find $LAYER_DIR -name "__pycache__" -type d -exec rm -rf {} +
+    # find $LAYER_DIR -name "*.dist-info" -type d -exec rm -rf {} +
+
+    echo -e "${GREEN}✅ Layer prepared in lambda/layer${NC}"
+else
+    echo -e "${GREEN}✅ Using existing layer in lambda/layer${NC}"
+fi
 echo ""
 
 # Step 3: Update CDK App with Account ID

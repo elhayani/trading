@@ -76,6 +76,10 @@ class RiskManager:
 
     @staticmethod
     def calculate_stop_loss(entry_price: float, atr: float, direction: str = "LONG", multiplier: float = 2.0) -> float:
+        # Convert to float to avoid Decimal/float operation errors
+        entry_price = float(entry_price)
+        atr = float(atr)
+        
         if atr <= 0: return round(entry_price * (0.98 if direction == "LONG" else 1.02), 8)
         dist = atr * multiplier
         return round(entry_price - dist if direction == "LONG" else entry_price + dist, 8)

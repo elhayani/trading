@@ -13,8 +13,10 @@ logger = logging.getLogger(__name__)
 
 def classify_asset(symbol: str) -> AssetClass:
     s = symbol.upper().replace('/', '')
-    if any(k in s for k in ['SPX', 'NDX', 'US30', 'GSPC', 'IXIC', 'GER40', 'FTSE', 'DAX', 'VIX']): 
+    # Elite Tech Stocks: TSLA, NVDA (treated as indices for volatility profile)
+    if any(k in s for k in ['TSLA', 'NVDA', 'SPX', 'NDX', 'US30', 'GSPC', 'IXIC', 'GER40', 'FTSE', 'DAX', 'VIX']): 
         return AssetClass.INDICES
+    # Commodities & Energy: PAXG (Gold), WTI (Oil), etc.
     if any(k in s for k in ['PAXG', 'XAG', 'XAU', 'OIL', 'WTI', 'USOIL', 'GOLD', 'SILVER', 'BRENT', 'XPT', 'XPD']): 
         return AssetClass.COMMODITIES
     forex_chars = ['EUR', 'GBP', 'AUD', 'JPY', 'CHF', 'CAD', 'SGD', 'NZD']
@@ -106,9 +108,9 @@ def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = 
     elif rsi_val >= cfg['sell'] and score >= (cfg['min_score'] - 5): signal_type = 'SHORT'
     
     return {
-        'indicators': {'rsi': rsi_val, 'atr': current_atr},
+        'indicators': {'rsi': float(rsi_val), 'atr': float(current_atr)},
         'current_price': float(current['close']),
         'market_context': f"RSI={rsi_val:.1f} | Trend={trend}",
-        'signal_type': signal_type, 'score': score, 'atr': current_atr, 'price': float(current['close']),
-        'rsi': rsi_val  # Add to root for easy access in logging
+        'signal_type': signal_type, 'score': int(score), 'atr': float(current_atr), 'price': float(current['close']),
+        'rsi': float(rsi_val)  # Add to root for easy access in logging
     }

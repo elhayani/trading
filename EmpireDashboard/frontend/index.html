@@ -207,64 +207,8 @@
                     class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white">
                     ☁️ CLOUDWATCH
                 </button>
-                <button onclick="switchTab('transactions')" id="tab-transactions"
-                    class="px-6 py-3 font-bold text-sm transition-all border-b-2 border-transparent text-slate-500 hover:text-white">
-                    💰 TRANSACTIONS
-                </button>
             </div>
 
-            <!-- SUB-TABS (Asset Class) -->
-            <div class="flex gap-2 mb-6 overflow-x-auto pb-2">
-                <button onclick="switchSubTab('ALL')" id="subtab-ALL"
-                    class="px-4 py-2 text-xs font-bold rounded-full bg-blue-600 text-white transition-all shadow-lg shadow-blue-500/20 hover:bg-blue-500">
-                    ALL
-                </button>
-                <button onclick="switchSubTab('Crypto')" id="subtab-Crypto"
-                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
-                    ₿ Crypto
-                </button>
-                <button onclick="switchSubTab('Forex')" id="subtab-Forex"
-                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
-                    💱 Forex
-                </button>
-                <button onclick="switchSubTab('Indices')" id="subtab-Indices"
-                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
-                    📈 Indices
-                </button>
-                <button onclick="switchSubTab('Commodities')" id="subtab-Commodities"
-                    class="px-4 py-2 text-xs font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:border-slate-500 transition-all">
-                    🛢️ Commodities
-                </button>
-            </div>
-
-            <!-- FILTERS (Hidden by default, shown in history) -->
-            <div id="history-filters" class="hidden flex gap-3 mb-6">
-                <!-- Month Filter -->
-                <select id="monthFilter" onchange="applyFilters()"
-                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1.5 focus:outline-none focus:border-blue-500">
-                    <option value="ALL">All Months</option>
-                    <option value="01">January</option>
-                    <option value="02">February</option>
-                    <option value="03">March</option>
-                    <option value="04">April</option>
-                    <option value="05">May</option>
-                    <option value="06">June</option>
-                    <option value="07">July</option>
-                    <option value="08">August</option>
-                    <option value="09">September</option>
-                    <option value="10">October</option>
-                    <option value="11">November</option>
-                    <option value="12">December</option>
-                </select>
-
-                <!-- Status Filter -->
-                <select id="statusFilter" onchange="applyFilters()"
-                    class="bg-slate-800 text-slate-300 text-xs rounded border border-slate-700 px-3 py-1.5 focus:outline-none focus:border-blue-500">
-                    <option value="ALL">All Status</option>
-                    <option value="CLOSED">CLOSED</option>
-                    <option value="SKIPPED">SKIPPED</option>
-                </select>
-            </div>
 
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse">

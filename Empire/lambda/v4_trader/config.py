@@ -29,6 +29,11 @@ class TradingConfig:
     USE_LIMIT_ORDERS = True     # Use limit orders for better execution
     MAX_OPEN_TRADES = 4         # Maximum 4 concurrent positions (slot management)
     
+    # --- PAXG Specific (Gold tokenisé - faible volatilité, levier x4) ---
+    PAXG_LEVERAGE = 4           # Levier x4 pour compenser la faible volatilité
+    PAXG_TP = 0.0035            # 0.35% brut → ~0.30% net après frais
+    PAXG_SL = 0.0050            # 0.50% stop loss (adapté au levier x4)
+    
     # --- Confidence / Sizing ---
     MIN_CONFIDENCE = 0.7        # Raised to 70% for scalping (high-probability only)
     MAX_CONFIDENCE = 1.0

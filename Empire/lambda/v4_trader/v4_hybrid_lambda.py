@@ -1,6 +1,14 @@
 """
-Empire Trading System V11.5 - PERFORMANCE SNIPER APPLIED
+Empire Trading System V13.2 - 11 ACTIFS BINANCE VALIDATED
 =========================================================
+Pump/News: DOGE (30min) - Momentum pur, news-driven
+Tech L1: AVAX (30min) - Volatilité "High Tech"
+Oracle: LINK (30min) - Décorrélation (matière première crypto)
+Leaders: BTC, ETH, SOL, XRP, BNB (30min) - Noyau dur
+RWA: PAXG (90min) - Or/Commodity
+Indices: SPX (45min) - S&P 500
+Parking: USDC (60min) - Trésorerie (Priorité Basse)
+
 GSI Query for Positions (Critique #V11.5.1)
 Smart OHLCV Caching (Critique #V11.5.2)
 CCXT Singleton & Warm Cache (Critique #V11.5.3)
@@ -52,6 +60,12 @@ def to_decimal(obj):
     if isinstance(obj, Enum): return obj.value
     if isinstance(obj, dict): return {k: to_decimal(v) for k, v in obj.items()}
     if isinstance(obj, list): return [to_decimal(v) for v in obj]
+    return obj
+
+def from_decimal(obj):
+    if isinstance(obj, Decimal): return float(obj)
+    if isinstance(obj, dict): return {k: from_decimal(v) for k, v in obj.items()}
+    if isinstance(obj, list): return [from_decimal(v) for v in obj]
     return obj
 
 # ==================== LOGGING ====================
@@ -199,7 +213,7 @@ class PersistenceLayer:
                 sanitized_symbol = item['trader_id'].replace('POSITION#', '')
                 # Convert back: _ -> / and - -> :
                 original_symbol = sanitized_symbol.replace('_', '/').replace('-', ':')
-                positions[original_symbol] = item['position']
+                positions[original_symbol] = from_decimal(item['position'])
             return positions
         except Exception as e:
             # Fallback to scan if GSI is not yet ready or fails
@@ -214,7 +228,7 @@ class PersistenceLayer:
                 for item in response.get('Items', []):
                     sanitized_symbol = item['trader_id'].replace('POSITION#', '')
                     original_symbol = sanitized_symbol.replace('_', '/').replace('-', ':')
-                    positions[original_symbol] = item['position']
+                    positions[original_symbol] = from_decimal(item['position'])
                 return positions
             except Exception as e2:
                 logger.error(f"[ERROR] Failed to load positions (Scan): {e2}")
@@ -231,7 +245,7 @@ class PersistenceLayer:
     def load_risk_state(self):
         try:
             response = self.aws.state_table.get_item(Key={'trader_id': 'RISK_MANAGER#GLOBAL'})
-            return response.get('Item', {}).get('state', {})
+            return from_decimal(response.get('Item', {}).get('state', {}))
         except Exception as e:
             logger.error(f"[ERROR] Failed to load risk state: {e}")
             return {}
@@ -432,6 +446,10 @@ class TradingEngine:
                         except Exception as e:
                             logger.error(f"[ERROR] Flash exit failed: {e}")
             
+            # Get balance early (needed for trim check and later logic)
+            balance = self.exchange.get_balance_usdt()
+            if balance < 10: raise ValueError("Insufficient balance ( < $10 )")
+            
             # TRIM & SWITCH: Check if we should reduce existing positions for better opportunities
             # Only if we have positions AND low available capital
             if positions and balance < 500:  # Less than $500 available
@@ -449,20 +467,24 @@ class TradingEngine:
             news_score = self.news_fetcher.get_news_sentiment_score(symbol)
             macro = macro_context.get_macro_context(state_table=self.aws.state_table)
             
-            balance = self.exchange.get_balance_usdt()
-            if balance < 10: raise ValueError("Insufficient balance ( < $10 )")
-            
             direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
             if ta_result.get('signal_type') == 'NEUTRAL':
                 # Build meaningful skip reason
                 rsi = ta_result.get('rsi', 50)
                 score = ta_result.get('score', 0)
                 
-                # EMPIRE V13.0: USDC/USDT low-priority entry logic
+                # EMPIRE V13.2: USDC/USDT low-priority entry logic (10 actifs prioritaires)
                 # Only enter USDC if it's forex AND all other priority assets are calm (<50 score)
                 if asset_class == 'forex' and 'USDC' in symbol:
-                    # Check if this is a calm market - scan priority assets
-                    priority_symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'PAXG/USDT:USDT', 'SPX/USDT:USDT', 'BNB/USDT:USDT']
+                    # Check if this is a calm market - scan priority assets (V13.2: 10 actifs)
+                    priority_symbols = [
+                        'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT',  # Leaders (5)
+                        'DOGE/USDT:USDT',  # Pump/News (1)
+                        'AVAX/USDT:USDT',  # Tech L1 (1)
+                        'LINK/USDT:USDT',  # Oracle (1)
+                        'PAXG/USDT:USDT',  # RWA/Commodities (1)
+                        'SPX/USDT:USDT'  # Indices (1)
+                    ]
                     all_calm = True
                     
                     for priority_sym in priority_symbols:
@@ -551,12 +573,15 @@ class TradingEngine:
         min_amount = market_info.get('min_amount', 0)
         if quantity < min_amount: quantity = min_amount
 
+        # PAXG-specific: leverage x4 for low-volatility gold token
+        is_paxg = 'PAXG' in symbol
+        leverage = TradingConfig.PAXG_LEVERAGE if is_paxg else TradingConfig.LEVERAGE
+        
         try:
-            # Force leverage 1 for scalping safety
-            order = self.exchange.create_market_order(symbol, side, quantity, leverage=TradingConfig.LEVERAGE)
+            order = self.exchange.create_market_order(symbol, side, quantity, leverage=leverage)
             real_entry = float(order.get('average', ta_result['price']))
             real_size = float(order.get('filled', quantity))
-            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {TradingConfig.LEVERAGE}x)")
+            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {leverage}x)")
         except Exception as e:
             logger.error(f"[ERROR] Order failed: {e}")
             return {'symbol': symbol, 'status': 'ORDER_FAILED', 'error': str(e)}
@@ -574,22 +599,26 @@ class TradingEngine:
             logger.error(f"[ALERT] Atomic risk check failed: {reason}. Attempting order rollback...")
             try:
                 rollback_side = 'sell' if direction == 'LONG' else 'buy'
-                self.exchange.create_market_order(symbol, rollback_side, real_size)
+                self.exchange.create_market_order(symbol, rollback_side, real_size, leverage=leverage)
                 logger.info(f"[OK] Emergency rollback executed for {symbol}")
             except Exception as rollback_err:
                 logger.error(f"[CRITICAL] ROLLBACK FAILED: {rollback_err}")
             self.persistence.log_skipped_trade(symbol, reason, asset_class)
             return {'symbol': symbol, 'status': 'BLOCKED_ATOMIC', 'reason': reason}
         
-        # Scalping TP: Fixed 0.3-0.5% profit target (not ATR-based)
-        # Use 0.4% as default target (middle of range)
-        tp_pct = TradingConfig.SCALP_TP_MIN + ((TradingConfig.SCALP_TP_MAX - TradingConfig.SCALP_TP_MIN) / 2)
+        # PAXG: TP 0.35% brut (~0.30% net) / SL 0.50% | Others: standard scalping config
+        if is_paxg:
+            tp_pct = TradingConfig.PAXG_TP
+            sl_pct = TradingConfig.PAXG_SL
+            logger.info(f"[PAXG] Gold mode: Leverage {leverage}x | TP {tp_pct*100:.2f}% brut (~0.30% net) | SL {sl_pct*100:.2f}%")
+        else:
+            tp_pct = TradingConfig.SCALP_TP_MIN + ((TradingConfig.SCALP_TP_MAX - TradingConfig.SCALP_TP_MIN) / 2)
+            sl_pct = TradingConfig.SCALP_SL
+        
         tp = real_entry * (1 + tp_pct) if direction == 'LONG' else real_entry * (1 - tp_pct)
+        sl = real_entry * (1 - sl_pct) if direction == 'LONG' else real_entry * (1 + sl_pct)
         
-        # Scalping SL: Fixed 0.15% stop loss
-        sl = real_entry * (1 - TradingConfig.SCALP_SL) if direction == 'LONG' else real_entry * (1 + TradingConfig.SCALP_SL)
-        
-        logger.info(f"[SCALP] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({TradingConfig.SCALP_SL*100:.2f}%)")
+        logger.info(f"[SCALP] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({sl_pct*100:.2f}%)")
         
         # Build detailed reason with technical indicators
         reason_parts = []
@@ -707,7 +736,10 @@ class TradingEngine:
                 entry_price = float(pos.get('entry_price', 0))
                 direction = pos['direction']
                 
-                # Calculate current PnL %
+                # Calculate current PnL % (ensure all values are float to avoid Decimal errors)
+                current_price = float(current_price)
+                entry_price = float(entry_price)
+                
                 if direction == 'LONG':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
                 else:
@@ -740,22 +772,26 @@ class TradingEngine:
                         time_open_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
                         time_open_minutes = time_open_hours * 60
                         
-                        # TIME_BASED_EXIT: Adaptatif par asset class
-                        # Crypto: 30min (haute volatilité, momentum rapide)
-                        # Indices: 45min (volatilité moyenne)
-                        # Commodities: 90min (PAXG/Gold - très lent à démarrer)
-                        # Forex: 1h (basse volatilité, momentum lent)
+                        # TIME_BASED_EXIT: Adaptatif par asset class (V13.2)
+                        # Crypto (BTC, ETH, SOL, XRP, BNB, DOGE, AVAX, LINK): 30min - Haute volatilité, momentum rapide
+                        # Commodities (PAXG): 90min - Or/Gold très lent à démarrer
+                        # Indices (SPX): 45min - Volatilité moyenne
+                        # Forex (USDC): 60min - Basse volatilité, parking
                         asset_class = pos.get('asset_class', 'crypto')
-                        symbol = pos.get('symbol', '')
+                        symbol_key = symbol if isinstance(symbol, str) else pos.get('symbol', '')
                         
+                        # Crypto: 30min (tous les cryptos)
                         if asset_class == 'crypto':
                             time_threshold_hours = 0.5  # 30min
+                        # Indices: 45min
                         elif asset_class == 'indices':
                             time_threshold_hours = 0.75  # 45min
-                        elif asset_class == 'commodities' or 'PAXG' in symbol:
+                        # Commodities (PAXG): 90min
+                        elif asset_class == 'commodities' or 'PAXG' in symbol_key:
                             time_threshold_hours = 1.5  # 90min (Gold needs more time)
+                        # Forex (USDC): 60min
                         else:  # forex
-                            time_threshold_hours = 1.0  # 1h
+                            time_threshold_hours = 1.0  # 60min
                         
                         if time_open_hours > time_threshold_hours:
                             should_exit_time = True
@@ -842,8 +878,9 @@ def lambda_handler(event, context):
     try:
         engine = TradingEngine()
         
-        # Get symbols from event or environment variable (8 symbols for scalping)
-        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,USDC/USDT:USDT,BNB/USDT:USDT')
+        # Get symbols from event or environment variable (11 symbols - V13.2 Binance Validated)
+        # Pump/News (1): DOGE | Tech L1 (1): AVAX | Oracle (1): LINK | Leaders (5): BTC, ETH, SOL, XRP, BNB | RWA (1): PAXG | Indices (1): SPX | Parking (1): USDC
+        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,USDC/USDT:USDT')
         symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
         
         logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
