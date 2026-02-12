@@ -22,7 +22,7 @@ class TradingConfig:
     SLIPPAGE_BUFFER = 0.001     # 0.1% buffer
     
     # --- Scalping Strategy (Levier 1) - 8 Symbols / 20 Trades/Day ---
-    LEVERAGE = 1                # Force leverage to 1 for safety
+    LEVERAGE = 2                # Levier x2 pour croissance accélérée
     SCALP_TP_MIN = 0.0025       # 0.25% profit target (optimized for fees)
     SCALP_TP_MAX = 0.0025       # 0.25% profit target (fixed)
     SCALP_SL = 0.0040           # 0.40% stop loss (sweet spot protection)
