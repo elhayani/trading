@@ -331,11 +331,13 @@ class TradingEngine:
         
         logger.info(f"\n{'='*70}\n[INFO] CYCLE START: {symbol}\n{'='*70}")
         try:
-            # CRITICAL: Anti-spam cooldown check (prevents order loops)
-            if self._is_in_cooldown(symbol):
-                logger.warning(f"[COOLDOWN] {symbol} traded recently, skipping to prevent spam")
-                self.persistence.log_skipped_trade(symbol, "Cooldown active (5 min)", asset_class)
-                return {'symbol': symbol, 'status': 'COOLDOWN', 'reason': 'Anti-spam protection active'}
+            # EMPIRE V12.6: "NOUVELLE PAGE BLANCHE" - No cooldown timer
+            # ANTI-SPAM via position detection only (not time-based)
+            # This allows:
+            # 1. AGNOSTICISME: LONG to SHORT switches without delay
+            # 2. RE-ENTRY: Exit at 1% profit, re-scan, re-enter if signal still strong
+            # 3. CAPITAL VELOCITY: Capture multiple 1% moves on same asset during trends
+            # Philosophy: Don't marry a trade - force re-evaluation after each exit
             
             # Load positions and manage them (check SL/TP/exits)
             positions = self.persistence.load_positions()
@@ -592,21 +594,47 @@ class TradingEngine:
                 hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
                 hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
                 
-                # 1% PROFIT PROTECTION - Auto-close significant gains
+                # EMPIRE V12.6: "NOUVELLE PAGE BLANCHE" - 1% PROFIT PROTECTION
+                # Philosophy: Ne pas transformer un trade en mariage
+                # Exit at 1% forces re-evaluation: "Would I buy this asset NOW at this price?"
+                # If signal remains strong after exit, bot can re-enter (no cooldown blocks it)
+                # This allows capturing multiple 1% moves on same asset during strong trends
+                # Security: Profit is REAL on account before any re-entry decision
                 hit_profit_1pct = pnl_pct >= 1.0
                 if hit_profit_1pct:
-                    logger.warning(f"[PROFIT_1PCT] {symbol} reached +{pnl_pct:.2f}% - securing profit!")
+                    logger.warning(f"[PROFIT_1PCT] {symbol} reached +{pnl_pct:.2f}% - securing profit! (Nouvelle Page Blanche)")
                 
-                # Time-based profit protection (if position >1h and profitable >0.5%)
+                # EMPIRE V12.3: Time-based exits
                 entry_time_str = pos.get('entry_time', '')
                 should_exit_time = False
-                if entry_time_str and pnl_pct > 0.5:
+                should_exit_fast_discard = False
+                
+                if entry_time_str:
                     try:
                         entry_time = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
-                        time_open = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
-                        if time_open > 1.0:  # Position open >1 hour
+                        time_open_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+                        time_open_minutes = time_open_hours * 60
+                        
+                        # TIME_BASED_EXIT: Adaptatif par asset class
+                        # Crypto: 30min (haute volatilité, momentum rapide)
+                        # Indices: 45min (volatilité moyenne)
+                        # Commodities/Forex: 1h (basse volatilité, momentum lent)
+                        asset_class = pos.get('asset_class', 'crypto')
+                        if asset_class == 'crypto':
+                            time_threshold_hours = 0.5  # 30min
+                        elif asset_class == 'indices':
+                            time_threshold_hours = 0.75  # 45min
+                        else:  # commodities, forex
+                            time_threshold_hours = 1.0  # 1h
+                        
+                        if time_open_hours > time_threshold_hours:
                             should_exit_time = True
-                            logger.info(f"[TIME_EXIT] {symbol} open {time_open:.1f}h with +{pnl_pct:.2f}% profit")
+                            logger.warning(f"[TIME_EXIT] {symbol} ({asset_class}) open {time_open_hours*60:.0f}min - auto-close (PnL: {pnl_pct:+.2f}%)")
+                        
+                        # FAST_DISCARD: >15min AND PnL < 0.10% (libérer capital si momentum absent)
+                        if time_open_minutes > 15 and pnl_pct < 0.10:
+                            should_exit_fast_discard = True
+                            logger.warning(f"[FAST_DISCARD] {symbol} open {time_open_minutes:.0f}min with only {pnl_pct:+.2f}% - no momentum")
                     except: pass
                 
                 # Optional: Claude analysis for exit decision
@@ -642,13 +670,15 @@ class TradingEngine:
                         logger.warning(f"[CLAUDE] Exit analysis failed: {e}")
                 
                 # Exit if any condition is met
-                if hit_sl or hit_tp or hit_profit_1pct or should_exit_time or should_exit_claude:
+                if hit_sl or hit_tp or hit_profit_1pct or should_exit_time or should_exit_fast_discard or should_exit_claude:
                     if hit_sl:
                         reason = 'STOP_LOSS'
                     elif hit_tp:
                         reason = 'TAKE_PROFIT'
                     elif hit_profit_1pct:
                         reason = 'PROFIT_1PCT_PROTECTION'
+                    elif should_exit_fast_discard:
+                        reason = 'FAST_DISCARD'
                     elif should_exit_time:
                         reason = 'TIME_BASED_PROFIT'
                     else:
