@@ -389,6 +389,49 @@ class TradingEngine:
                 self.persistence.log_skipped_trade(symbol, "Position already in DynamoDB", asset_class)
                 return {'symbol': symbol, 'status': 'IN_POSITION'}
             
+            # EMPIRE V13.0: REPLACE_LOW_PRIORITY - Flash Exit for USDC/USDT parking position
+            # If USDC/USDT (forex) is open and a high-priority opportunity appears, eject immediately
+            usdc_position = positions.get('USDC/USDT:USDT')
+            if usdc_position and usdc_position.get('asset_class') == 'forex':
+                # Check if current symbol is high-priority (crypto or commodity) with strong signal
+                if asset_class in ['crypto', 'commodities']:
+                    # Get quick score for current symbol
+                    ohlcv_quick = self._get_ohlcv_smart(symbol, '1h')
+                    ta_quick = analyze_market(ohlcv_quick, symbol=symbol, asset_class=asset_class)
+                    quick_score = ta_quick.get('score', 0)
+                    
+                    if quick_score > 85:  # High-priority opportunity detected
+                        logger.warning(f"[FLASH_EXIT] Ejecting USDC parking position for {symbol} (score: {quick_score})")
+                        try:
+                            # Close USDC immediately (market order)
+                            usdc_direction = usdc_position.get('direction', 'LONG')
+                            usdc_side = 'sell' if usdc_direction == 'LONG' else 'buy'
+                            usdc_qty = usdc_position.get('quantity', 0)
+                            
+                            exit_order = self.exchange.create_market_order('USDC/USDT:USDT', usdc_side, usdc_qty)
+                            exit_price = float(exit_order.get('average', 0))
+                            
+                            # Calculate PnL
+                            entry_price = float(usdc_position.get('entry_price', 0))
+                            if usdc_direction == 'LONG':
+                                pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                            else:
+                                pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+                            
+                            pnl = self.risk_manager.close_trade('USDC/USDT:USDT', exit_price)
+                            
+                            reason = f"Flash Exit for priority {symbol} (score: {quick_score}, USDC PnL: {pnl_pct:+.2f}%)"
+                            self.persistence.log_trade_close(usdc_position['trade_id'], exit_price, pnl, reason)
+                            self.persistence.delete_position('USDC/USDT:USDT')
+                            self.atomic_persistence.atomic_remove_risk('USDC/USDT:USDT', float(usdc_position.get('risk_dollars', 0)))
+                            
+                            del positions['USDC/USDT:USDT']
+                            balance = self.exchange.get_balance_usdt()  # Refresh balance
+                            
+                            logger.info(f"[FLASH_EXIT] USDC closed, capital freed: ${balance:.0f}")
+                        except Exception as e:
+                            logger.error(f"[ERROR] Flash exit failed: {e}")
+            
             # TRIM & SWITCH: Check if we should reduce existing positions for better opportunities
             # Only if we have positions AND low available capital
             if positions and balance < 500:  # Less than $500 available
@@ -415,32 +458,65 @@ class TradingEngine:
                 rsi = ta_result.get('rsi', 50)
                 score = ta_result.get('score', 0)
                 
-                # Explain WHY it's neutral
-                reasons = []
-                if rsi > 70:
-                    reasons.append(f"RSI > 70 (overbought: {rsi:.1f})")
-                elif rsi < 30:
-                    reasons.append(f"RSI < 30 (oversold: {rsi:.1f})")
+                # EMPIRE V13.0: USDC/USDT low-priority entry logic
+                # Only enter USDC if it's forex AND all other priority assets are calm (<50 score)
+                if asset_class == 'forex' and 'USDC' in symbol:
+                    # Check if this is a calm market - scan priority assets
+                    priority_symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'PAXG/USDT:USDT', 'SPX/USDT:USDT']
+                    all_calm = True
+                    
+                    for priority_sym in priority_symbols:
+                        if priority_sym in positions:
+                            # Already have a priority position, don't enter USDC
+                            all_calm = False
+                            break
+                        
+                        try:
+                            priority_ohlcv = self._get_ohlcv_smart(priority_sym, '1h')
+                            priority_ta = analyze_market(priority_ohlcv, symbol=priority_sym, asset_class=classify_asset(priority_sym))
+                            priority_score = priority_ta.get('score', 0)
+                            
+                            if priority_score >= 50:  # Priority asset has opportunity
+                                all_calm = False
+                                logger.info(f"[USDC_SKIP] {priority_sym} has score {priority_score} >= 50, skipping USDC parking")
+                                break
+                        except:
+                            pass
+                    
+                    if not all_calm:
+                        reason = "Priority assets active (score >= 50), USDC parking not needed"
+                        self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                        return {'symbol': symbol, 'status': 'LOW_PRIORITY_BLOCKED', 'reason': reason}
+                    else:
+                        logger.info(f"[USDC_PARKING] All priority assets calm, allowing USDC entry as parking position")
+                        # Continue to decision engine - USDC can enter as parking position
                 else:
-                    reasons.append(f"RSI neutral ({rsi:.1f})")
-                
-                if score < 50:
-                    reasons.append(f"Low technical score ({score})")
-                
-                # Check volume if available
-                if 'volume_spike' in ta_result.get('market_context', ''):
-                    reasons.append("Low volume")
-                
-                # Check trend
-                trend = ta_result.get('market_context', '')
-                if 'Trend=' in trend:
-                    trend_val = trend.split('Trend=')[1].split('|')[0].strip()
-                    if trend_val == 'SIDEWAYS':
-                        reasons.append("Sideways trend")
-                
-                reason = " | ".join(reasons) if reasons else f"No clear signal (RSI={rsi:.1f})"
-                self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                return {'symbol': symbol, 'status': 'NO_SIGNAL', 'score': ta_result.get('score')}
+                    # Not USDC or not neutral - normal skip logic
+                    reasons = []
+                    if rsi > 70:
+                        reasons.append(f"RSI > 70 (overbought: {rsi:.1f})")
+                    elif rsi < 30:
+                        reasons.append(f"RSI < 30 (oversold: {rsi:.1f})")
+                    else:
+                        reasons.append(f"RSI neutral ({rsi:.1f})")
+                    
+                    if score < 50:
+                        reasons.append(f"Low technical score ({score})")
+                    
+                    # Check volume if available
+                    if 'volume_spike' in ta_result.get('market_context', ''):
+                        reasons.append("Low volume")
+                    
+                    # Check trend
+                    trend = ta_result.get('market_context', '')
+                    if 'Trend=' in trend:
+                        trend_val = trend.split('Trend=')[1].split('|')[0].strip()
+                        if trend_val == 'SIDEWAYS':
+                            reasons.append("Sideways trend")
+                    
+                    reason = " | ".join(reasons) if reasons else f"No clear signal (RSI={rsi:.1f})"
+                    self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                    return {'symbol': symbol, 'status': 'NO_SIGNAL', 'score': ta_result.get('score')}
 
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
@@ -667,13 +743,18 @@ class TradingEngine:
                         # TIME_BASED_EXIT: Adaptatif par asset class
                         # Crypto: 30min (haute volatilité, momentum rapide)
                         # Indices: 45min (volatilité moyenne)
-                        # Commodities/Forex: 1h (basse volatilité, momentum lent)
+                        # Commodities: 90min (PAXG/Gold - très lent à démarrer)
+                        # Forex: 1h (basse volatilité, momentum lent)
                         asset_class = pos.get('asset_class', 'crypto')
+                        symbol = pos.get('symbol', '')
+                        
                         if asset_class == 'crypto':
                             time_threshold_hours = 0.5  # 30min
                         elif asset_class == 'indices':
                             time_threshold_hours = 0.75  # 45min
-                        else:  # commodities, forex
+                        elif asset_class == 'commodities' or 'PAXG' in symbol:
+                            time_threshold_hours = 1.5  # 90min (Gold needs more time)
+                        else:  # forex
                             time_threshold_hours = 1.0  # 1h
                         
                         if time_open_hours > time_threshold_hours:
