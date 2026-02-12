@@ -772,24 +772,24 @@ class TradingEngine:
                         time_open_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
                         time_open_minutes = time_open_hours * 60
                         
-                        # TIME_BASED_EXIT: Adaptatif par asset class (V13.2)
-                        # Crypto (BTC, ETH, SOL, XRP, BNB, DOGE, AVAX, LINK): 30min - Haute volatilité, momentum rapide
-                        # Commodities (PAXG): 90min - Or/Gold très lent à démarrer
-                        # Indices (SPX): 45min - Volatilité moyenne
-                        # Forex (USDC): 60min - Basse volatilité, parking
+                        # TIME_BASED_EXIT: Adaptatif par asset class (V13.4 - Levier x2/x4)
+                        # Crypto (x2): 20min - Scalping rapide, momentum pur
+                        # Indices (x2): 30min - Suivi de tendance
+                        # Commodities/PAXG (x4): 90min - Rebond structurel, or lent
+                        # Forex/Parking (x2): 60min - Stabilité
                         asset_class = pos.get('asset_class', 'crypto')
                         symbol_key = symbol if isinstance(symbol, str) else pos.get('symbol', '')
                         
-                        # Crypto: 30min (tous les cryptos)
+                        # Crypto: 20min (x2 = scalping rapide)
                         if asset_class == 'crypto':
-                            time_threshold_hours = 0.5  # 30min
-                        # Indices: 45min
+                            time_threshold_hours = 1/3  # 20min
+                        # Indices: 30min (x2 = suivi tendance)
                         elif asset_class == 'indices':
-                            time_threshold_hours = 0.75  # 45min
-                        # Commodities (PAXG): 90min
+                            time_threshold_hours = 0.5  # 30min
+                        # Commodities (PAXG x4): 90min (or = rebond structurel)
                         elif asset_class == 'commodities' or 'PAXG' in symbol_key:
-                            time_threshold_hours = 1.5  # 90min (Gold needs more time)
-                        # Forex (USDC): 60min
+                            time_threshold_hours = 1.5  # 90min
+                        # Forex (USDC): 60min (parking)
                         else:  # forex
                             time_threshold_hours = 1.0  # 60min
                         
