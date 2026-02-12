@@ -462,7 +462,7 @@ class TradingEngine:
                 # Only enter USDC if it's forex AND all other priority assets are calm (<50 score)
                 if asset_class == 'forex' and 'USDC' in symbol:
                     # Check if this is a calm market - scan priority assets
-                    priority_symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'PAXG/USDT:USDT', 'SPX/USDT:USDT']
+                    priority_symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'PAXG/USDT:USDT', 'SPX/USDT:USDT', 'BNB/USDT:USDT']
                     all_calm = True
                     
                     for priority_sym in priority_symbols:
@@ -843,7 +843,7 @@ def lambda_handler(event, context):
         engine = TradingEngine()
         
         # Get symbols from event or environment variable (8 symbols for scalping)
-        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT')
+        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,USDC/USDT:USDT,BNB/USDT:USDT')
         symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
         
         logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
