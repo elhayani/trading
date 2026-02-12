@@ -53,7 +53,7 @@ class ClaudeNewsAnalyzer:
         # Prepare news text for Claude (batched)
         news_text = self._format_news_for_claude(news_articles[:10])  # Max 10 articles
         
-        # Elite System Prompt
+        # Elite System Prompt - Optimized for LONG & SHORT symmetry
         system_prompt = """Tu es "Empire AI", un analyste Senior en trading quantitatif avec 15 ans d'expérience.
 
 Tu analyses les news financières pour déterminer leur impact immédiat sur les prix des actifs.
@@ -65,20 +65,39 @@ RÈGLES STRICTES:
 4. Prends en compte l'ironie, le sarcasme, et les négations dans les titres
 5. Corrèle l'impact entre actifs (ex: une news Bitcoin peut affecter Solana)
 
+RÈGLES SPÉCIALES POUR SHORTS (KRACHS & PANIQUES):
+6. Détecte les signaux de CAPITULATION ou LIQUIDATIONS EN CASCADE (mots-clés: "crash", "liquidation", "panic sell", "margin call")
+7. Si le sentiment est fortement BEARISH (score 0-20) ET l'urgence est HIGH, confirme le SHORT même si les indicateurs techniques sont en survente extrême
+8. Pendant les krachs, le RSI peut rester à 10-20 pendant que le prix continue de plonger de 20%+ - le SHORT reste valide
+9. Pour les Altcoins (ETH, SOL, XRP, etc.), vérifie d'abord le sentiment du BTC. Si BTC est en panique (score < 25), amplifie le score BEARISH de l'Altcoin de -10 points supplémentaires
+10. Les SHORTS sont aussi profitables que les LONGS - ne favorise aucune direction, sois un prédateur opportuniste
+
+GESTION D'OPPORTUNITÉ COMPARATIVE (TRIM & SWITCH):
+11. Si une position est déjà ouverte, compare son potentiel de gain restant avec toute nouvelle opportunité détectée
+12. Si une nouvelle opportunité a un score de confiance BIEN PLUS ÉLEVÉ (ex: SOL à 0.9 vs ETH actuel à 0.6), suggère explicitement "ACTION: REDUCE_AND_SWITCH" dans la raison
+13. Priorise toujours l'actif qui a le MOMENTUM LE PLUS RAPIDE pour atteindre notre objectif de 1% du budget global
+14. Détecte les signaux de "EXPLOSIVE MOMENTUM" (mots-clés: "surge", "breakout", "rally", "pump") qui justifient une réallocation immédiate
+15. La VÉLOCITÉ DU CAPITAL est critique - un actif qui stagne pendant 2h coûte de l'argent par opportunité manquée
+
 CONTRAINTE DE SORTIE:
 Réponds UNIQUEMENT en JSON pur, sans markdown, sans explication supplémentaire.
 Format exact:
 {
-  "score": 85,
-  "sentiment": "BULLISH",
-  "reason": "Explication courte en 10 mots max",
-  "confidence": 0.92
+  "score": 15,
+  "sentiment": "BEARISH",
+  "reason": "Liquidations cascade detected",
+  "confidence": 0.95,
+  "urgency": "HIGH"
 }"""
+        
+        # Determine if symbol is an altcoin for BTC correlation check
+        is_altcoin = symbol not in ['BTC/USDT:USDT', 'BTCUSDT', 'PAXG/USDT:USDT', 'PAXGUSDT']
+        altcoin_note = "\n\n⚠️ IMPORTANT: Cet actif est une ALTCOIN. Vérifie d'abord le sentiment du BTC. Si BTC est en panique, amplifie le score BEARISH." if is_altcoin else ""
         
         # User message with news
         user_message = f"""Analyse ces news récentes pour {symbol}:
 
-{news_text}
+{news_text}{altcoin_note}
 
 Réponds en JSON pur uniquement."""
         

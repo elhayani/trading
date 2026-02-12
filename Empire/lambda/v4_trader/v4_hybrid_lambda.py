@@ -39,6 +39,7 @@ from decision_engine import DecisionEngine
 import macro_context
 from atomic_persistence import AtomicPersistence
 from anti_spam_helpers import is_in_cooldown, record_trade_timestamp, get_real_binance_positions
+from trim_switch import evaluate_trim_and_switch
 
 @dataclass
 class MacroContext:
@@ -326,30 +327,51 @@ class TradingEngine:
     def run_cycle(self, symbol: str) -> Dict:
         # Resolve to canonical symbol early (Audit #V11.6.8)
         symbol = self.exchange.resolve_symbol(symbol)
+        asset_class = classify_asset(symbol)  # Define early for logging
         
         logger.info(f"\n{'='*70}\n[INFO] CYCLE START: {symbol}\n{'='*70}")
         try:
             # CRITICAL: Anti-spam cooldown check (prevents order loops)
             if self._is_in_cooldown(symbol):
                 logger.warning(f"[COOLDOWN] {symbol} traded recently, skipping to prevent spam")
+                self.persistence.log_skipped_trade(symbol, "Cooldown active (5 min)", asset_class)
                 return {'symbol': symbol, 'status': 'COOLDOWN', 'reason': 'Anti-spam protection active'}
+            
+            # Load positions and manage them (check SL/TP/exits)
+            positions = self.persistence.load_positions()
+            if positions: 
+                self._manage_positions(positions)
+                # Reload positions after management (some may have been closed)
+                positions = self.persistence.load_positions()
             
             # CRITICAL: Check real Binance position before trusting DynamoDB
             real_positions = self._get_real_binance_positions()
             if symbol in real_positions:
-                logger.warning(f"[REAL_POSITION] {symbol} already open on Binance (bypassing DynamoDB check)")
+                logger.warning(f"[REAL_POSITION] {symbol} already open on Binance (managed)")
+                
+                # CRITICAL FIX: Manage Binance positions even if not in DynamoDB
+                if symbol not in positions:
+                    # Create mock position from Binance data for management
+                    mock_positions = self._create_mock_binance_position(symbol)
+                    if mock_positions:
+                        logger.info(f"[MOCK_POSITION] Managing Binance-only position: {symbol}")
+                        self._manage_positions(mock_positions)
+                
+                self.persistence.log_skipped_trade(symbol, "Position already open on Binance", asset_class)
                 return {'symbol': symbol, 'status': 'IN_POSITION_BINANCE'}
             
-            positions = self.persistence.load_positions()
-            if positions: self._manage_positions(positions)
             if symbol in positions:
                 logger.info(f"[INFO] Skip: Already in position for {symbol}")
+                self.persistence.log_skipped_trade(symbol, "Position already in DynamoDB", asset_class)
                 return {'symbol': symbol, 'status': 'IN_POSITION'}
+            
+            # TRIM & SWITCH: Check if we should reduce existing positions for better opportunities
+            # Only if we have positions AND low available capital
+            if positions and balance < 500:  # Less than $500 available
+                logger.info(f"[TRIM_CHECK] Low capital (${balance:.0f}), checking for better opportunities...")
             
             # Smart OHLCV Fetching (Audit #V11.5)
             ohlcv = self._get_ohlcv_smart(symbol, '1h')
-            
-            asset_class = classify_asset(symbol)
             ta_result = analyze_market(ohlcv, symbol=symbol, asset_class=asset_class)
             
             if ta_result.get('market_context', '').startswith('VOLATILITY_SPIKE'):
@@ -365,6 +387,8 @@ class TradingEngine:
             
             direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
             if ta_result.get('signal_type') == 'NEUTRAL':
+                reason = f"NO_SIGNAL | Score={ta_result.get('score', 0)} | RSI={ta_result.get('rsi', 0):.1f}"
+                self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'NO_SIGNAL', 'score': ta_result.get('score')}
 
             decision = self.decision_engine.evaluate_with_risk(
@@ -377,6 +401,13 @@ class TradingEngine:
                 logger.info(f"[INFO] Blocked: {decision['reason']}")
                 self.persistence.log_skipped_trade(symbol, decision['reason'], asset_class)
                 return {'symbol': symbol, 'status': 'BLOCKED', 'reason': decision['reason']}
+            
+            # TRIM & SWITCH: If we have a high-confidence signal but low capital, consider trimming positions
+            if positions and balance < 500 and decision['confidence'] >= 0.75:
+                trim_result = self._evaluate_trim_and_switch(positions, symbol, decision, balance)
+                if trim_result['action'] == 'TRIMMED':
+                    balance = trim_result['freed_capital']
+                    logger.info(f"[TRIM_SUCCESS] Freed ${balance:.0f} for {symbol} opportunity")
             
             return self._execute_entry(symbol, direction, decision, ta_result, asset_class, balance)
             
@@ -484,12 +515,68 @@ class TradingEngine:
         """Get actual open positions from Binance (source of truth)"""
         return get_real_binance_positions(self.exchange)
     
+    def _create_mock_binance_position(self, symbol: str) -> Dict:
+        """Create mock position data for Binance-only positions to enable SL/TP management"""
+        try:
+            # Get real position data from Binance
+            positions = self.exchange.fetch_positions([symbol])
+            if not positions:
+                return {}
+            
+            pos_data = positions[0]
+            if float(pos_data.get('contracts', 0)) == 0:
+                return {}
+            
+            # Calculate TP/SL based on current price (since we don't have original entry)
+            current_price = float(pos_data['lastPrice'])
+            side = pos_data['side'].lower()  # 'long' or 'short'
+            
+            # Estimate entry price (use current price as fallback - not ideal but functional)
+            entry_price = current_price
+            
+            # Set TP/SL based on current price (emergency protection)
+            if side == 'long':
+                tp = current_price * (1 + TradingConfig.SCALP_TP_MIN)
+                sl = current_price * (1 - TradingConfig.SCALP_SL)
+            else:
+                tp = current_price * (1 - TradingConfig.SCALP_TP_MIN)
+                sl = current_price * (1 + TradingConfig.SCALP_SL)
+            
+            mock_position = {
+                'direction': side.upper(),
+                'entry_price': entry_price,
+                'quantity': float(pos_data['contracts']),
+                'stop_loss': sl,
+                'take_profit': tp,
+                'entry_time': datetime.now(timezone.utc).isoformat(),
+                'trade_id': f'EMERGENCY-{symbol.replace("/", "")}',
+                'asset_class': classify_asset(symbol)
+            }
+            
+            logger.warning(f"[MOCK_CREATED] {symbol}: {side.upper()} {mock_position['quantity']} @ ${entry_price:.2f}")
+            return {symbol: mock_position}
+            
+        except Exception as e:
+            logger.error(f"[MOCK_ERROR] Failed to create mock position for {symbol}: {e}")
+            return {}
+    
+    def _evaluate_trim_and_switch(self, positions: Dict, new_symbol: str, new_decision: Dict, current_balance: float) -> Dict:
+        """Evaluate if we should trim existing positions for better opportunities"""
+        return evaluate_trim_and_switch(
+            self.exchange,
+            self.persistence,
+            positions,
+            new_symbol,
+            new_decision,
+            current_balance
+        )
+    
     def _manage_positions(self, positions: Dict):
         logger.info(f"\n{'='*70}\n[INFO] POSITION MANAGEMENT\n{'='*70}")
         for symbol, pos in list(positions.items()):
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
-                current_price = ticker['last']
+                current_price = float(ticker['last'])
                 entry_price = float(pos.get('entry_price', 0))
                 direction = pos['direction']
                 
@@ -500,8 +587,15 @@ class TradingEngine:
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
                 
                 # Check traditional TP/SL
-                hit_sl = (current_price <= pos['stop_loss']) if direction == 'LONG' else (current_price >= pos['stop_loss'])
-                hit_tp = (current_price >= pos['take_profit']) if direction == 'LONG' else (current_price <= pos['take_profit'])
+                stop_loss = float(pos['stop_loss'])
+                take_profit = float(pos['take_profit'])
+                hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
+                hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
+                
+                # 1% PROFIT PROTECTION - Auto-close significant gains
+                hit_profit_1pct = pnl_pct >= 1.0
+                if hit_profit_1pct:
+                    logger.warning(f"[PROFIT_1PCT] {symbol} reached +{pnl_pct:.2f}% - securing profit!")
                 
                 # Time-based profit protection (if position >1h and profitable >0.5%)
                 entry_time_str = pos.get('entry_time', '')
@@ -548,11 +642,13 @@ class TradingEngine:
                         logger.warning(f"[CLAUDE] Exit analysis failed: {e}")
                 
                 # Exit if any condition is met
-                if hit_sl or hit_tp or should_exit_time or should_exit_claude:
+                if hit_sl or hit_tp or hit_profit_1pct or should_exit_time or should_exit_claude:
                     if hit_sl:
                         reason = 'STOP_LOSS'
                     elif hit_tp:
                         reason = 'TAKE_PROFIT'
+                    elif hit_profit_1pct:
+                        reason = 'PROFIT_1PCT_PROTECTION'
                     elif should_exit_time:
                         reason = 'TIME_BASED_PROFIT'
                     else:
@@ -581,7 +677,12 @@ class TradingEngine:
 def lambda_handler(event, context):
     try:
         engine = TradingEngine()
-        symbols = event.get('symbols', os.getenv('SYMBOLS', 'SOL/USDT')).split(',')
+        
+        # Get symbols from event or environment variable (8 symbols for scalping)
+        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT')
+        symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
+        
+        logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
         
         risk_state = engine.persistence.load_risk_state()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -592,7 +693,9 @@ def lambda_handler(event, context):
             new_state['last_reset_date'] = today
             engine.persistence.save_risk_state(new_state)
 
-        results = [engine.run_cycle(s.strip()) for s in symbols if s.strip()]
+        results = [engine.run_cycle(s) for s in symbols]
+        
+        logger.info(f"[INFO] Scan complete: {len(results)} results")
         return {'statusCode': 200, 'body': json.dumps({'status': 'SUCCESS', 'results': results})}
     except Exception as e:
         logger.error(f"[CRITICAL] Global failure: {e}")

@@ -25,7 +25,7 @@ class TradingConfig:
     LEVERAGE = 1                # Force leverage to 1 for safety
     SCALP_TP_MIN = 0.0025       # 0.25% profit target (optimized for fees)
     SCALP_TP_MAX = 0.0025       # 0.25% profit target (fixed)
-    SCALP_SL = 0.0020           # 0.20% stop loss
+    SCALP_SL = 0.0050           # 0.50% stop loss (enhanced protection)
     USE_LIMIT_ORDERS = True     # Use limit orders for better execution
     MAX_OPEN_TRADES = 4         # Maximum 4 concurrent positions (slot management)
     
