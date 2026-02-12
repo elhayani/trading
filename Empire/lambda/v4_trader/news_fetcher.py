@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import macro_context
 import config
 from config import TradingConfig
+from claude_analyzer import ClaudeNewsAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class NewsFetcher:
     """
     Fetches news sentiment with proximity-aware negation handling.
     Includes Circuit Breaker for Yahoo Finance (Audit #V11.5).
+    Now enhanced with Claude 3.5 Sonnet for advanced analysis.
     """
 
     # Shared state between Lambda invocations (Global Scope)
@@ -26,6 +28,21 @@ class NewsFetcher:
         'blocked_until': 0,
         'last_success': 0
     }
+    
+    def __init__(self, use_claude: bool = True):
+        """
+        Initialize NewsFetcher with optional Claude integration.
+        
+        Args:
+            use_claude: If True, use Claude 3.5 Sonnet for analysis (default: True)
+        """
+        self.use_claude = use_claude and os.getenv('USE_CLAUDE_ANALYSIS', 'true').lower() == 'true'
+        self.claude = ClaudeNewsAnalyzer() if self.use_claude else None
+        
+        if self.claude:
+            logger.info("[NEWS] Claude 3.5 Sonnet enabled for advanced analysis")
+        else:
+            logger.info("[NEWS] Using keyword-based analysis (Claude disabled)")
 
     BULLISH_KEYWORDS = [
         'bullish', 'strong', 'growth', 'gain', 'rally', 'surge', 'breakout',
@@ -47,10 +64,26 @@ class NewsFetcher:
         return bool(re.search(pattern, text, re.IGNORECASE))
 
     def get_news_sentiment_score(self, symbol: str) -> float:
+        """
+        Get news sentiment score using Claude 3.5 Sonnet (if enabled) or keyword analysis.
+        Returns: float between -1.0 (bearish) and 1.0 (bullish)
+        """
         try:
             news = self._fetch_raw_news(symbol)
             if not news: return 0.0
 
+            # Use Claude if available
+            if self.claude:
+                try:
+                    analysis = self.claude.analyze_news_batch(symbol, news)
+                    score = self.claude.get_sentiment_score_normalized(analysis)
+                    logger.info(f"[CLAUDE] {symbol} sentiment: {score:.3f} (confidence: {analysis.get('confidence', 0):.2f})")
+                    return score
+                except Exception as e:
+                    logger.warning(f"[CLAUDE] Analysis failed, falling back to keywords: {e}")
+                    # Fall through to keyword analysis
+
+            # Fallback: Keyword-based analysis
             total_score = 0.0
             weight_total = 0.0
 

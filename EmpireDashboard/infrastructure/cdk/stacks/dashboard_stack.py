@@ -148,6 +148,16 @@ class EmpireDashboardStack(Stack):
             )
         )
 
+        # Add Route (GET /transactions) - Binance Income Audit
+        http_api.add_routes(
+            path="/transactions",
+            methods=[apigw.HttpMethod.GET],
+            integration=integrations.HttpLambdaIntegration(
+                "DashboardApiTransactionsIntegration",
+                api_lambda
+            )
+        )
+
 
         # =====================================================================
         # S3 Frontend Hosting

@@ -37,8 +37,8 @@ from risk_manager import RiskManager
 import decision_engine
 from decision_engine import DecisionEngine
 import macro_context
-import micro_corridors as corridors
 from atomic_persistence import AtomicPersistence
+from anti_spam_helpers import is_in_cooldown, record_trade_timestamp, get_real_binance_positions
 
 @dataclass
 class MacroContext:
@@ -88,35 +88,70 @@ class PersistenceLayer:
     def __init__(self, aws: AWSClients):
         self.aws = aws
     
-    def log_trade_open(self, trade_id, symbol, asset_class, side, entry_price, size, capital, tp_pct, sl_pct, context):
+    def log_trade_open(self, trade_id, symbol, asset_class, side, entry_price, size, capital, tp_pct, sl_pct, context, reason=None):
         try:
-            self.aws.trades_table.put_item(Item=to_decimal({
-                'trade_id': trade_id, 'symbol': symbol, 'asset_class': asset_class,
-                'side': side, 'entry_price': entry_price, 'size': size,
-                'capital_used': capital, 'tp_pct': tp_pct, 'sl_pct': sl_pct,
-                'confidence_score': context.confidence_score, 'timestamp': datetime.now(timezone.utc).isoformat(),
-                'status': 'OPEN'
-            }))
+            # Audit Fix: Use PascalCase for Dashboard Compatibility
+            item = {
+                'TradeId': trade_id,
+                'Symbol': symbol,
+                'Pair': symbol,
+                'AssetClass': asset_class,
+                'Type': 'LONG' if side.lower() == 'buy' else 'SHORT',
+                'EntryPrice': entry_price,
+                'Size': size,
+                'Cost': capital,
+                'TpPct': tp_pct,
+                'SlPct': sl_pct,
+                'ConfidenceScore': context.confidence_score,
+                'Timestamp': datetime.now(timezone.utc).isoformat(),
+                'Status': 'OPEN'
+            }
+            
+            # Add detailed reason if provided (RSI, Volume, AI confidence)
+            if reason:
+                item['Reason'] = reason
+            
+            self.aws.trades_table.put_item(Item=to_decimal(item))
         except Exception as e: logger.error(f"[ERROR] Failed to log trade: {e}")
     
     def log_trade_close(self, trade_id, exit_price, pnl, reason):
         try:
             self.aws.trades_table.update_item(
-                Key={'trade_id': trade_id},
-                UpdateExpression='SET #st = :status, exit_price = :price, pnl = :pnl, exit_reason = :reason',
-                ExpressionAttributeNames={'#st': 'status'},
+                Key={'TradeId': trade_id},
+                UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at',
+                ExpressionAttributeNames={'#st': 'Status'},
                 ExpressionAttributeValues=to_decimal({
-                    ':status': 'CLOSED', ':price': exit_price, ':pnl': pnl, ':reason': reason
+                    ':status': 'CLOSED', ':price': exit_price, ':pnl': pnl, ':reason': reason,
+                    ':closed_at': datetime.now(timezone.utc).isoformat()
                 })
             )
         except Exception as e: logger.error(f"[ERROR] Failed to log close: {e}")
+
+    def log_skipped_trade(self, symbol, reason, asset_class):
+        try:
+            trade_id = f"SKIP-{uuid.uuid4().hex[:8]}"
+            # Use PascalCase for Dashboard compatibility
+            self.aws.trades_table.put_item(Item=to_decimal({
+                'TradeId': trade_id,
+                'Symbol': symbol,
+                'Pair': symbol,
+                'AssetClass': asset_class,
+                'Status': 'SKIPPED',
+                'Reason': reason,
+                'Timestamp': datetime.now(timezone.utc).isoformat()
+            }))
+            logger.info(f"[INFO] Logged SKIP for {symbol}: {reason}")
+        except Exception as e: 
+            logger.error(f"[ERROR] Failed to log skip: {e}")
     
     def save_position(self, symbol, position_data):
         try:
+            # Sanitize symbol for DynamoDB keys
+            safe_symbol = symbol.replace('/', '_').replace(':', '-')
             # We add a 'status' field for GSI (Audit #V11.5)
             position_data['status'] = 'OPEN'
             self.aws.state_table.put_item(Item=to_decimal({
-                'trader_id': f'POSITION#{symbol}', 
+                'trader_id': f'POSITION#{safe_symbol}', 
                 'position': position_data,
                 'status': 'OPEN',
                 'timestamp': datetime.now(timezone.utc).isoformat()
@@ -135,7 +170,14 @@ class PersistenceLayer:
                 ExpressionAttributeNames={'#status': 'status'},
                 ExpressionAttributeValues={':open': 'OPEN'}
             )
-            return {item['trader_id'].replace('POSITION#', ''): item['position'] for item in response.get('Items', [])}
+            # Convert back from sanitized to original symbols for compatibility
+            positions = {}
+            for item in response.get('Items', []):
+                sanitized_symbol = item['trader_id'].replace('POSITION#', '')
+                # Convert back: _ -> / and - -> :
+                original_symbol = sanitized_symbol.replace('_', '/').replace('-', ':')
+                positions[original_symbol] = item['position']
+            return positions
         except Exception as e:
             # Fallback to scan if GSI is not yet ready or fails
             logger.warning(f"[WARN] GSI Query failed, falling back to scan: {e}")
@@ -144,7 +186,13 @@ class PersistenceLayer:
                     FilterExpression='begins_with(trader_id, :prefix)',
                     ExpressionAttributeValues={':prefix': 'POSITION#'}
                 )
-                return {item['trader_id'].replace('POSITION#', ''): item['position'] for item in response.get('Items', [])}
+                # Convert back from sanitized to original symbols
+                positions = {}
+                for item in response.get('Items', []):
+                    sanitized_symbol = item['trader_id'].replace('POSITION#', '')
+                    original_symbol = sanitized_symbol.replace('_', '/').replace('-', ':')
+                    positions[original_symbol] = item['position']
+                return positions
             except Exception as e2:
                 logger.error(f"[ERROR] Failed to load positions (Scan): {e2}")
                 return {}
@@ -167,8 +215,10 @@ class PersistenceLayer:
 
     def delete_position(self, symbol):
         try: 
+            # Sanitize symbol for DynamoDB keys
+            safe_symbol = symbol.replace('/', '_').replace(':', '-')
             # We don't delete, we update status for GSI management or delete item
-            self.aws.state_table.delete_item(Key={'trader_id': f'POSITION#{symbol}'})
+            self.aws.state_table.delete_item(Key={'trader_id': f'POSITION#{safe_symbol}'})
         except Exception as e: logger.error(f"[ERROR] Failed to delete position: {e}")
 
 # ==================== ENGINE ====================
@@ -180,6 +230,7 @@ class TradingEngine:
         self.persistence = PersistenceLayer(self.aws)
         self.atomic_persistence = AtomicPersistence(self.aws.state_table)
         self.ohlcv_cache_path = '/tmp/ohlcv_cache.json'
+        self.cooldown_seconds = 300  # Anti-spam: 5 minutes cooldown per symbol
         
         mode = os.getenv('TRADING_MODE', 'dry_run')
         credentials = {}
@@ -192,10 +243,22 @@ class TradingEngine:
                 logger.error(f"[ERROR] Secret fetch failed: {e}")
                 if mode == 'live': raise
         
+        # Robust Credential Extraction
+        api_key = credentials.get('api_key') or credentials.get('apiKey') or credentials.get('API_KEY')
+        secret = credentials.get('secret') or credentials.get('secretKey') or credentials.get('SECRET_KEY') or credentials.get('api_secret')
+        
+        if api_key: api_key = api_key.strip()
+        if secret: secret = secret.strip()
+
         # Optimized Connector (Singleton/Warm)
+        # Fix -2008: Clear separation between Live and Demo (Audit #V11.6.6)
+        is_live = TradingConfig.LIVE_MODE
+        logger.info(f"[BOOT] Mode ACTIVE: {'LIVE (REAL TRADING)' if is_live else 'DEMO (MOCK TRADING)'}")
+        
         self.exchange = ExchangeConnector(
-            exchange_id='binance', api_key=credentials.get('api_key'),
-            secret=credentials.get('secret'), testnet=(mode != 'live')
+            api_key=api_key,
+            secret=secret,
+            live_mode=is_live
         )
         
         self.risk_manager = RiskManager()
@@ -261,8 +324,22 @@ class TradingEngine:
         except Exception as e: logger.warning(f"[WARN] Failed to save OHLCV cache: {e}")
     
     def run_cycle(self, symbol: str) -> Dict:
+        # Resolve to canonical symbol early (Audit #V11.6.8)
+        symbol = self.exchange.resolve_symbol(symbol)
+        
         logger.info(f"\n{'='*70}\n[INFO] CYCLE START: {symbol}\n{'='*70}")
         try:
+            # CRITICAL: Anti-spam cooldown check (prevents order loops)
+            if self._is_in_cooldown(symbol):
+                logger.warning(f"[COOLDOWN] {symbol} traded recently, skipping to prevent spam")
+                return {'symbol': symbol, 'status': 'COOLDOWN', 'reason': 'Anti-spam protection active'}
+            
+            # CRITICAL: Check real Binance position before trusting DynamoDB
+            real_positions = self._get_real_binance_positions()
+            if symbol in real_positions:
+                logger.warning(f"[REAL_POSITION] {symbol} already open on Binance (bypassing DynamoDB check)")
+                return {'symbol': symbol, 'status': 'IN_POSITION_BINANCE'}
+            
             positions = self.persistence.load_positions()
             if positions: self._manage_positions(positions)
             if symbol in positions:
@@ -276,7 +353,9 @@ class TradingEngine:
             ta_result = analyze_market(ohlcv, symbol=symbol, asset_class=asset_class)
             
             if ta_result.get('market_context', '').startswith('VOLATILITY_SPIKE'):
-                return {'symbol': symbol, 'status': 'BLOCKED', 'reason': ta_result['market_context']}
+                reason = ta_result['market_context']
+                self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                return {'symbol': symbol, 'status': 'BLOCKED', 'reason': reason}
             
             news_score = self.news_fetcher.get_news_sentiment_score(symbol)
             macro = macro_context.get_macro_context(state_table=self.aws.state_table)
@@ -296,6 +375,7 @@ class TradingEngine:
             
             if not decision['proceed']:
                 logger.info(f"[INFO] Blocked: {decision['reason']}")
+                self.persistence.log_skipped_trade(symbol, decision['reason'], asset_class)
                 return {'symbol': symbol, 'status': 'BLOCKED', 'reason': decision['reason']}
             
             return self._execute_entry(symbol, direction, decision, ta_result, asset_class, balance)
@@ -314,10 +394,11 @@ class TradingEngine:
         if quantity < min_amount: quantity = min_amount
 
         try:
-            order = self.exchange.create_market_order(symbol, side, quantity)
+            # Force leverage 1 for scalping safety
+            order = self.exchange.create_market_order(symbol, side, quantity, leverage=TradingConfig.LEVERAGE)
             real_entry = float(order.get('average', ta_result['price']))
             real_size = float(order.get('filled', quantity))
-            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f}")
+            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {TradingConfig.LEVERAGE}x)")
         except Exception as e:
             logger.error(f"[ERROR] Order failed: {e}")
             return {'symbol': symbol, 'status': 'ORDER_FAILED', 'error': str(e)}
@@ -339,20 +420,43 @@ class TradingEngine:
                 logger.info(f"[OK] Emergency rollback executed for {symbol}")
             except Exception as rollback_err:
                 logger.error(f"[CRITICAL] ROLLBACK FAILED: {rollback_err}")
+            self.persistence.log_skipped_trade(symbol, reason, asset_class)
             return {'symbol': symbol, 'status': 'BLOCKED_ATOMIC', 'reason': reason}
         
-        tp = real_entry + (ta_result['atr'] * 4.0) if direction == 'LONG' else real_entry - (ta_result['atr'] * 4.0)
+        # Scalping TP: Fixed 0.3-0.5% profit target (not ATR-based)
+        # Use 0.4% as default target (middle of range)
+        tp_pct = TradingConfig.SCALP_TP_MIN + ((TradingConfig.SCALP_TP_MAX - TradingConfig.SCALP_TP_MIN) / 2)
+        tp = real_entry * (1 + tp_pct) if direction == 'LONG' else real_entry * (1 - tp_pct)
+        
+        # Scalping SL: Fixed 0.15% stop loss
+        sl = real_entry * (1 - TradingConfig.SCALP_SL) if direction == 'LONG' else real_entry * (1 + TradingConfig.SCALP_SL)
+        
+        logger.info(f"[SCALP] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({TradingConfig.SCALP_SL*100:.2f}%)")
+        
+        # Build detailed reason with technical indicators
+        reason_parts = []
+        if 'rsi' in ta_result:
+            reason_parts.append(f"RSI={ta_result['rsi']:.1f}")
+        if 'volume_ratio' in ta_result:
+            reason_parts.append(f"Vol={ta_result['volume_ratio']:.2f}x")
+        if decision.get('confidence'):
+            reason_parts.append(f"AI={decision['confidence']*100:.0f}%")
+        if 'score' in decision:
+            reason_parts.append(f"Score={decision['score']}")
+        
+        detailed_reason = " | ".join(reason_parts) if reason_parts else decision.get('reason', 'Signal detected')
         
         self.persistence.log_trade_open(
             trade_id, symbol, asset_class, direction, real_entry, real_size, 
             real_size * real_entry, 10.0, -5.0,
-            MacroContext(confidence_score=decision['confidence'])
+            MacroContext(confidence_score=decision['confidence']),
+            reason=detailed_reason
         )
         
         pos_data = {
             'trade_id': trade_id, 'entry_price': real_entry, 'quantity': real_size,
-            'direction': direction, 'stop_loss': decision['stop_loss'],
-            'take_profit': tp, 'asset_class': asset_class,
+            'direction': direction, 'stop_loss': sl, 'take_profit': tp,
+            'asset_class': asset_class,
             'risk_dollars': decision['risk_dollars'],
             'entry_time': datetime.now(timezone.utc).isoformat()
         }
@@ -362,8 +466,23 @@ class TradingEngine:
         self.risk_manager.register_trade(symbol, real_entry, real_size, decision['risk_dollars'], decision['stop_loss'], direction)
         self.persistence.save_risk_state(self.risk_manager.get_state())
         
+        # Record trade timestamp for cooldown
+        self._record_trade_timestamp(symbol)
+        
         logger.info(f"[OK] Position opened atomically: {direction} {symbol}")
         return {'symbol': symbol, 'status': f'{direction}_OPEN', 'trade_id': trade_id}
+    
+    def _is_in_cooldown(self, symbol: str) -> bool:
+        """Check if symbol is in cooldown period (anti-spam protection)"""
+        return is_in_cooldown(self.aws.state_table, symbol, self.cooldown_seconds)
+    
+    def _record_trade_timestamp(self, symbol: str):
+        """Record trade timestamp for cooldown tracking"""
+        record_trade_timestamp(self.aws.state_table, symbol)
+    
+    def _get_real_binance_positions(self) -> List[str]:
+        """Get actual open positions from Binance (source of truth)"""
+        return get_real_binance_positions(self.exchange)
     
     def _manage_positions(self, positions: Dict):
         logger.info(f"\n{'='*70}\n[INFO] POSITION MANAGEMENT\n{'='*70}")
@@ -371,14 +490,76 @@ class TradingEngine:
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
                 current_price = ticker['last']
+                entry_price = float(pos.get('entry_price', 0))
+                direction = pos['direction']
                 
-                hit_sl = (current_price <= pos['stop_loss']) if pos['direction'] == 'LONG' else (current_price >= pos['stop_loss'])
-                hit_tp = (current_price >= pos['take_profit']) if pos['direction'] == 'LONG' else (current_price <= pos['take_profit'])
+                # Calculate current PnL %
+                if direction == 'LONG':
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
                 
-                if hit_sl or hit_tp:
-                    reason = 'STOP_LOSS' if hit_sl else 'TAKE_PROFIT'
-                    logger.warning(f"[ALERT] EXIT: {symbol} - {reason}")
-                    exit_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
+                # Check traditional TP/SL
+                hit_sl = (current_price <= pos['stop_loss']) if direction == 'LONG' else (current_price >= pos['stop_loss'])
+                hit_tp = (current_price >= pos['take_profit']) if direction == 'LONG' else (current_price <= pos['take_profit'])
+                
+                # Time-based profit protection (if position >1h and profitable >0.5%)
+                entry_time_str = pos.get('entry_time', '')
+                should_exit_time = False
+                if entry_time_str and pnl_pct > 0.5:
+                    try:
+                        entry_time = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
+                        time_open = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+                        if time_open > 1.0:  # Position open >1 hour
+                            should_exit_time = True
+                            logger.info(f"[TIME_EXIT] {symbol} open {time_open:.1f}h with +{pnl_pct:.2f}% profit")
+                    except: pass
+                
+                # Optional: Claude analysis for exit decision
+                should_exit_claude = False
+                if self.news_fetcher.use_claude and pnl_pct > 0.3:
+                    try:
+                        # Call Claude to analyze if we should exit this profitable position
+                        logger.info(f"[CLAUDE] Analyzing exit for {symbol} (+{pnl_pct:.2f}%)")
+                        
+                        # Fetch recent news for exit decision
+                        news = self.news_fetcher._fetch_raw_news(symbol)
+                        if news:
+                            # Ask Claude: should we exit now or hold for more?
+                            analysis = self.news_fetcher.claude.analyze_news_batch(symbol, news[:5])
+                            sentiment = analysis.get('sentiment', 'NEUTRAL')
+                            confidence = analysis.get('confidence', 0.5)
+                            
+                            # Exit if sentiment turns against our position
+                            if direction == 'LONG' and sentiment == 'BEARISH' and confidence > 0.7:
+                                should_exit_claude = True
+                                logger.info(f"[CLAUDE_EXIT] {symbol} LONG exit - bearish sentiment detected (conf: {confidence:.2f})")
+                            elif direction == 'SHORT' and sentiment == 'BULLISH' and confidence > 0.7:
+                                should_exit_claude = True
+                                logger.info(f"[CLAUDE_EXIT] {symbol} SHORT exit - bullish sentiment detected (conf: {confidence:.2f})")
+                            else:
+                                logger.info(f"[CLAUDE_HOLD] {symbol} sentiment: {sentiment} (conf: {confidence:.2f}) - holding")
+                        else:
+                            # No news available - use aggressive profit taking
+                            if pnl_pct > 0.8:
+                                should_exit_claude = True
+                                logger.info(f"[CLAUDE_EXIT] {symbol} profit {pnl_pct:.2f}% exceeds threshold (no news)")
+                    except Exception as e:
+                        logger.warning(f"[CLAUDE] Exit analysis failed: {e}")
+                
+                # Exit if any condition is met
+                if hit_sl or hit_tp or should_exit_time or should_exit_claude:
+                    if hit_sl:
+                        reason = 'STOP_LOSS'
+                    elif hit_tp:
+                        reason = 'TAKE_PROFIT'
+                    elif should_exit_time:
+                        reason = 'TIME_BASED_PROFIT'
+                    else:
+                        reason = 'CLAUDE_EXIT'
+                    
+                    logger.warning(f"[ALERT] EXIT: {symbol} - {reason} (PnL: {pnl_pct:+.2f}%)")
+                    exit_side = 'sell' if direction == 'LONG' else 'buy'
                     exit_order = self.exchange.create_market_order(symbol, exit_side, pos['quantity'])
                     exit_price = float(exit_order.get('average', current_price))
                     
@@ -389,7 +570,9 @@ class TradingEngine:
                     self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason)
                     self.persistence.delete_position(symbol)
                     del positions[symbol]
-                    logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f}")
+                    logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
+                else:
+                    logger.info(f"[HOLD] {symbol} | PnL: {pnl_pct:+.2f}% | Time: {entry_time_str[:16] if entry_time_str else 'N/A'}")
 
             except Exception as e: logger.error(f"[ERROR] Manage failed for {symbol}: {e}")
 

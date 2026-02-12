@@ -64,11 +64,16 @@ class AtomicPersistence:
         """
         max_risk = Decimal(str(capital * max_portfolio_pct))
         new_risk = Decimal(str(risk_dollars))
+        # Pre-calculate the threshold: if current total_risk <= this, it's safe to add
+        risk_threshold = max_risk - new_risk
+        
+        # Prepare safe symbol for DynamoDB keys
+        safe_symbol = symbol.replace('/', '_').replace(':', '-')
         
         try:
             # Prepare trade data
             trade_data = {
-                'symbol': symbol,
+                'symbol': symbol,  # Keep original symbol for display
                 'risk': new_risk,
                 'entry_price': Decimal(str(entry_price)),
                 'quantity': Decimal(str(quantity)),
@@ -76,7 +81,19 @@ class AtomicPersistence:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
+            # Ensure active_trades map exists first
+            try:
+                self.table.update_item(
+                    Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
+                    UpdateExpression='SET active_trades = if_not_exists(active_trades, :empty_map)',
+                    ExpressionAttributeValues={':empty_map': {}}
+                )
+            except Exception:
+                pass  # Ignore if it already exists
+            
             # Atomic increment with condition
+            # DynamoDB does NOT support arithmetic in ConditionExpression
+            # So we compare total_risk <= (max_risk - new_risk) instead
             response = self.table.update_item(
                 Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
                 UpdateExpression='''
@@ -86,15 +103,15 @@ class AtomicPersistence:
                 ''',
                 ConditionExpression='''
                     attribute_not_exists(total_risk) OR 
-                    (total_risk + :new_risk) <= :max_risk
+                    total_risk <= :risk_threshold
                 ''',
                 ExpressionAttributeNames={
-                    '#sym': symbol.replace('/', '_') # Standardize key for map
+                    '#sym': safe_symbol  # Use sanitized symbol for DynamoDB key
                 },
                 ExpressionAttributeValues={
                     ':zero': Decimal('0'),
                     ':new_risk': new_risk,
-                    ':max_risk': max_risk,
+                    ':risk_threshold': risk_threshold,
                     ':trade_data': trade_data,
                     ':timestamp': datetime.now(timezone.utc).isoformat()
                 },
@@ -123,6 +140,9 @@ class AtomicPersistence:
         """
         Atomically decrement portfolio risk when closing a trade.
         """
+        # Prepare safe symbol for DynamoDB keys
+        safe_symbol = symbol.replace('/', '_').replace(':', '-')
+        
         try:
             self.table.update_item(
                 Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
@@ -131,7 +151,7 @@ class AtomicPersistence:
                     REMOVE active_trades.#sym
                 ''',
                 ExpressionAttributeNames={
-                    '#sym': symbol.replace('/', '_')
+                    '#sym': safe_symbol  # Use sanitized symbol for DynamoDB key
                 },
                 ExpressionAttributeValues={
                     ':risk': Decimal(str(risk_dollars))

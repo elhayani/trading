@@ -8,7 +8,7 @@ Synchronizes strategy behavior with market sessions (London, NY, Asia).
 import logging
 from datetime import datetime, time, timezone
 from enum import Enum
-from .models import MarketRegime
+from models import MarketRegime
 
 logger = logging.getLogger(__name__)
 

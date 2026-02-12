@@ -20,7 +20,8 @@ NC='\033[0m' # No Color
 # Configuration
 STACK_NAME="V4TradingStack"
 REGION="eu-west-3"
-CDK_DIR="infrastructure/cdk"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CDK_DIR="$SCRIPT_DIR/../infrastructure/cdk"
 
 # Step 1: Prerequisites
 echo "📋 Step 1: Checking Prerequisites..."

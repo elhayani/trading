@@ -141,7 +141,7 @@ class V4TradingStack(Stack):
         )
         binance_secret.grant_read(trading_lambda)
         
-        # Grant Bedrock permissions
+        # Grant Bedrock permissions for Claude 3.5 Sonnet (advanced news analysis)
         trading_lambda.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
@@ -150,6 +150,7 @@ class V4TradingStack(Stack):
                     "bedrock:InvokeModelWithResponseStream"
                 ],
                 resources=[
+                    "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
                     "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
                 ]
             )

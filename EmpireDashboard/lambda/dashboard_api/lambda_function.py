@@ -4,8 +4,8 @@ import os
 import traceback
 from urllib.request import Request, urlopen
 from urllib.error import URLError
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from datetime import datetime, timedelta
 import concurrent.futures
 
 # Initialize DynamoDB Client
@@ -15,6 +15,7 @@ config_table = dynamodb.Table(config_table_name)
  
 # Unified History Table
 TABLES_TO_SCAN = ["EmpireTradesHistory"]
+trades_table = dynamodb.Table("EmpireTradesHistory")
 
 # Global cache to mitigate API Gateway 30s timeout and DDB scan costs
 _TRADES_CACHE = {
@@ -55,11 +56,21 @@ def get_binance_exchange():
         # 1. Tentative en mode DEMO (le plus probable pour ces clés)
         try:
             ex_demo = ccxt.binance(config)
-            if hasattr(ex_demo, 'enable_demo_trading'):
-                ex_demo.enable_demo_trading(True)
-            else:
-                ex_demo.urls['api']['fapiPublic'] = 'https://vapi.binance.com'
-                ex_demo.urls['api']['fapiPrivate'] = 'https://vapi.binance.com'
+            ex_demo.set_sandbox_mode(True)
+            
+            # Elite Sniper Fix - preserve path structure, replace only domains
+            demo_domain = "demo-fapi.binance.com"
+            for collection in ['test', 'api']:
+                if collection in ex_demo.urls:
+                    for key in ex_demo.urls[collection]:
+                        if isinstance(ex_demo.urls[collection][key], str):
+                            url = ex_demo.urls[collection][key]
+                            url = url.replace("fapi.binance.com", demo_domain)
+                            url = url.replace("testnet.binancefuture.com", demo_domain)
+                            url = url.replace("api.binance.com", demo_domain)
+                            url = url.replace("demo-fdemo-fapi.binance.com", demo_domain)
+                            ex_demo.urls[collection][key] = url
+            ex_demo.options['fetchConfig'] = False
             
             ex_demo.fetch_balance()
             print("✅ Connecté au mode BINANCE DEMO")
@@ -398,13 +409,17 @@ def get_all_trades(start_time=None):
 def calculate_equity_curve(trades, initial_capital=1000.0):
     current_equity = initial_capital
     equity_curve = []
+    now_iso = datetime.utcnow().isoformat()
 
     # Filter for actual trades only (exclude SKIPPED/INFO)
     actual_trades = [t for t in trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
 
     if not actual_trades:
-         # Default start point for empty history
-        return [{'x': '2026-01-01T00:00:00', 'y': initial_capital}]
+         # Default: start + now so Chart.js can draw a line
+        return [
+            {'x': '2026-01-01T00:00:00', 'y': initial_capital},
+            {'x': now_iso, 'y': initial_capital, 'details': 'Current (no trades yet)'}
+        ]
 
     # Sort trades by timestamp
     sorted_trades = sorted(actual_trades, key=lambda x: x.get('Timestamp', ''))
@@ -425,6 +440,9 @@ def calculate_equity_curve(trades, initial_capital=1000.0):
             'y': current_equity,
             'details': f"{trade.get('Pair')} ({trade.get('Type')}) PnL: {pnl}"
         })
+
+    # Always append a "now" point so the chart extends to current time
+    equity_curve.append({'x': now_iso, 'y': current_equity, 'details': 'Current'})
     return equity_curve
 
 
@@ -549,6 +567,131 @@ def lambda_handler(event, context):
                     'body': json.dumps({'error': str(e)})
                 }
 
+        # --- TRANSACTIONS / INCOME HISTORY (/transactions) ---
+        if '/transactions' in path:
+            try:
+                # Parse query params for time range (default: last 7 days)
+                qp = event.get('queryStringParameters') or {}
+                days = int(qp.get('days', '30'))
+                days = min(days, 90)  # Cap at 90 days
+                
+                # Calculate cutoff timestamp
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                cutoff_iso = cutoff.isoformat()
+                
+                # Fetch all recent trades from DynamoDB (including those with DynamoDB errors)
+                # Add limit to prevent excessive reads
+                response = trades_table.scan(
+                    FilterExpression='#ts > :cutoff',
+                    ExpressionAttributeNames={
+                        '#ts': 'Timestamp'
+                    },
+                    ExpressionAttributeValues={
+                        ':cutoff': cutoff_iso
+                    },
+                    Limit=1000  # Prevent excessive DynamoDB reads
+                )
+                
+                all_trades = response.get('Items', [])
+                # Separate trades with PnL from those without (DynamoDB errors)
+                closed_trades = []
+                error_trades = []
+                
+                for trade in all_trades:
+                    status = trade.get('Status', '').upper()
+                    pnl = float(trade.get('PnL', 0))
+                    
+                    # Skip OPEN trades
+                    if status == 'OPEN':
+                        continue
+                    
+                    # Trades with PnL (successfully closed)
+                    if pnl != 0 or status == 'CLOSED':
+                        closed_trades.append(trade)
+                    # Trades without PnL (DynamoDB errors during closure)
+                    elif status in ['SKIPPED', 'BLOCKED', 'ERROR']:
+                        error_trades.append(trade)
+                
+                # Process and summarize
+                transactions = []
+                summary = {
+                    'REALIZED_PNL': 0,
+                    'COMMISSION': 0,
+                    'TOTAL_TRADES': 0,
+                    'WINNING_TRADES': 0,
+                    'LOSING_TRADES': 0,
+                    'DYNAMODB_ERRORS': len(error_trades)
+                }
+                
+                for trade in closed_trades:
+                    pnl = float(trade.get('PnL', 0))
+                    symbol = trade.get('Symbol', trade.get('Pair', ''))
+                    timestamp = trade.get('ExitTime', trade.get('Timestamp', ''))
+                    trade_id = trade.get('TradeID', '')
+                    
+                    # Estimate commission (0.04% per side = 0.08% total)
+                    entry_price = float(trade.get('EntryPrice', 0))
+                    size = float(trade.get('Size', 0))
+                    commission = -(entry_price * size * 0.0008) if entry_price and size else 0
+                    
+                    # Add PnL transaction
+                    transactions.append({
+                        'timestamp': timestamp,
+                        'symbol': symbol,
+                        'type': 'REALIZED_PNL',
+                        'amount': round(pnl, 6),
+                        'info': trade_id
+                    })
+                    
+                    # Add commission transaction
+                    if commission != 0:
+                        transactions.append({
+                            'timestamp': timestamp,
+                            'symbol': symbol,
+                            'type': 'COMMISSION',
+                            'amount': round(commission, 6),
+                            'info': trade_id
+                        })
+                    
+                    # Update summary
+                    summary['REALIZED_PNL'] += pnl
+                    summary['COMMISSION'] += commission
+                    summary['TOTAL_TRADES'] += 1
+                    if pnl > 0:
+                        summary['WINNING_TRADES'] += 1
+                    elif pnl < 0:
+                        summary['LOSING_TRADES'] += 1
+                
+                # Round summary values
+                for key in summary:
+                    if isinstance(summary[key], float):
+                        summary[key] = round(summary[key], 6)
+                
+                # Sort by timestamp descending
+                transactions.sort(key=lambda x: x['timestamp'], reverse=True)
+                
+                total_income = round(summary['REALIZED_PNL'] + summary['COMMISSION'], 6)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': cors_headers,
+                    'body': json.dumps({
+                        'transactions': transactions[:500],
+                        'summary': summary,
+                        'total': total_income,
+                        'days': days,
+                        'count': len(transactions)
+                    }, cls=DecimalEncoder)
+                }
+            except Exception as e:
+                print(f"❌ Erreur transactions: {e}")
+                traceback.print_exc()
+                return {
+                    'statusCode': 500,
+                    'headers': cors_headers,
+                    'body': json.dumps({'error': str(e)})
+                }
+
         # --- LAMBDA CLOUDWATCH LOGS (/lambda-logs) ---
         if '/lambda-logs' in path:
             def fetch_group_logs(lg_name):
@@ -655,7 +798,7 @@ def lambda_handler(event, context):
             
             if matching_db_trade:
                 # On prend la raison la plus complète disponible
-                db_reason = matching_db_trade.get('AI_Reason') or matching_db_trade.get('Reason')
+                db_reason = matching_db_trade.get('AI_Reason') or matching_db_trade.get('Reason') or matching_db_trade.get('reason')
                 if db_reason:
                     lp['AI_Reason'] = db_reason
 
@@ -788,12 +931,12 @@ def lambda_handler(event, context):
         occurrence_counts = {}
         for t in all_trades_from_db:
             pair = t.get('Pair') or t.get('Symbol') or 'UNK'
-            reason = t.get('ExitReason') or t.get('AI_Reason') or t.get('reason') or '-'
+            reason = t.get('ExitReason') or t.get('AI_Reason') or t.get('Reason') or t.get('reason') or '-'
             key = f"{pair}||{reason}"
             occurrence_counts[key] = occurrence_counts.get(key, 0) + 1
         
         # Filter raw_recent history trades based on global occurrence count
-        raw_recent = [t for t in raw_recent if occurrence_counts.get(f"{t.get('Pair') or t.get('Symbol') or 'UNK'}||{t.get('ExitReason') or t.get('AI_Reason') or t.get('reason') or '-'}", 0) >= 4]
+        raw_recent = [t for t in raw_recent if occurrence_counts.get(f"{t.get('Pair') or t.get('Symbol') or 'UNK'}||{t.get('ExitReason') or t.get('AI_Reason') or t.get('Reason') or t.get('reason') or '-'}", 0) >= 4]
         
         raw_recent = sorted(raw_recent, key=lambda x: x.get('Timestamp', ''), reverse=True)
         recent_trades = live_positions + raw_recent

@@ -25,8 +25,19 @@ class RiskManager:
         stop_loss_price: float,
         confidence: float = 1.0,
         atr: float = 0.0,
-        direction: str = "LONG"
+        direction: str = "LONG",
+        leverage: float = None
     ) -> Dict[str, Union[float, bool, str]]:
+        # Convert all inputs to float to prevent Decimal/float arithmetic errors
+        entry_price = float(entry_price)
+        stop_loss_price = float(stop_loss_price)
+        capital = float(capital)
+        atr = float(atr)
+        
+        # Force leverage to 1 for scalping safety (or use config default)
+        leverage = leverage or TradingConfig.LEVERAGE
+        logger.info(f"[SCALPING] Using leverage: {leverage}x")
+        
         if entry_price <= 0: return self._blocked("INVALID_ENTRY_PRICE", stop_loss_price)
 
         # 1. Daily loss circuit breaker
