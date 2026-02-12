@@ -557,42 +557,70 @@
             });
         }
 
-        function updateChart(dataPoints) {
+        function updateChart(equityCurve) {
             const ctx = document.getElementById('equityChart').getContext('2d');
-            if (!dataPoints || dataPoints.length === 0) return;
-            const chartData = dataPoints.map(pt => ({ x: new Date(pt.x), y: pt.y })).filter(pt => !isNaN(pt.x.getTime()));
-
+            
+            // Handle new format: {crypto: [...], indices: [...], commodities: [...], forex: [...]}
+            if (!equityCurve || typeof equityCurve !== 'object') return;
+            
+            // Build datasets for each asset class
+            const datasets = [];
+            const colors = {
+                crypto: { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.1)' },      // Blue
+                indices: { border: '#10B981', bg: 'rgba(16, 185, 129, 0.1)' },     // Green
+                commodities: { border: '#F59E0B', bg: 'rgba(245, 158, 11, 0.1)' }, // Orange
+                forex: { border: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.1)' }        // Purple
+            };
+            
+            let allValues = [];
+            
+            for (const [assetClass, dataPoints] of Object.entries(equityCurve)) {
+                if (!dataPoints || !Array.isArray(dataPoints)) continue;
+                
+                const chartData = dataPoints.map(pt => ({ x: new Date(pt.x), y: pt.y })).filter(pt => !isNaN(pt.x.getTime()));
+                allValues.push(...chartData.map(pt => pt.y));
+                
+                const color = colors[assetClass] || { border: '#64748B', bg: 'rgba(100, 116, 139, 0.1)' };
+                
+                datasets.push({
+                    label: assetClass.charAt(0).toUpperCase() + assetClass.slice(1),
+                    data: chartData,
+                    borderColor: color.border,
+                    backgroundColor: color.bg,
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 1,
+                    pointHoverRadius: 5
+                });
+            }
+            
+            if (datasets.length === 0) return;
+            
             // Calculate dynamic min/max for better focus
-            const values = chartData.map(pt => pt.y);
-            const minVal = Math.min(...values);
-            const maxVal = Math.max(...values);
+            const minVal = Math.min(...allValues);
+            const maxVal = Math.max(...allValues);
             const buffer = (maxVal - minVal) * 0.1 || 5;
 
             if (chartInstance) {
-                chartInstance.data.datasets[0].data = chartData;
+                chartInstance.data.datasets = datasets;
                 chartInstance.options.scales.y.min = Math.floor(minVal - buffer);
                 chartInstance.options.scales.y.max = Math.ceil(maxVal + buffer);
                 chartInstance.update();
             } else {
                 chartInstance = new Chart(ctx, {
                     type: 'line',
-                    data: {
-                        datasets: [{
-                            label: 'Empire Equity ($)',
-                            data: chartData,
-                            borderColor: '#3B82F6',
-                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                            borderWidth: 3,
-                            fill: true,
-                            tension: 0.4,
-                            pointRadius: 2,
-                            pointHoverRadius: 6
-                        }]
-                    },
+                    data: { datasets },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
+                        plugins: { 
+                            legend: { 
+                                display: true,
+                                position: 'top',
+                                labels: { color: '#94A3B8', font: { size: 12 } }
+                            } 
+                        },
                         scales: {
                             x: { type: 'time', time: { unit: 'day' }, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#64748B' } },
                             y: {

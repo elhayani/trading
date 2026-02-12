@@ -109,5 +109,6 @@ def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = 
         'indicators': {'rsi': rsi_val, 'atr': current_atr},
         'current_price': float(current['close']),
         'market_context': f"RSI={rsi_val:.1f} | Trend={trend}",
-        'signal_type': signal_type, 'score': score, 'atr': current_atr, 'price': float(current['close'])
+        'signal_type': signal_type, 'score': score, 'atr': current_atr, 'price': float(current['close']),
+        'rsi': rsi_val  # Add to root for easy access in logging
     }

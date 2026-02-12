@@ -91,8 +91,11 @@ class PersistenceLayer:
     
     def log_trade_open(self, trade_id, symbol, asset_class, side, entry_price, size, capital, tp_pct, sl_pct, context, reason=None):
         try:
+            timestamp = datetime.now(timezone.utc).isoformat()
             # Audit Fix: Use PascalCase for Dashboard Compatibility
             item = {
+                'trader_id': trade_id,  # Required partition key
+                'timestamp': timestamp,  # Required sort key
                 'TradeId': trade_id,
                 'Symbol': symbol,
                 'Pair': symbol,
@@ -104,7 +107,7 @@ class PersistenceLayer:
                 'TpPct': tp_pct,
                 'SlPct': sl_pct,
                 'ConfidenceScore': context.confidence_score,
-                'Timestamp': datetime.now(timezone.utc).isoformat(),
+                'Timestamp': timestamp,
                 'Status': 'OPEN'
             }
             
@@ -117,29 +120,48 @@ class PersistenceLayer:
     
     def log_trade_close(self, trade_id, exit_price, pnl, reason):
         try:
-            self.aws.trades_table.update_item(
-                Key={'TradeId': trade_id},
-                UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at',
-                ExpressionAttributeNames={'#st': 'Status'},
-                ExpressionAttributeValues=to_decimal({
-                    ':status': 'CLOSED', ':price': exit_price, ':pnl': pnl, ':reason': reason,
-                    ':closed_at': datetime.now(timezone.utc).isoformat()
-                })
+            # Scan to find the item with this TradeId (since we need trader_id + timestamp for Key)
+            response = self.aws.trades_table.scan(
+                FilterExpression='TradeId = :tid',
+                ExpressionAttributeValues={':tid': trade_id},
+                Limit=1
             )
-        except Exception as e: logger.error(f"[ERROR] Failed to log close: {e}")
+            
+            if response.get('Items'):
+                item = response['Items'][0]
+                trader_id = item['trader_id']
+                timestamp = item['timestamp']
+                
+                self.aws.trades_table.update_item(
+                    Key={'trader_id': trader_id, 'timestamp': timestamp},
+                    UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at',
+                    ExpressionAttributeNames={'#st': 'Status'},
+                    ExpressionAttributeValues=to_decimal({
+                        ':status': 'CLOSED', ':price': exit_price, ':pnl': pnl, ':reason': reason,
+                        ':closed_at': datetime.now(timezone.utc).isoformat()
+                    })
+                )
+                logger.info(f"[INFO] Logged CLOSE for {trade_id}: PnL={pnl}, Reason={reason}")
+            else:
+                logger.warning(f"[WARN] Trade {trade_id} not found for close update")
+        except Exception as e: 
+            logger.error(f"[ERROR] Failed to log close: {e}")
 
     def log_skipped_trade(self, symbol, reason, asset_class):
         try:
             trade_id = f"SKIP-{uuid.uuid4().hex[:8]}"
+            timestamp = datetime.now(timezone.utc).isoformat()
             # Use PascalCase for Dashboard compatibility
             self.aws.trades_table.put_item(Item=to_decimal({
+                'trader_id': trade_id,  # Required partition key
+                'timestamp': timestamp,  # Required sort key
                 'TradeId': trade_id,
                 'Symbol': symbol,
                 'Pair': symbol,
                 'AssetClass': asset_class,
                 'Status': 'SKIPPED',
                 'Reason': reason,
-                'Timestamp': datetime.now(timezone.utc).isoformat()
+                'Timestamp': timestamp
             }))
             logger.info(f"[INFO] Logged SKIP for {symbol}: {reason}")
         except Exception as e: 
@@ -389,7 +411,34 @@ class TradingEngine:
             
             direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
             if ta_result.get('signal_type') == 'NEUTRAL':
-                reason = f"NO_SIGNAL | Score={ta_result.get('score', 0)} | RSI={ta_result.get('rsi', 0):.1f}"
+                # Build meaningful skip reason
+                rsi = ta_result.get('rsi', 50)
+                score = ta_result.get('score', 0)
+                
+                # Explain WHY it's neutral
+                reasons = []
+                if rsi > 70:
+                    reasons.append(f"RSI > 70 (overbought: {rsi:.1f})")
+                elif rsi < 30:
+                    reasons.append(f"RSI < 30 (oversold: {rsi:.1f})")
+                else:
+                    reasons.append(f"RSI neutral ({rsi:.1f})")
+                
+                if score < 50:
+                    reasons.append(f"Low technical score ({score})")
+                
+                # Check volume if available
+                if 'volume_spike' in ta_result.get('market_context', ''):
+                    reasons.append("Low volume")
+                
+                # Check trend
+                trend = ta_result.get('market_context', '')
+                if 'Trend=' in trend:
+                    trend_val = trend.split('Trend=')[1].split('|')[0].strip()
+                    if trend_val == 'SIDEWAYS':
+                        reasons.append("Sideways trend")
+                
+                reason = " | ".join(reasons) if reasons else f"No clear signal (RSI={rsi:.1f})"
                 self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'NO_SIGNAL', 'score': ta_result.get('score')}
 
@@ -671,20 +720,24 @@ class TradingEngine:
                 
                 # Exit if any condition is met
                 if hit_sl or hit_tp or hit_profit_1pct or should_exit_time or should_exit_fast_discard or should_exit_claude:
+                    # Build detailed close reason
                     if hit_sl:
-                        reason = 'STOP_LOSS'
+                        reason = f"Stop Loss hit at ${current_price:.2f} (SL: ${stop_loss:.2f}, PnL: {pnl_pct:+.2f}%)"
                     elif hit_tp:
-                        reason = 'TAKE_PROFIT'
+                        reason = f"Take Profit hit at ${current_price:.2f} (TP: ${take_profit:.2f}, PnL: {pnl_pct:+.2f}%)"
                     elif hit_profit_1pct:
-                        reason = 'PROFIT_1PCT_PROTECTION'
+                        reason = f"1% Profit Protection (PnL: {pnl_pct:+.2f}%, Entry: ${entry_price:.2f})"
                     elif should_exit_fast_discard:
-                        reason = 'FAST_DISCARD'
+                        duration_min = time_open_minutes if 'time_open_minutes' in locals() else 0
+                        reason = f"Fast Discard after {duration_min:.0f}min (PnL: {pnl_pct:+.2f}%, no momentum)"
                     elif should_exit_time:
-                        reason = 'TIME_BASED_PROFIT'
+                        duration_h = time_open_hours if 'time_open_hours' in locals() else 0
+                        asset_class_name = pos.get('asset_class', 'crypto')
+                        reason = f"Time Exit {asset_class_name} after {duration_h*60:.0f}min (PnL: {pnl_pct:+.2f}%)"
                     else:
-                        reason = 'CLAUDE_EXIT'
+                        reason = f"Claude AI Exit (sentiment changed, PnL: {pnl_pct:+.2f}%)"
                     
-                    logger.warning(f"[ALERT] EXIT: {symbol} - {reason} (PnL: {pnl_pct:+.2f}%)")
+                    logger.warning(f"[ALERT] EXIT: {symbol} - {reason}")
                     exit_side = 'sell' if direction == 'LONG' else 'buy'
                     exit_order = self.exchange.create_market_order(symbol, exit_side, pos['quantity'])
                     exit_price = float(exit_order.get('average', current_price))

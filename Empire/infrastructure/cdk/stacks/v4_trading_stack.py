@@ -122,10 +122,11 @@ class V4TradingStack(Stack):
                 "TRADING_MODE": "live",
                 "SECRET_NAME": "trading/binance", # 🛡️ SECURE: No hardcoded keys
                 "CAPITAL": "1000",
-                "SYMBOLS": "BTCUSDT,ETHUSDT,SOLUSDT,PAXGUSDT,SPXUSDT",
+                "SYMBOLS": "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,XRP/USDT:USDT",
                 "RSI_THRESHOLD": "35",
                 "CHECK_INTERVAL": "3600",
-                "EXCHANGE": "binance"
+                "EXCHANGE": "binance",
+                "USE_CLAUDE_ANALYSIS": "true"  # Enable Claude 3.5 Sonnet for advanced analysis
             },
             log_retention=logs.RetentionDays.ONE_MONTH
         )

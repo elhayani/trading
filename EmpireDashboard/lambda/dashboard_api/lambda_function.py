@@ -364,15 +364,12 @@ def get_all_trades(start_time=None):
     global _TRADES_CACHE
     
     now = datetime.utcnow()
-    # Purge/Cutoff sync: Last 3 days starting from midnight UTC
-    cutoff_date = (now - timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0)
-    cutoff_str = cutoff_date.isoformat()
 
     if (now - _TRADES_CACHE['timestamp']).total_seconds() < CACHE_TTL_SECONDS:
         print("🕯️ Using trades cache (TTL hit)")
-        return [t for t in _TRADES_CACHE['items'] if t.get('Timestamp', '') >= cutoff_str]
+        return _TRADES_CACHE['items']
 
-    print(f"⚡ Cache expired, scanning EmpireTradesHistory (Since {cutoff_str})...")
+    print(f"⚡ Cache expired, scanning EmpireTradesHistory (all trades)...")
     
     # Sequential Scan for stability
     # Use FilterExpression to reduce data transfer if possible, but keeping it simple for now
@@ -383,9 +380,7 @@ def get_all_trades(start_time=None):
         return []
 
     processed = []
-    for item in raw_items:
-        ts = item.get('Timestamp', '')
-        if ts < cutoff_str: continue 
+    for item in raw_items: 
 
         if start_time and (datetime.utcnow() - start_time).total_seconds() > 25:
             break
@@ -407,43 +402,61 @@ def get_all_trades(start_time=None):
 
 
 def calculate_equity_curve(trades, initial_capital=1000.0):
-    current_equity = initial_capital
-    equity_curve = []
+    """
+    Calculate equity curves for TODAY ONLY, separated by asset class.
+    Returns dict with 'crypto', 'indices', 'commodities' keys, each containing a curve.
+    """
     now_iso = datetime.utcnow().isoformat()
-
-    # Filter for actual trades only (exclude SKIPPED/INFO)
-    actual_trades = [t for t in trades if t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL']]
-
-    if not actual_trades:
-         # Default: start + now so Chart.js can draw a line
-        return [
-            {'x': '2026-01-01T00:00:00', 'y': initial_capital},
-            {'x': now_iso, 'y': initial_capital, 'details': 'Current (no trades yet)'}
-        ]
-
-    # Sort trades by timestamp
-    sorted_trades = sorted(actual_trades, key=lambda x: x.get('Timestamp', ''))
-
-    # Start point (either Jan 1st 2026 or very first trade date if older)
-    start_date = sorted_trades[0].get('Timestamp')
-    # If first trade is after Jan 1st, we can prepend Jan 1st for better viz
-    if start_date > '2026-01-01':
-         equity_curve.append({'x': '2026-01-01T00:00:00', 'y': initial_capital})
-    else:
-         equity_curve.append({'x': start_date, 'y': initial_capital})
-
-    for trade in sorted_trades:
-        pnl = safe_float(trade.get('PnL', 0.0))
-        current_equity += pnl
-        equity_curve.append({
-            'x': trade.get('Timestamp'),
-            'y': current_equity,
-            'details': f"{trade.get('Pair')} ({trade.get('Type')}) PnL: {pnl}"
-        })
-
-    # Always append a "now" point so the chart extends to current time
-    equity_curve.append({'x': now_iso, 'y': current_equity, 'details': 'Current'})
-    return equity_curve
+    today = datetime.utcnow().date().isoformat()  # e.g., '2026-02-12'
+    
+    # Filter for actual trades only (exclude SKIPPED/INFO) AND today only
+    actual_trades = [t for t in trades if 
+                     t.get('Status', '').upper() in ['OPEN', 'CLOSED', 'TP', 'SL'] and
+                     t.get('Timestamp', '').startswith(today)]
+    
+    # Group trades by asset class
+    crypto_trades = [t for t in actual_trades if t.get('AssetClass', '').lower() == 'crypto']
+    indices_trades = [t for t in actual_trades if t.get('AssetClass', '').lower() == 'indices']
+    commodities_trades = [t for t in actual_trades if t.get('AssetClass', '').lower() == 'commodities']
+    forex_trades = [t for t in actual_trades if t.get('AssetClass', '').lower() == 'forex']
+    
+    # Start of today
+    start_of_day = f"{today}T00:00:00"
+    
+    def build_curve(trades_list, label):
+        """Build equity curve for a specific asset class"""
+        if not trades_list:
+            # No trades today - flat line at initial capital
+            return [
+                {'x': start_of_day, 'y': initial_capital, 'label': label},
+                {'x': now_iso, 'y': initial_capital, 'label': label}
+            ]
+        
+        sorted_trades = sorted(trades_list, key=lambda x: x.get('Timestamp', ''))
+        curve = [{'x': start_of_day, 'y': initial_capital, 'label': label}]
+        current_equity = initial_capital
+        
+        for trade in sorted_trades:
+            pnl = safe_float(trade.get('PnL', 0.0))
+            current_equity += pnl
+            curve.append({
+                'x': trade.get('Timestamp'),
+                'y': current_equity,
+                'label': label,
+                'details': f"{trade.get('Pair')} ({trade.get('Type')}) PnL: {pnl}"
+            })
+        
+        # Add current point
+        curve.append({'x': now_iso, 'y': current_equity, 'label': label})
+        return curve
+    
+    # Build curves for each asset class
+    return {
+        'crypto': build_curve(crypto_trades, 'Crypto'),
+        'indices': build_curve(indices_trades, 'Indices'),
+        'commodities': build_curve(commodities_trades, 'Commodities'),
+        'forex': build_curve(forex_trades, 'Forex')
+    }
 
 
 def get_live_mode_status(asset_class):
@@ -954,10 +967,10 @@ def lambda_handler(event, context):
                     trade['CurrentPrice'] = current_price
                     trade['Value'] = float(trade.get('Size', 0) or 0) * current_price
 
-        # 7. Skipped Trades (Audit #V11.6: Last 50 Skips)
+        # 7. Skipped Trades (Audit #V11.6: Last 200 Skips for better visibility)
         # We extract these separately to avoid them being hidden by the "4+ occurrences" filter of the history tab
         skipped_trades = [t for t in all_trades_from_db if (t.get('Status', '').upper() == 'SKIPPED' or 'SKIP' in t.get('Status', '').upper())]
-        skipped_trades = sorted(skipped_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:50]
+        skipped_trades = sorted(skipped_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:200]
 
         # 8. Final Response
         response_body = {
