@@ -27,10 +27,27 @@ class DecisionEngine:
         symbol: str,
         asset_class: AssetClass = AssetClass.CRYPTO,
         news_score: float = 0.0,
-        macro_regime: str = "NORMAL"
+        macro_regime: str = "NORMAL",
+        btc_rsi: Optional[float] = None,
+        history_context: Optional[Dict] = None
     ) -> Tuple[bool, str, float]:
         if not context.get('can_trade', True):
             return False, "MACRO_STOP", 0.0
+
+        # 🏛️ EMPIRE V13.6: Memory of 20 Events (Injection for analysis only)
+        if history_context:
+            logger.info(f"[HISTORY_CONTEXT] Injected {len(history_context.get('skipped', []))} skipped and {len(history_context.get('history', []))} history events for analysis.")
+        
+        # 🏛️ EMPIRE V13.5: The Bedrock Matrix (BTC Unified Filter)
+        if asset_class == AssetClass.CRYPTO and btc_rsi is not None and "BTC" not in symbol:
+            direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
+            
+            if btc_rsi > 70:
+                if direction == 'SHORT':
+                    return False, f"BEDROCK_BLOCK_SHORT (BTC_RSI={btc_rsi:.1f} > 70)", 0.0
+            elif btc_rsi < 30:
+                if direction == 'LONG':
+                    return False, f"BEDROCK_BLOCK_LONG (BTC_RSI={btc_rsi:.1f} < 30)", 0.0
 
         base_thresholds = {
             AssetClass.CRYPTO: TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO,
@@ -46,8 +63,9 @@ class DecisionEngine:
             min_score += TradingConfig.CRASH_HURDLE
 
         score = ta_result.get('score', 0)
+        
         if score < min_score:
-            return False, f"LOW_SCORE_{score}", 0.0
+            return False, f"LOW_SCORE_{score} (Min={min_score})", 0.0
 
         corridor = corridors.get_corridor_params(symbol)
         if corridor.get('regime') == MarketRegime.CLOSED:
@@ -68,13 +86,17 @@ class DecisionEngine:
         direction: str = "LONG",
         asset_class: AssetClass = AssetClass.CRYPTO,
         news_score: float = 0.0,
-        macro_regime: str = "NORMAL"
+        macro_regime: str = "NORMAL",
+        btc_rsi: Optional[float] = None,
+        history_context: Optional[Dict] = None
     ) -> Dict[str, Union[bool, str, float]]:
         proceed, reason, confidence = self.evaluate(
             context, ta_result, symbol, 
             asset_class=asset_class,
             news_score=news_score,
-            macro_regime=macro_regime
+            macro_regime=macro_regime,
+            btc_rsi=btc_rsi,
+            history_context=history_context
         )
         
         if not proceed:

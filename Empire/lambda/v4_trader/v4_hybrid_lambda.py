@@ -257,6 +257,49 @@ class PersistenceLayer:
             self.aws.state_table.delete_item(Key={'trader_id': f'POSITION#{safe_symbol}'})
         except Exception as e: logger.error(f"[ERROR] Failed to delete position: {e}")
 
+    def get_history_context(self) -> Dict:
+        """
+        🏛️ EMPIRE V13.6: Memory of 20 Events
+        Fetches 10 last skipped trades and 10 last history trades.
+        Returns only: asset, time, reason, status.
+        """
+        try:
+            # 1. Fetch last 10 skipped
+            skipped_resp = self.aws.skipped_table.scan(Limit=50)
+            skipped_raw = sorted(skipped_resp.get('Items', []), key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
+            
+            skipped = []
+            for s in skipped_raw:
+                skipped.append({
+                    'asset': s.get('Symbol') or s.get('Pair'),
+                    'time': s.get('timestamp'),
+                    'reason': s.get('Reason'),
+                    'status': 'SKIPPED'
+                })
+
+            # 2. Fetch last 10 history (Open/Closed)
+            history_resp = self.aws.trades_table.scan(Limit=50)
+            history_raw = sorted(history_resp.get('Items', []), key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
+            
+            history = []
+            for h in history_raw:
+                status = h.get('Status', 'UNKNOWN').upper()
+                reason = h.get('ExitReason') if status == 'CLOSED' else h.get('Reason')
+                history.append({
+                    'asset': h.get('Symbol') or h.get('Pair'),
+                    'time': h.get('timestamp') or h.get('Timestamp'),
+                    'reason': reason,
+                    'status': status
+                })
+            
+            return {
+                'skipped': from_decimal(skipped),
+                'history': from_decimal(history)
+            }
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch history context: {e}")
+            return {'skipped': [], 'history': []}
+
 # ==================== ENGINE ====================
 
 class TradingEngine:
@@ -359,7 +402,7 @@ class TradingEngine:
                 json.dump(cache, f)
         except Exception as e: logger.warning(f"[WARN] Failed to save OHLCV cache: {e}")
     
-    def run_cycle(self, symbol: str) -> Dict:
+    def run_cycle(self, symbol: str, btc_rsi: Optional[float] = None) -> Dict:
         # Resolve to canonical symbol early (Audit #V11.6.8)
         symbol = self.exchange.resolve_symbol(symbol)
         asset_class = classify_asset(symbol)  # Define early for logging
@@ -539,10 +582,15 @@ class TradingEngine:
                     self.persistence.log_skipped_trade(symbol, reason, asset_class)
                     return {'symbol': symbol, 'status': 'NO_SIGNAL', 'score': ta_result.get('score')}
 
+            # EMPIRE V13.6: Fetch Memory Context
+            history_context = self.persistence.get_history_context()
+
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
                 capital=balance, direction=direction, asset_class=asset_class,
-                news_score=news_score, macro_regime=macro.get('regime', 'NORMAL')
+                news_score=news_score, macro_regime=macro.get('regime', 'NORMAL'),
+                btc_rsi=btc_rsi,
+                history_context=history_context
             )
             
             if not decision['proceed']:
@@ -553,11 +601,19 @@ class TradingEngine:
             # MAX_OPEN_TRADES enforcement (V13.4 - prevent position overflow)
             real_positions = self._get_real_binance_positions()
             open_count = max(len(positions), len(real_positions))
+            
             if open_count >= TradingConfig.MAX_OPEN_TRADES:
-                reason = f"MAX_OPEN_TRADES reached ({open_count}/{TradingConfig.MAX_OPEN_TRADES})"
-                logger.warning(f"[SLOT_FULL] {reason}")
-                self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
+                # 🏛️ EMPIRE V13.5: Early Exit for Opportunity (75% / Score+)
+                # Before skipping, check if we can free a slot by removing a stagnating trade
+                if self._evaluate_early_exit_for_opportunity(positions, symbol, ta_result, decision):
+                    # Successfully freed a slot!
+                    open_count -= 1
+                    logger.info(f"[EARLY_EXIT_SUCCESS] Slot freed for {symbol}")
+                else:
+                    reason = f"MAX_OPEN_TRADES reached ({open_count}/{TradingConfig.MAX_OPEN_TRADES})"
+                    logger.warning(f"[SLOT_FULL] {reason}")
+                    self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                    return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
             
             # TRIM & SWITCH: If we have a high-confidence signal but low capital, consider trimming positions
             if positions and balance < 500 and decision['confidence'] >= 0.75:
@@ -661,6 +717,8 @@ class TradingEngine:
             'direction': direction, 'stop_loss': sl, 'take_profit': tp,
             'asset_class': asset_class,
             'risk_dollars': decision['risk_dollars'],
+            'score': ta_result.get('score', 0),
+            'ai_score': int(decision.get('confidence', 0) * 100),
             'entry_time': datetime.now(timezone.utc).isoformat()
         }
         self.persistence.save_position(symbol, pos_data)
@@ -766,6 +824,113 @@ class TradingEngine:
             new_decision,
             current_balance
         )
+
+    def _evaluate_early_exit_for_opportunity(self, positions: Dict, new_symbol: str, new_ta: Dict, new_decision: Dict) -> bool:
+        """
+        🏛️ EMPIRE RULE: "Early Exit for Opportunity" (75% / Score+)
+        Allows closing a stagnating trade to free a slot for a much better one.
+        """
+        new_score = new_ta.get('score', 0)
+        new_ai_score = int(new_decision.get('confidence', 0) * 100)
+        
+        candidates = []
+        for symbol, pos in positions.items():
+            try:
+                # 1. Check Stagnation (PnL entre -0,15% et +0,15%)
+                ticker = self.exchange.fetch_ticker(symbol)
+                current_price = float(ticker['last'])
+                entry_price = float(pos.get('entry_price', 0))
+                direction = pos['direction']
+                
+                if direction == 'LONG':
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                
+                if not (-0.15 <= pnl_pct <= 0.15):
+                    continue
+                
+                # 2. Check Time Threshold (75% du MAX_TIME_EXIT)
+                entry_time_str = pos.get('entry_time')
+                if not entry_time_str: continue
+                
+                entry_time = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
+                time_open_min = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
+                
+                asset_class = pos.get('asset_class', 'crypto')
+                threshold_map = {
+                    'crypto': 20,
+                    'indices': 30,
+                    'commodities': 90,
+                    'forex': 60
+                }
+                max_time = threshold_map.get(asset_class, 60)
+                time_trigger = max_time * 0.75
+                
+                if time_open_min < time_trigger:
+                    continue
+                
+                # 3. Check Score Delta (+10 points)
+                old_score = pos.get('score', 0)
+                old_ai_score = pos.get('ai_score', 0)
+                
+                score_better = (new_score >= old_score + 10)
+                ai_better = (new_ai_score >= old_ai_score + 10)
+                
+                if score_better or ai_better:
+                    candidates.append({
+                        'symbol': symbol,
+                        'pnl_pct': pnl_pct,
+                        'time_open': time_open_min,
+                        'delta_score': new_score - old_score,
+                        'delta_ai': new_ai_score - old_ai_score,
+                        'pos_data': pos
+                    })
+            except Exception as e:
+                logger.error(f"[EARLY_EXIT_ERR] Failed to evaluate {symbol}: {e}")
+                continue
+        
+        if not candidates:
+            return False
+            
+        candidates.sort(key=lambda x: x['time_open'], reverse=True)
+        winner = candidates[0]
+        
+        reason = f"EARLY_EXIT for {new_symbol}: {winner['symbol']} stagnating ({winner['time_open']:.0f}m, {winner['pnl_pct']:+.2f}%)"
+        logger.warning(f"🏛️ [EARLY_EXIT] {reason} | Score+{winner['delta_score']}, AI+{winner['delta_ai']}")
+        
+        return self._close_position(winner['symbol'], winner['pos_data'], reason)
+
+    def _close_position(self, symbol: str, pos: Dict, reason: str) -> bool:
+        """Unifie la logique de fermeture de position Binance + DynamoDB"""
+        try:
+            ticker = self.exchange.fetch_ticker(symbol)
+            current_price = float(ticker['last'])
+            
+            binance_detail = self._get_binance_position_detail(symbol)
+            if not binance_detail:
+                logger.error(f"[CLOSE_ERR] No position found on Binance for {symbol}")
+                self.persistence.delete_position(symbol)
+                return False
+                
+            real_qty = binance_detail['quantity']
+            direction = pos['direction']
+            exit_side = 'sell' if direction == 'LONG' else 'buy'
+            
+            exit_order = self.exchange.create_market_order(symbol, exit_side, real_qty)
+            exit_price = float(exit_order.get('average', current_price))
+            
+            self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))
+            pnl = self.risk_manager.close_trade(symbol, exit_price)
+            self.persistence.save_risk_state(self.risk_manager.get_state())
+            self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason)
+            self.persistence.delete_position(symbol)
+            
+            logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f}")
+            return True
+        except Exception as e:
+            logger.error(f"[CLOSE_FAILED] {symbol}: {e}")
+            return False
     
     def _manage_positions(self, positions: Dict):
         logger.info(f"\n{'='*70}\n[INFO] POSITION MANAGEMENT\n{'='*70}")
@@ -896,32 +1061,8 @@ class TradingEngine:
                     
                     logger.warning(f"[ALERT] EXIT: {symbol} - {reason}")
                     
-                    # BINANCE SYNC: Verify position exists on Binance before closing (source of truth)
-                    binance_detail = self._get_binance_position_detail(symbol)
-                    if not binance_detail:
-                        logger.error(f"[BINANCE_SYNC] {symbol} — No position found on Binance! Cleaning DynamoDB ghost.")
-                        self.persistence.log_trade_close(pos['trade_id'], current_price, 0, f"GHOST: DynamoDB-only, no Binance position (original: {reason})")
-                        self.persistence.delete_position(symbol)
-                        del positions[symbol]
-                        continue
-                    
-                    # Use real Binance quantity (source of truth, not DynamoDB)
-                    real_qty = binance_detail['quantity']
-                    if real_qty != float(pos.get('quantity', 0)):
-                        logger.warning(f"[BINANCE_SYNC] {symbol} qty mismatch: DB={pos.get('quantity')} vs Binance={real_qty}. Using Binance.")
-                    
-                    exit_side = 'sell' if direction == 'LONG' else 'buy'
-                    exit_order = self.exchange.create_market_order(symbol, exit_side, real_qty)
-                    exit_price = float(exit_order.get('average', current_price))
-                    
-                    self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))
-                    
-                    pnl = self.risk_manager.close_trade(symbol, exit_price)
-                    self.persistence.save_risk_state(self.risk_manager.get_state())
-                    self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason)
-                    self.persistence.delete_position(symbol)
+                    self._close_position(symbol, pos, reason)
                     del positions[symbol]
-                    logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
                 else:
                     logger.info(f"[HOLD] {symbol} | PnL: {pnl_pct:+.2f}% | Time: {entry_time_str[:16] if entry_time_str else 'N/A'}")
 
@@ -933,9 +1074,7 @@ def lambda_handler(event, context):
     try:
         engine = TradingEngine()
         
-        # Get symbols from event or environment variable (11 symbols - V13.2 Binance Validated)
-        # Pump/News (1): DOGE | Tech L1 (1): AVAX | Oracle (1): LINK | Leaders (5): BTC, ETH, SOL, XRP, BNB | RWA (1): PAXG | Indices (1): SPX | Parking (1): USDC
-        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,USDC/USDT:USDT')
+        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,PAXG/USDT:USDT,OIL/USDT:USDT,SPX/USDT:USDT,DAX/USDT:USDT,EUR/USD:USDT,USDC/USDT:USDT')
         symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
         
         logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
@@ -949,7 +1088,19 @@ def lambda_handler(event, context):
             new_state['last_reset_date'] = today
             engine.persistence.save_risk_state(new_state)
 
-        results = [engine.run_cycle(s) for s in symbols]
+        # 🏛️ EMPIRE V13.5: Fetch BTC RSI for the Bedrock Matrix Filter
+        btc_rsi = None
+        try:
+            # We use the smart cache to avoid wasting time/latency
+            btc_ohlcv = engine._get_ohlcv_smart('BTC/USDT:USDT', '1h')
+            # Fix: classify_asset identifies BTC/USDT:USDT as crypto
+            btc_ta = analyze_market(btc_ohlcv, symbol='BTC/USDT:USDT', asset_class=AssetClass.CRYPTO)
+            btc_rsi = btc_ta.get('rsi')
+            logger.info(f"[BEDROCK] BTC Context: RSI={btc_rsi:.1f}")
+        except Exception as e:
+            logger.warning(f"[BEDROCK] Failed to fetch BTC RSI context: {e}")
+
+        results = [engine.run_cycle(s, btc_rsi=btc_rsi) for s in symbols]
         
         logger.info(f"[INFO] Scan complete: {len(results)} results")
         return {'statusCode': 200, 'body': json.dumps({'status': 'SUCCESS', 'results': results})}
