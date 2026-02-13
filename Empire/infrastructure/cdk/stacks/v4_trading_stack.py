@@ -67,10 +67,20 @@ class V4TradingStack(Stack):
             projection_type=dynamodb.ProjectionType.ALL
         )
         
-        # Unified History Table (EmpireTradesHistory) - OPEN/CLOSED trades only
-        unified_trades_table = dynamodb.Table.from_table_name(
-            self, "UnifiedEmpireTable",
-            table_name="EmpireTradesHistory"
+        # Trades History Table (OPEN/CLOSED only — V13.4 clean table)
+        unified_trades_table = dynamodb.Table(
+            self, "TradesHistoryTable",
+            table_name="EmpireTradesHistory",
+            partition_key=dynamodb.Attribute(
+                name="trader_id",
+                type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="timestamp",
+                type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
         )
         
         # Skipped Trades Table (séparation V13.4 - évite de polluer l'historique)

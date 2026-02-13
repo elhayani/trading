@@ -13,9 +13,10 @@ dynamodb = boto3.resource('dynamodb')
 config_table_name = os.environ.get('CONFIG_TABLE', 'EmpireConfig')
 config_table = dynamodb.Table(config_table_name)
  
-# Unified History Table
+# Trades History (OPEN/CLOSED only — V13.4)
 TABLES_TO_SCAN = ["EmpireTradesHistory"]
 trades_table = dynamodb.Table("EmpireTradesHistory")
+skipped_table = dynamodb.Table("EmpireSkippedTrades")
 
 # Global cache to mitigate API Gateway 30s timeout and DDB scan costs
 _TRADES_CACHE = {
@@ -263,10 +264,11 @@ def reconcile_trades(db_trades, binance_positions, exchange):
 
         if not is_active:
             reconciled_count += 1
-            print(f"🔍 Auto-Sync: Closing detected for {trade['Pair']} (TradeId: {trade.get('TradeId')})")
+            trade_id = trade.get('trader_id') or trade.get('TradeId', '')
+            print(f"🔍 Auto-Sync: Closing detected for {trade.get('Pair')} (TradeId: {trade_id})")
             
             # Fetch current price as exit price
-            exit_price = fetch_ticker_price(exchange, trade['Pair'])
+            exit_price = fetch_ticker_price(exchange, trade.get('Pair', trade.get('Symbol', '')))
             if exit_price == 0: continue
 
             # Calculate Final PnL
@@ -281,30 +283,31 @@ def reconcile_trades(db_trades, binance_positions, exchange):
                 else:
                     pnl = (exit_price - entry_price) * size
             
-            # Update DynamoDB
+            # Update DynamoDB (V13.4: keys are trader_id + timestamp)
             try:
-                # Use Decimal for DynamoDB - Solid string conversion + clean rounding
                 pnl_decimal = Decimal(str(round(float(pnl), 2)))
                 exit_decimal = Decimal(str(float(exit_price)))
                 
+                key = {
+                    'trader_id': str(trade.get('trader_id', trade.get('TradeId', ''))),
+                    'timestamp': str(trade.get('timestamp', trade.get('Timestamp', '')))
+                }
+                
                 table.update_item(
-                    Key={
-                        'TradeId': str(trade['TradeId']),
-                        'Timestamp': str(trade['Timestamp'])
-                    },
-                    UpdateExpression="SET #s = :s, ExitPrice = :ep, PnL = :p, ClosedAt = :c, AI_Reason = :r",
+                    Key=key,
+                    UpdateExpression="SET #s = :s, ExitPrice = :ep, PnL = :p, ClosedAt = :c, ExitReason = :r",
                     ExpressionAttributeNames={'#s': 'Status'},
                     ExpressionAttributeValues={
                         ':s': 'CLOSED',
                         ':ep': exit_decimal,
                         ':p': pnl_decimal,
                         ':c': str(get_paris_time().isoformat()),
-                        ':r': "Auto-Reconciled: Closed on Binance"
+                        ':r': 'Auto-Reconciled: Closed on Binance'
                     }
                 )
-                print(f"✅ Synced: {trade['Pair']} CLOSED PnL={pnl}")
+                print(f"✅ Synced: {trade.get('Pair')} CLOSED PnL={pnl}")
             except Exception as e:
-                print(f"❌ Error syncing trade {trade['TradeId']}: {e}")
+                print(f"❌ Error syncing trade {trade_id}: {e}")
 
 
 def fetch_current_price(symbol, asset_class):
@@ -967,10 +970,20 @@ def lambda_handler(event, context):
                     trade['CurrentPrice'] = current_price
                     trade['Value'] = float(trade.get('Size', 0) or 0) * current_price
 
-        # 7. Skipped Trades (Audit #V11.6: Last 200 Skips for better visibility)
-        # We extract these separately to avoid them being hidden by the "4+ occurrences" filter of the history tab
-        skipped_trades = [t for t in all_trades_from_db if (t.get('Status', '').upper() == 'SKIPPED' or 'SKIP' in t.get('Status', '').upper())]
-        skipped_trades = sorted(skipped_trades, key=lambda x: x.get('Timestamp', ''), reverse=True)[:200]
+        # 7. Skipped Trades (V13.4: read from separate EmpireSkippedTrades table)
+        try:
+            skip_response = skipped_table.scan(Limit=200)
+            skipped_trades = skip_response.get('Items', [])
+            for skip in skipped_trades:
+                skip['Source'] = 'SKIPPED_TABLE'
+                if not skip.get('Timestamp'):
+                    skip['Timestamp'] = skip.get('timestamp', '')
+                if not skip.get('Pair'):
+                    skip['Pair'] = skip.get('Symbol', '')
+            skipped_trades = sorted(skipped_trades, key=lambda x: x.get('Timestamp', x.get('timestamp', '')), reverse=True)[:200]
+        except Exception as e:
+            print(f"⚠️ Error reading skipped trades: {e}")
+            skipped_trades = []
 
         # 8. Final Response
         response_body = {

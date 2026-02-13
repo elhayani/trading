@@ -22,21 +22,15 @@ class EmpireDashboardStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # =====================================================================
-        # DynamoDB: Empire Trades History (Source of Truth)
+        # DynamoDB: Trades Tables (V13.4 — managed by V4TradingStack)
         # =====================================================================
-        trades_table = dynamodb.Table(
+        trades_table = dynamodb.Table.from_table_name(
             self, "EmpireTradesHistory",
-            table_name="EmpireTradesHistory",  # Fixed name for easy access by other stacks
-            partition_key=dynamodb.Attribute(
-                name="TradeId",
-                type=dynamodb.AttributeType.STRING
-            ),
-            sort_key=dynamodb.Attribute(
-                name="Timestamp",
-                type=dynamodb.AttributeType.STRING
-            ),
-            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.RETAIN, # Don't delete data if stack is destroyed
+            table_name="EmpireTradesHistory"
+        )
+        skipped_table = dynamodb.Table.from_table_name(
+            self, "EmpireSkippedTrades",
+            table_name="EmpireSkippedTrades"
         )
 
         # Config Table (Panic Switch State)
@@ -80,7 +74,8 @@ class EmpireDashboardStack(Stack):
         )
         
         # Grant Permissions
-        trades_table.grant_read_data(api_lambda)
+        trades_table.grant_read_write_data(api_lambda)
+        skipped_table.grant_read_data(api_lambda)
         config_table.grant_read_write_data(api_lambda)
         
         # Grant CloudWatch Logs permissions
