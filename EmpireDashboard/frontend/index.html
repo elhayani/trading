@@ -256,10 +256,12 @@
             const activeBtn = document.getElementById(`tab-${tab}`);
             if (activeBtn) activeBtn.className = "px-6 py-3 font-bold text-sm transition-all border-b-2 border-blue-500 text-blue-400";
 
-            if (tab === 'live' || tab === 'transactions') {
-                filters.classList.add('hidden');
-            } else {
-                filters.classList.remove('hidden');
+            if (filters) {
+                if (tab === 'live' || tab === 'transactions') {
+                    filters.classList.add('hidden');
+                } else {
+                    filters.classList.remove('hidden');
+                }
             }
 
             if (tab === 'cloudwatch') {
@@ -437,8 +439,8 @@
         }
 
         function applyFilters() {
-            const monthFilter = document.getElementById('monthFilter').value;
-            const statusFilter = document.getElementById('statusFilter').value;
+            const monthFilter = (document.getElementById('monthFilter') || {}).value || 'ALL';
+            const statusFilter = (document.getElementById('statusFilter') || {}).value || 'ALL';
             let filteredTrades = [];
             if (currentTab === 'live') {
                 filteredTrades = allTrades.filter(t => (t.Status || '').toUpperCase() === 'OPEN');
