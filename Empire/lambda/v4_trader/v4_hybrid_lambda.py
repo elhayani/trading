@@ -797,8 +797,8 @@ class TradingEngine:
                             should_exit_time = True
                             logger.warning(f"[TIME_EXIT] {symbol} ({asset_class}) open {time_open_hours*60:.0f}min - auto-close (PnL: {pnl_pct:+.2f}%)")
                         
-                        # FAST_DISCARD: >15min AND PnL < 0.10% (libérer capital si momentum absent)
-                        if time_open_minutes > 15 and pnl_pct < 0.10:
+                        # FAST_DISCARD: >10min AND PnL < 0.10% (libérer capital si momentum absent)
+                        if time_open_minutes > 10 and pnl_pct < 0.10:
                             should_exit_fast_discard = True
                             logger.warning(f"[FAST_DISCARD] {symbol} open {time_open_minutes:.0f}min with only {pnl_pct:+.2f}% - no momentum")
                     except: pass
