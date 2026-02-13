@@ -44,31 +44,43 @@ class RiskManager:
         if capital > 0 and abs(self.daily_pnl / capital) >= TradingConfig.MAX_DAILY_LOSS_PCT:
             return self._blocked("DAILY_LOSS_LIMIT", stop_loss_price)
 
-        # 2. Risk budget
+        # 2. Puissance de Frappe (Striking Power) - 🏛️ EMPIRE V13.8
+        # Logic: Position Size = (Capital / Slots) * Leverage * Confidence
+        # This ensures that lev x3 means "3x the allocated margin"
         confidence = max(TradingConfig.MIN_CONFIDENCE, min(TradingConfig.MAX_CONFIDENCE, confidence))
-        risk_budget = capital * TradingConfig.MAX_LOSS_PER_TRADE * confidence
+        margin_per_slot = capital / TradingConfig.MAX_OPEN_TRADES
+        target_notional = margin_per_slot * leverage * confidence
+        quantity = target_notional / entry_price
 
-        # 3. Distance to stop
+        # 3. Risk budget and distance to stop
         eff_entry = entry_price * (1 + self.slippage_buffer) if direction == "LONG" else entry_price * (1 - self.slippage_buffer)
         price_risk = abs(eff_entry - stop_loss_price)
         
         min_risk = max(entry_price * 0.001, atr * 0.5) if atr > 0 else (entry_price * 0.001)
         if price_risk < min_risk: return self._blocked("STOP_TOO_TIGHT", stop_loss_price)
 
-        quantity = risk_budget / price_risk
-
-        # 4. Portfolio cap (Note: Atomic layer in persistence handles concurrent enforce)
-        total_risk = sum(t["risk"] for t in self.active_trades.values())
-        available = (capital * TradingConfig.MAX_PORTFOLIO_RISK_PCT) - total_risk
+        # 4. Safety Cap: Do not exceed MAX_LOSS_PER_TRADE
+        risk_budget = capital * TradingConfig.MAX_LOSS_PER_TRADE * confidence
+        risk_quantity = risk_budget / price_risk
         
-        if available <= 0: return self._blocked("PORTFOLIO_RISK_CAP", stop_loss_price)
-        if risk_budget > available:
-            risk_budget = available
-            quantity = risk_budget / price_risk
+        if quantity > risk_quantity:
+            logger.warning(f"[RISK] Throttling quantity from {quantity:.4f} to {risk_quantity:.4f} (Risk Cap 2%)")
+            quantity = risk_quantity
+
+        # 5. Portfolio cap
+        total_risk = sum(t["risk"] for t in self.active_trades.values())
+        available_risk = (capital * TradingConfig.MAX_PORTFOLIO_RISK_PCT) - total_risk
+        
+        if available_risk <= 0: return self._blocked("PORTFOLIO_RISK_CAP", stop_loss_price)
+        
+        current_risk = quantity * price_risk
+        if current_risk > available_risk:
+            quantity = available_risk / price_risk
+            current_risk = quantity * price_risk
 
         return {
             "quantity": round(quantity, 8),
-            "risk_dollars": round(risk_budget, 2),
+            "risk_dollars": round(current_risk, 2),
             "stop_loss": stop_loss_price,
             "estimated_commission": round(quantity * entry_price * self.commission_rate * 2, 2),
             "blocked": False, "reason": "OK", "direction": direction

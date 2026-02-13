@@ -67,35 +67,48 @@ logger = logging.getLogger(__name__)
 # ==================== CONSTANTS ====================
 
 ALL_ASSETS = [
-    # Crypto (6)
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
-    'BNB/USDT:USDT', 'DOGE/USDT:USDT',
+    # Crypto Leaders (5)
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT',
+    # Elite Crypto (5)
+    'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT', 'DOT/USDT:USDT', 'POL/USDT:USDT',
+    # Retail / News (1)
+    'DOGE/USDT:USDT',
     # Commodities (2)
     'PAXG/USDT:USDT', 'OIL/USDT:USDT',
-    # Indices (2)
-    'SPX/USDT:USDT', 'DAX/USDT:USDT',
-    # Forex (1)
-    'EUR/USD:USDT',
+    # Indices (3)
+    'SPX/USDT:USDT', 'DAX/USDT:USDT', 'NDX/USDT:USDT',
+    # Forex (3)
+    'EUR/USD:USDT', 'GBP/USD:USDT', 'USD/JPY:USDT',
     # Stable (1)
     'USDC/USDT:USDT'
 ]
 
 BASE_PRICES = {
-    # Crypto
+    # Crypto Leaders
     'BTC/USDT:USDT': 97000.0,
     'ETH/USDT:USDT': 2650.0,
     'SOL/USDT:USDT': 195.0,
-    'XRP/USDT:USDT': 2.45,
     'BNB/USDT:USDT': 580.0,
+    'XRP/USDT:USDT': 2.45,
+    # Elite Crypto
+    'AVAX/USDT:USDT': 42.50,
+    'LINK/USDT:USDT': 18.20,
+    'ADA/USDT:USDT': 0.85,
+    'DOT/USDT:USDT': 7.60,
+    'POL/USDT:USDT': 0.55,
+    # Retail
     'DOGE/USDT:USDT': 0.25,
     # Commodities
-    'PAXG/USDT:USDT': 2920.0,  # Gold
-    'OIL/USDT:USDT': 72.5,     # WTI Crude
+    'PAXG/USDT:USDT': 2920.0,
+    'OIL/USDT:USDT': 72.5,
     # Indices
-    'SPX/USDT:USDT': 6050.0,   # S&P 500
-    'DAX/USDT:USDT': 22100.0,  # GER40
+    'SPX/USDT:USDT': 6050.0,
+    'DAX/USDT:USDT': 22100.0,
+    'NDX/USDT:USDT': 21400.0,
     # Forex
-    'EUR/USD:USDT': 1.0450,    # EUR/USD
+    'EUR/USD:USDT': 1.0450,
+    'GBP/USD:USDT': 1.2650,
+    'USD/JPY:USDT': 152.0,
     # Stable
     'USDC/USDT:USDT': 1.0001,
 }
@@ -128,7 +141,11 @@ def generate_ohlcv(base_price: float, scenario: str = 'neutral', num_candles: in
         close_price = price * (1 + change)
         high = max(open_price, close_price) * (1 + random.uniform(0.0005, 0.002))
         low = min(open_price, close_price) * (1 - random.uniform(0.0005, 0.002))
-        volume = random.uniform(500, 2000) * (base_price / 100)
+        # 🏛️ EMPIRE V13.7: Stable volume with a strong spike to guarantee passing the filter
+        volume = 1000.0 * (base_price / 100)
+        if i == num_candles - 1:
+            volume *= 3.0
+        
         candles.append([ts, open_price, high, low, close_price, volume])
         price = close_price
     return candles
@@ -205,19 +222,35 @@ BATCHES = [
         'BTC/USDT:USDT': {'scenario': 'oversold', 'news': 0.5, 'expected_signal': 'LONG'},
         'ETH/USDT:USDT': {'scenario': 'overbought', 'news': -0.3, 'expected_signal': 'SHORT'},
         'SOL/USDT:USDT': {'scenario': 'neutral', 'news': 0.0, 'expected_signal': 'NEUTRAL'},
+        'BNB/USDT:USDT': {'scenario': 'oversold', 'news': 0.4, 'expected_signal': 'LONG'},
         'XRP/USDT:USDT': {'scenario': 'oversold', 'news': 0.2, 'expected_signal': 'LONG'},
     }},
-    {'name': 'Batch 2: Crypto Alts + Indices', 'assets': {
-        'BNB/USDT:USDT': {'scenario': 'oversold', 'news': 0.4, 'expected_signal': 'LONG'},
-        'DOGE/USDT:USDT': {'scenario': 'overbought', 'news': -0.5, 'expected_signal': 'SHORT'},
+    {'name': 'Batch 2: Elite Alts', 'assets': {
+        'AVAX/USDT:USDT': {'scenario': 'oversold', 'news': 0.3, 'expected_signal': 'LONG'},
+        'LINK/USDT:USDT': {'scenario': 'overbought', 'news': -0.2, 'expected_signal': 'SHORT'},
+        'ADA/USDT:USDT': {'scenario': 'oversold', 'news': 0.1, 'expected_signal': 'LONG'},
+        'DOT/USDT:USDT': {'scenario': 'neutral', 'news': 0.0, 'expected_signal': 'NEUTRAL'},
+        'POL/USDT:USDT': {'scenario': 'oversold', 'news': 0.2, 'expected_signal': 'LONG'},
+    }},
+    {'name': 'Batch 3: Macro & Indices', 'assets': {
         'SPX/USDT:USDT': {'scenario': 'oversold', 'news': 0.3, 'expected_signal': 'LONG'},
         'DAX/USDT:USDT': {'scenario': 'overbought', 'news': -0.2, 'expected_signal': 'SHORT'},
+        'NDX/USDT:USDT': {'scenario': 'oversold', 'news': 0.5, 'expected_signal': 'LONG'},
+        'PAXG/USDT:USDT': {'scenario': 'oversold', 'news': 0.1, 'expected_signal': 'LONG'},
+        'OIL/USDT:USDT': {'scenario': 'overbought', 'news': -0.1, 'expected_signal': 'SHORT'},
     }},
-    {'name': 'Batch 3: Bedrock Matrix (BTC Pump)', 'btc_rsi': 85.0, 'assets': {
+    {'name': 'Batch 4: Forex & Retail', 'assets': {
+        'EUR/USD:USDT': {'scenario': 'oversold', 'news': 0.0, 'expected_signal': 'LONG'},
+        'GBP/USD:USDT': {'scenario': 'overbought', 'news': -0.1, 'expected_signal': 'SHORT'},
+        'USD/JPY:USDT': {'scenario': 'oversold', 'news': 0.2, 'expected_signal': 'LONG'},
+        'DOGE/USDT:USDT': {'scenario': 'overbought', 'news': -0.5, 'expected_signal': 'SHORT'},
+        'USDC/USDT:USDT': {'scenario': 'neutral', 'news': 0.0, 'expected_signal': 'NEUTRAL'},
+    }},
+    {'name': 'Batch 5: Bedrock Matrix (BTC Pump)', 'btc_rsi': 85.0, 'assets': {
         'ETH/USDT:USDT': {'scenario': 'overbought', 'news': -0.1, 'expected_signal': 'BLOCK_SHORT'},
         'SOL/USDT:USDT': {'scenario': 'oversold', 'news': 0.2, 'expected_signal': 'LONG'},
     }},
-    {'name': 'Batch 4: Bedrock Matrix (BTC Crash)', 'btc_rsi': 15.0, 'assets': {
+    {'name': 'Batch 6: Bedrock Matrix (BTC Crash)', 'btc_rsi': 15.0, 'assets': {
         'BNB/USDT:USDT': {'scenario': 'oversold', 'news': 0.1, 'expected_signal': 'BLOCK_LONG'},
         'DOGE/USDT:USDT': {'scenario': 'overbought', 'news': -0.2, 'expected_signal': 'SHORT'},
     }},
@@ -275,8 +308,8 @@ class IntegrationTest:
         order = self.mock_exchange.create_market_order(symbol, 'sell' if direction == 'SHORT' else 'buy', decision['quantity'], leverage=TradingConfig.LEVERAGE)
         tp = float(order['average']) * (1.003 if direction == 'LONG' else 0.997)
         sl = float(order['average']) * (0.996 if direction == 'LONG' else 1.004)
-        self.persistence.log_trade_open(trade_id, symbol, asset_class, direction, float(order['average']), float(order['filled']), float(order['filled'])*float(order['average']), tp, sl, TradingConfig.LEVERAGE, reason=f"RSI={ta_result.get('rsi',0):.1f}")
-        self.persistence.save_position(symbol, {'trade_id': trade_id, 'entry_price': float(order['average']), 'quantity': float(order['filled']), 'direction': direction, 'stop_loss': sl, 'take_profit': tp, 'asset_class': str(asset_class)})
+        self.persistence.log_trade_open(trade_id, symbol, asset_class, direction, float(order['average']), float(order['filled']), float(order['filled'])*float(order['average']), tp, sl, TradingConfig.LEVERAGE, reason=f"RSI={ta_result.get('rsi',0):.1f}", is_test=True)
+        self.persistence.save_position(symbol, {'trade_id': trade_id, 'entry_price': float(order['average']), 'quantity': float(order['filled']), 'direction': direction, 'stop_loss': sl, 'take_profit': tp, 'asset_class': str(asset_class)}, is_test=True)
         return {'symbol': symbol, 'status': f'{direction}_OPEN', 'reason': '', 'ta': ta_result}
 
     def run_all(self):
@@ -300,6 +333,8 @@ class IntegrationTest:
                 res = self._run_cycle(engine, symbol, btc_rsi=btc_rsi)
                 status, reason = res['status'], res.get('reason', '')
                 print(f"  🔄 {symbol}: Status={status} | Reason={reason}")
+                if 'BLOCKED' in status or 'NO_SIGNAL' in status or 'SLOT_FULL' in status:
+                    self.persistence.log_skipped_trade(symbol, reason or status, classify_asset(symbol), is_test=True)
                 if cfg['expected_signal'] == 'BLOCK_SHORT': self.test(f"{symbol} SHORT blocked", 'BLOCK_SHORT' in reason)
                 elif cfg['expected_signal'] == 'BLOCK_LONG': self.test(f"{symbol} LONG blocked", 'BLOCK_LONG' in reason)
                 elif 'OPEN' in status: total_opened += 1; self.test(f"{symbol} opened", True)
@@ -309,7 +344,7 @@ class IntegrationTest:
         positions = self.persistence.load_positions()
         for sym, pos in positions.items():
             self.mock_exchange.create_market_order(sym, 'sell' if pos['direction'] == 'LONG' else 'buy', pos['quantity'])
-            self.persistence.log_trade_close(pos['trade_id'], pos['entry_price'], 0, "Test Close")
+            self.persistence.log_trade_close(pos['trade_id'], pos['entry_price'], 0, "Test Close", is_test=True)
             self.persistence.delete_position(sym)
             self.test(f"{sym} closed", True)
 

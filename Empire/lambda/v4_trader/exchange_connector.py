@@ -203,3 +203,52 @@ class ExchangeConnector:
         except Exception as e:
             logger.error(f"[ERROR] Order execution failed: {e}")
             raise
+
+    def create_sl_tp_orders(self, symbol: str, side: str, amount: float, stop_loss: float, take_profit: float) -> Dict:
+        """🏛️ EMPIRE V13.9: Create GTC Sniper orders (LIMIT for TP, STOP_MARKET for SL)"""
+        results = {}
+        close_side = 'sell' if side.lower() == 'buy' else 'buy'
+        
+        try:
+            # 1. Stop Loss (STOP_MARKET) - Hardware Security
+            sl_order = self.exchange.create_order(
+                symbol=symbol,
+                type='STOP_MARKET',
+                side=close_side,
+                amount=amount,
+                params={
+                    'stopPrice': stop_loss,
+                    'reduceOnly': True,
+                    'workingType': 'MARK_PRICE' # 🏛️ Safety against wicks
+                }
+            )
+            results['sl'] = sl_order
+            logger.info(f"[GTC_SL] STOP_MARKET at ${stop_loss} ({close_side.upper()} {amount})")
+            
+            # 2. Take Profit (LIMIT) - Maximum Profit Guarantee
+            tp_order = self.exchange.create_order(
+                symbol=symbol,
+                type='LIMIT',
+                side=close_side,
+                amount=amount,
+                price=take_profit,
+                params={
+                    'reduceOnly': True,
+                    'timeInForce': 'GTC'
+                }
+            )
+            results['tp'] = tp_order
+            logger.info(f"[GTC_TP] LIMIT at ${take_profit} ({close_side.upper()} {amount})")
+            
+        except Exception as e:
+            logger.warning(f"[WARN] V13.9 Sniper orders failed: {e}")
+            
+        return results
+
+    def cancel_all_orders(self, symbol: str):
+        """🏛️ EMPIRE V13.9: Cancel all pending orders for a symbol (Reduce Only cleanup)"""
+        try:
+            self.exchange.cancel_all_orders(symbol)
+            logger.info(f"[CANCEL_ALL] Orders cleaned for {symbol}")
+        except Exception as e:
+            logger.warning(f"[WARN] Order cleanup failed for {symbol}: {e}")

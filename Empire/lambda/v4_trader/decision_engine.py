@@ -38,6 +38,11 @@ class DecisionEngine:
         if history_context:
             logger.info(f"[HISTORY_CONTEXT] Injected {len(history_context.get('skipped', []))} skipped and {len(history_context.get('history', []))} history events for analysis.")
         
+        # 🏛️ EMPIRE V13.7: Volume Elite Filter (Volume Surge Requirement)
+        vol_ratio = ta_result.get('vol_ratio', 1.0)
+        if vol_ratio < 1.3:
+            return False, f"Low Volume Momentum (Ratio: {vol_ratio:.1f}x < 1.3x)", 0.0
+        
         # 🏛️ EMPIRE V13.5: The Bedrock Matrix (BTC Unified Filter)
         if asset_class == AssetClass.CRYPTO and btc_rsi is not None and "BTC" not in symbol:
             direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'

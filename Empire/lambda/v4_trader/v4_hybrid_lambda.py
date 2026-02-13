@@ -104,7 +104,7 @@ class PersistenceLayer:
     def __init__(self, aws: AWSClients):
         self.aws = aws
     
-    def log_trade_open(self, trade_id, symbol, asset_class, direction, entry_price, size, cost, tp_price, sl_price, leverage, reason=None):
+    def log_trade_open(self, trade_id, symbol, asset_class, direction, entry_price, size, cost, tp_price, sl_price, leverage, reason=None, is_test=False):
         try:
             timestamp = datetime.now(timezone.utc).isoformat()
             item = {
@@ -122,16 +122,17 @@ class PersistenceLayer:
                 'StopLoss': sl_price,
                 'Leverage': leverage,
                 'Timestamp': timestamp,
-                'Status': 'OPEN'
+                'Status': 'OPEN',
+                'is_test': is_test
             }
             if reason:
                 item['Reason'] = reason
             
             self.aws.trades_table.put_item(Item=to_decimal(item))
-            logger.info(f"[DB] OPEN logged: {symbol} {direction} x{leverage} | Entry=${entry_price:.4f} | TP=${tp_price:.4f} | SL=${sl_price:.4f}")
+            logger.info(f"[DB] OPEN logged: {symbol} {direction} x{leverage} {'(TEST)' if is_test else ''} | Entry=${entry_price:.4f} | TP=${tp_price:.4f} | SL=${sl_price:.4f}")
         except Exception as e: logger.error(f"[ERROR] Failed to log trade: {e}")
     
-    def log_trade_close(self, trade_id, exit_price, pnl, reason):
+    def log_trade_close(self, trade_id, exit_price, pnl, reason, is_test=False):
         try:
             # Query by partition key (trader_id = trade_id) - O(1) instead of full table scan
             response = self.aws.trades_table.query(
@@ -147,20 +148,21 @@ class PersistenceLayer:
                 
                 self.aws.trades_table.update_item(
                     Key={'trader_id': trader_id, 'timestamp': timestamp},
-                    UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at',
+                    UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at, is_test = :is_test',
                     ExpressionAttributeNames={'#st': 'Status'},
                     ExpressionAttributeValues=to_decimal({
                         ':status': 'CLOSED', ':price': exit_price, ':pnl': pnl, ':reason': reason,
-                        ':closed_at': datetime.now(timezone.utc).isoformat()
+                        ':closed_at': datetime.now(timezone.utc).isoformat(),
+                        ':is_test': is_test
                     })
                 )
-                logger.info(f"[INFO] Logged CLOSE for {trade_id}: PnL={pnl}, Reason={reason}")
+                logger.info(f"[INFO] Logged CLOSE for {trade_id}: PnL={pnl}, Reason={reason} {'(TEST)' if is_test else ''}")
             else:
                 logger.warning(f"[WARN] Trade {trade_id} not found for close update")
         except Exception as e: 
             logger.error(f"[ERROR] Failed to log close: {e}")
 
-    def log_skipped_trade(self, symbol, reason, asset_class):
+    def log_skipped_trade(self, symbol, reason, asset_class, is_test=False):
         try:
             trade_id = f"SKIP-{uuid.uuid4().hex[:8]}"
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -174,23 +176,26 @@ class PersistenceLayer:
                 'AssetClass': asset_class,
                 'Status': 'SKIPPED',
                 'Reason': reason,
-                'ttl': ttl
+                'ttl': ttl,
+                'is_test': is_test
             }))
-            logger.info(f"[INFO] Logged SKIP for {symbol}: {reason}")
+            logger.info(f"[INFO] Logged SKIP for {symbol}: {reason} {'(TEST)' if is_test else ''}")
         except Exception as e: 
             logger.error(f"[ERROR] Failed to log skip: {e}")
     
-    def save_position(self, symbol, position_data):
+    def save_position(self, symbol, position_data, is_test=False):
         try:
             # Sanitize symbol for DynamoDB keys
             safe_symbol = symbol.replace('/', '_').replace(':', '-')
             # We add a 'status' field for GSI (Audit #V11.5)
             position_data['status'] = 'OPEN'
+            position_data['is_test'] = is_test
             self.aws.state_table.put_item(Item=to_decimal({
                 'trader_id': f'POSITION#{safe_symbol}', 
                 'position': position_data,
                 'status': 'OPEN',
-                'timestamp': datetime.now(timezone.utc).isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'is_test': is_test
             }))
         except Exception as e: logger.error(f"[ERROR] Failed to save position: {e}")
     
@@ -264,8 +269,8 @@ class PersistenceLayer:
         Returns only: asset, time, reason, status.
         """
         try:
-            # 1. Fetch last 10 skipped
-            skipped_resp = self.aws.skipped_table.scan(Limit=50)
+            # 1. Fetch last 10 skipped (exclude is_test=True)
+            skipped_resp = self.aws.skipped_table.scan(Limit=50, FilterExpression='attribute_not_exists(is_test) OR is_test = :f', ExpressionAttributeValues={':f': False})
             skipped_raw = sorted(skipped_resp.get('Items', []), key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
             
             skipped = []
@@ -277,8 +282,8 @@ class PersistenceLayer:
                     'status': 'SKIPPED'
                 })
 
-            # 2. Fetch last 10 history (Open/Closed)
-            history_resp = self.aws.trades_table.scan(Limit=50)
+            # 2. Fetch last 10 history (Open/Closed) (exclude is_test=True)
+            history_resp = self.aws.trades_table.scan(Limit=50, FilterExpression='attribute_not_exists(is_test) OR is_test = :f', ExpressionAttributeValues={':f': False})
             history_raw = sorted(history_resp.get('Items', []), key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
             
             history = []
@@ -653,7 +658,16 @@ class TradingEngine:
             order = self.exchange.create_market_order(symbol, side, quantity, leverage=leverage)
             real_entry = float(order.get('average', ta_result['price']))
             real_size = float(order.get('filled', quantity))
-            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {leverage}x)")
+            
+            # 🏛️ TACTICAL ALERT: Slippage Check
+            theoretical_price = float(ta_result['price'])
+            slippage_pct = abs((real_entry - theoretical_price) / theoretical_price) * 100
+            
+            if slippage_pct > 0.1:
+                logger.warning(f"⚠️ [TACTICAL_ALERT] High Entry Slippage: {slippage_pct:.3f}% for {symbol}")
+            else:
+                logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Slippage: {slippage_pct:.3f}%)")
+                
         except Exception as e:
             logger.error(f"[ERROR] Order failed: {e}")
             return {'symbol': symbol, 'status': 'ORDER_FAILED', 'error': str(e)}
@@ -692,6 +706,9 @@ class TradingEngine:
         
         logger.info(f"[SCALP] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({sl_pct*100:.2f}%)")
         
+        # 🏛️ EMPIRE V13.9: Place GTC SL/TP orders immediately on Binance
+        self.exchange.create_sl_tp_orders(symbol, side, real_size, sl, tp)
+        
         # Build detailed reason with technical indicators
         reason_parts = []
         if 'rsi' in ta_result:
@@ -708,7 +725,7 @@ class TradingEngine:
         
         self.persistence.log_trade_open(
             trade_id, symbol, asset_class, direction, real_entry, real_size,
-            real_size * real_entry, tp, sl, leverage,
+            (real_size * real_entry) / leverage, tp, sl, leverage,
             reason=detailed_reason
         )
         
@@ -923,8 +940,11 @@ class TradingEngine:
             self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))
             pnl = self.risk_manager.close_trade(symbol, exit_price)
             self.persistence.save_risk_state(self.risk_manager.get_state())
-            self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason)
+            self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason, is_test=pos.get('is_test', False))
             self.persistence.delete_position(symbol)
+            
+            # 🏛️ EMPIRE V13.9: Cleanup GTC orders
+            self.exchange.cancel_all_orders(symbol)
             
             logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f}")
             return True
@@ -937,14 +957,15 @@ class TradingEngine:
         for symbol, pos in list(positions.items()):
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
-                current_price = float(ticker['last'])
+                # 🏛️ EMPIRE V13.9: Use Mark Price for SL safety if available
+                current_price = float(ticker.get('markPrice', ticker.get('last', 0)))
+                if current_price == 0 and 'info' in ticker:
+                     current_price = float(ticker['info'].get('markPrice', ticker['last']))
+                
                 entry_price = float(pos.get('entry_price', 0))
                 direction = pos['direction']
                 
-                # Calculate current PnL % (ensure all values are float to avoid Decimal errors)
-                current_price = float(current_price)
-                entry_price = float(entry_price)
-                
+                # Calculate current PnL %
                 if direction == 'LONG':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
                 else:
@@ -956,15 +977,11 @@ class TradingEngine:
                 hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
                 hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
                 
-                # EMPIRE V12.6: "NOUVELLE PAGE BLANCHE" - 1% PROFIT PROTECTION
-                # Philosophy: Ne pas transformer un trade en mariage
-                # Exit at 1% forces re-evaluation: "Would I buy this asset NOW at this price?"
-                # If signal remains strong after exit, bot can re-enter (no cooldown blocks it)
-                # This allows capturing multiple 1% moves on same asset during strong trends
-                # Security: Profit is REAL on account before any re-entry decision
-                hit_profit_1pct = pnl_pct >= 1.0
-                if hit_profit_1pct:
-                    logger.warning(f"[PROFIT_1PCT] {symbol} reached +{pnl_pct:.2f}% - securing profit! (Nouvelle Page Blanche)")
+                # EMPIRE V13.9: "NOUVELLE PAGE BLANCHE" - 0.5% PROFIT PROTECTION
+                # Philosophy: Securing profits at the Sniper threshold (0.5%)
+                hit_profit_sniper = pnl_pct >= 0.5
+                if hit_profit_sniper:
+                    logger.warning(f"🏛️ [SNIPER_PROFIT] {symbol} reached +{pnl_pct:.2f}% - securing profit! (Nouvelle Page Blanche)")
                 
                 # EMPIRE V12.3: Time-based exits
                 entry_time_str = pos.get('entry_time', '')
@@ -1002,10 +1019,11 @@ class TradingEngine:
                             should_exit_time = True
                             logger.warning(f"[TIME_EXIT] {symbol} ({asset_class}) open {time_open_hours*60:.0f}min - auto-close (PnL: {pnl_pct:+.2f}%)")
                         
-                        # FAST_DISCARD: >10min AND PnL < 0.10% (libérer capital si momentum absent)
-                        if time_open_minutes > 10 and pnl_pct < 0.10:
+                        # 🏛️ EMPIRE V13.7: FAST DISCARD (Momentum Required)
+                        # If after 10 minutes, PnL is stagnant near zero (-0.05% to +0.05%), release the slot.
+                        if time_open_minutes >= 10 and -0.05 <= pnl_pct <= 0.05:
                             should_exit_fast_discard = True
-                            logger.warning(f"[FAST_DISCARD] {symbol} open {time_open_minutes:.0f}min with only {pnl_pct:+.2f}% - no momentum")
+                            logger.warning(f"🏛️ [FAST_DISCARD] {symbol} stagnant at {pnl_pct:+.2f}% after 10m. Releasing slot.")
                     except: pass
                 
                 # Optional: Claude analysis for exit decision
@@ -1041,14 +1059,14 @@ class TradingEngine:
                         logger.warning(f"[CLAUDE] Exit analysis failed: {e}")
                 
                 # Exit if any condition is met
-                if hit_sl or hit_tp or hit_profit_1pct or should_exit_time or should_exit_fast_discard or should_exit_claude:
+                if hit_sl or hit_tp or hit_profit_sniper or should_exit_time or should_exit_fast_discard or should_exit_claude:
                     # Build detailed close reason
                     if hit_sl:
-                        reason = f"Stop Loss hit at ${current_price:.2f} (SL: ${stop_loss:.2f}, PnL: {pnl_pct:+.2f}%)"
+                        reason = f"Stop Loss hit at ${current_price:.2f} (SL: ${stop_loss:.2f} Mark, PnL: {pnl_pct:+.2f}%)"
                     elif hit_tp:
                         reason = f"Take Profit hit at ${current_price:.2f} (TP: ${take_profit:.2f}, PnL: {pnl_pct:+.2f}%)"
-                    elif hit_profit_1pct:
-                        reason = f"1% Profit Protection (PnL: {pnl_pct:+.2f}%, Entry: ${entry_price:.2f})"
+                    elif hit_profit_sniper:
+                        reason = f"V13.9 Sniper Profit 0.5% (PnL: {pnl_pct:+.2f}%, Entry: ${entry_price:.2f})"
                     elif should_exit_fast_discard:
                         duration_min = time_open_minutes if 'time_open_minutes' in locals() else 0
                         reason = f"Fast Discard after {duration_min:.0f}min (PnL: {pnl_pct:+.2f}%, no momentum)"
@@ -1074,7 +1092,8 @@ def lambda_handler(event, context):
     try:
         engine = TradingEngine()
         
-        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,PAXG/USDT:USDT,OIL/USDT:USDT,SPX/USDT:USDT,DAX/USDT:USDT,EUR/USD:USDT,USDC/USDT:USDT')
+        default_symbols = ",".join(TradingConfig.EMPIRE_ASSETS.keys())
+        symbols_str = event.get('symbols') or os.getenv('SYMBOLS') or default_symbols
         symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
         
         logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
@@ -1100,7 +1119,14 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.warning(f"[BEDROCK] Failed to fetch BTC RSI context: {e}")
 
-        results = [engine.run_cycle(s, btc_rsi=btc_rsi) for s in symbols]
+        results = []
+        for s in symbols:
+            try:
+                res = engine.run_cycle(s, btc_rsi=btc_rsi)
+                results.append(res)
+            except Exception as e:
+                logger.error(f"[ERROR] Cycle failed for {s}: {e}")
+                results.append({'symbol': s, 'status': 'CYCLE_ERROR', 'error': str(e)})
         
         logger.info(f"[INFO] Scan complete: {len(results)} results")
         return {'statusCode': 200, 'body': json.dumps({'status': 'SUCCESS', 'results': results})}

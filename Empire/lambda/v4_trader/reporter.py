@@ -31,17 +31,39 @@ INITIAL_BUDGET = float(os.environ.get('INITIAL_BUDGET', '20000.0'))
 SES_REGION = os.environ.get('AWS_REGION', 'eu-west-3')
 ses = boto3.client('ses', region_name=SES_REGION)
 
+def get_yahoo_ticker(symbol):
+    """Maps internal symbols to Yahoo Finance tickers (Audit Fix #11)"""
+    # 🏛️ EMPIRE V13.8: Specific Mappings
+    ticker_map = {
+        'SPX/USDT:USDT': '^GSPC',
+        'DAX/USDT:USDT': '^GDAXI',
+        'NDX/USDT:USDT': '^IXIC',
+        'OIL/USDT:USDT': 'CL=F',
+        'PAXG/USDT:USDT': 'GC=F', # Gold proxy
+    }
+    if symbol in ticker_map:
+        return ticker_map[symbol]
+    
+    # Generic cleaning
+    s = symbol.split('/')[0]
+    if 'EUR/USD' in symbol: return 'EURUSD=X'
+    if 'GBP/USD' in symbol: return 'GBPUSD=X'
+    if 'USD/JPY' in symbol: return 'USDJPY=X'
+    
+    return s
+
 def fetch_yahoo_price_lite(symbol):
     """Récupère le prix pour Forex/Indices/Commodities via Yahoo Finance"""
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+        ticker = get_yahoo_ticker(symbol)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=4)
         response.raise_for_status()
         data = response.json()
         return float(data['chart']['result'][0]['meta']['regularMarketPrice'])
     except Exception as e:
-        logger.error(f"⚠️ Yahoo Price Error ({symbol}): {e}")
+        logger.error(f"⚠️ Yahoo Price Error ({symbol} -> {ticker if 'ticker' in locals() else 'N/A'}): {e}")
         return 0.0
 
 def get_quote_currency(pair, asset_class):
