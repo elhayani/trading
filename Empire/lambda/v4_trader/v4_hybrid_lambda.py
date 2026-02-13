@@ -20,7 +20,7 @@ import os
 import logging
 import uuid
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
@@ -96,6 +96,7 @@ class AWSClients:
         self.dynamodb = boto3.resource('dynamodb', region_name=self.region)
         self.secretsmanager = boto3.client('secretsmanager', region_name=self.region)
         self.trades_table = self.dynamodb.Table(os.getenv('HISTORY_TABLE', 'EmpireTradesHistory'))
+        self.skipped_table = self.dynamodb.Table(os.getenv('SKIPPED_TABLE', 'EmpireSkippedTrades'))
         self.state_table = self.dynamodb.Table(os.getenv('STATE_TABLE', 'V4TradingState'))
         self._initialized = True
 
@@ -103,40 +104,38 @@ class PersistenceLayer:
     def __init__(self, aws: AWSClients):
         self.aws = aws
     
-    def log_trade_open(self, trade_id, symbol, asset_class, side, entry_price, size, capital, tp_pct, sl_pct, context, reason=None):
+    def log_trade_open(self, trade_id, symbol, asset_class, direction, entry_price, size, cost, tp_price, sl_price, leverage, reason=None):
         try:
             timestamp = datetime.now(timezone.utc).isoformat()
-            # Audit Fix: Use PascalCase for Dashboard Compatibility
             item = {
-                'trader_id': trade_id,  # Required partition key
-                'timestamp': timestamp,  # Required sort key
+                'trader_id': trade_id,
+                'timestamp': timestamp,
                 'TradeId': trade_id,
                 'Symbol': symbol,
                 'Pair': symbol,
                 'AssetClass': asset_class,
-                'Type': 'LONG' if side.lower() == 'buy' else 'SHORT',
+                'Type': direction,
                 'EntryPrice': entry_price,
                 'Size': size,
-                'Cost': capital,
-                'TpPct': tp_pct,
-                'SlPct': sl_pct,
-                'ConfidenceScore': context.confidence_score,
+                'Cost': cost,
+                'TakeProfit': tp_price,
+                'StopLoss': sl_price,
+                'Leverage': leverage,
                 'Timestamp': timestamp,
                 'Status': 'OPEN'
             }
-            
-            # Add detailed reason if provided (RSI, Volume, AI confidence)
             if reason:
                 item['Reason'] = reason
             
             self.aws.trades_table.put_item(Item=to_decimal(item))
+            logger.info(f"[DB] OPEN logged: {symbol} {direction} x{leverage} | Entry=${entry_price:.4f} | TP=${tp_price:.4f} | SL=${sl_price:.4f}")
         except Exception as e: logger.error(f"[ERROR] Failed to log trade: {e}")
     
     def log_trade_close(self, trade_id, exit_price, pnl, reason):
         try:
-            # Scan to find the item with this TradeId (since we need trader_id + timestamp for Key)
-            response = self.aws.trades_table.scan(
-                FilterExpression='TradeId = :tid',
+            # Query by partition key (trader_id = trade_id) - O(1) instead of full table scan
+            response = self.aws.trades_table.query(
+                KeyConditionExpression='trader_id = :tid',
                 ExpressionAttributeValues={':tid': trade_id},
                 Limit=1
             )
@@ -165,17 +164,17 @@ class PersistenceLayer:
         try:
             trade_id = f"SKIP-{uuid.uuid4().hex[:8]}"
             timestamp = datetime.now(timezone.utc).isoformat()
-            # Use PascalCase for Dashboard compatibility
-            self.aws.trades_table.put_item(Item=to_decimal({
-                'trader_id': trade_id,  # Required partition key
-                'timestamp': timestamp,  # Required sort key
-                'TradeId': trade_id,
+            # TTL: auto-delete after 7 days (epoch seconds)
+            ttl = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+            self.aws.skipped_table.put_item(Item=to_decimal({
+                'trader_id': trade_id,
+                'timestamp': timestamp,
                 'Symbol': symbol,
                 'Pair': symbol,
                 'AssetClass': asset_class,
                 'Status': 'SKIPPED',
                 'Reason': reason,
-                'Timestamp': timestamp
+                'ttl': ttl
             }))
             logger.info(f"[INFO] Logged SKIP for {symbol}: {reason}")
         except Exception as e: 
@@ -551,6 +550,15 @@ class TradingEngine:
                 self.persistence.log_skipped_trade(symbol, decision['reason'], asset_class)
                 return {'symbol': symbol, 'status': 'BLOCKED', 'reason': decision['reason']}
             
+            # MAX_OPEN_TRADES enforcement (V13.4 - prevent position overflow)
+            real_positions = self._get_real_binance_positions()
+            open_count = max(len(positions), len(real_positions))
+            if open_count >= TradingConfig.MAX_OPEN_TRADES:
+                reason = f"MAX_OPEN_TRADES reached ({open_count}/{TradingConfig.MAX_OPEN_TRADES})"
+                logger.warning(f"[SLOT_FULL] {reason}")
+                self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
+            
             # TRIM & SWITCH: If we have a high-confidence signal but low capital, consider trimming positions
             if positions and balance < 500 and decision['confidence'] >= 0.75:
                 trim_result = self._evaluate_trim_and_switch(positions, symbol, decision, balance)
@@ -565,6 +573,14 @@ class TradingEngine:
             return {'symbol': symbol, 'status': 'ERROR', 'error': str(e)}
     
     def _execute_entry(self, symbol, direction, decision, ta_result, asset_class, balance):
+        # BINANCE SYNC: Verify no existing position before opening (source of truth)
+        binance_pos = self._get_binance_position_detail(symbol)
+        if binance_pos:
+            reason = f"BINANCE_SYNC: Position already exists on Binance ({binance_pos['side']} {binance_pos['quantity']} @ ${binance_pos['entry_price']:.2f})"
+            logger.warning(f"[BINANCE_BLOCK] {symbol} — {reason}")
+            self.persistence.log_skipped_trade(symbol, reason, asset_class)
+            return {'symbol': symbol, 'status': 'BINANCE_ALREADY_OPEN', 'reason': reason}
+        
         trade_id = f"V11-{uuid.uuid4().hex[:8]}"
         side = 'sell' if direction == 'SHORT' else 'buy'
         quantity = decision['quantity']
@@ -624,19 +640,19 @@ class TradingEngine:
         reason_parts = []
         if 'rsi' in ta_result:
             reason_parts.append(f"RSI={ta_result['rsi']:.1f}")
-        if 'volume_ratio' in ta_result:
-            reason_parts.append(f"Vol={ta_result['volume_ratio']:.2f}x")
+        if ta_result.get('market_context'):
+            reason_parts.append(ta_result['market_context'])
         if decision.get('confidence'):
             reason_parts.append(f"AI={decision['confidence']*100:.0f}%")
-        if 'score' in decision:
-            reason_parts.append(f"Score={decision['score']}")
+        if 'score' in ta_result:
+            reason_parts.append(f"Score={ta_result['score']}")
+        reason_parts.append(f"Lev={leverage}x")
         
         detailed_reason = " | ".join(reason_parts) if reason_parts else decision.get('reason', 'Signal detected')
         
         self.persistence.log_trade_open(
-            trade_id, symbol, asset_class, direction, real_entry, real_size, 
-            real_size * real_entry, 10.0, -5.0,
-            MacroContext(confidence_score=decision['confidence']),
+            trade_id, symbol, asset_class, direction, real_entry, real_size,
+            real_size * real_entry, tp, sl, leverage,
             reason=detailed_reason
         )
         
@@ -670,6 +686,30 @@ class TradingEngine:
     def _get_real_binance_positions(self) -> List[str]:
         """Get actual open positions from Binance (source of truth)"""
         return get_real_binance_positions(self.exchange)
+    
+    def _get_binance_position_detail(self, symbol: str) -> Optional[Dict]:
+        """Get real position detail from Binance for a specific symbol. Returns None if no position."""
+        try:
+            ccxt_ex = self.exchange.exchange if hasattr(self.exchange, 'exchange') else self.exchange
+            positions = ccxt_ex.fapiPrivateV2GetPositionRisk()
+            # Convert symbol to Binance format (SOL/USDT:USDT -> SOLUSDT)
+            binance_sym = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
+            for pos in positions:
+                if pos.get('symbol') == binance_sym:
+                    qty = abs(float(pos.get('positionAmt', 0)))
+                    if qty > 0:
+                        return {
+                            'quantity': qty,
+                            'side': 'LONG' if float(pos['positionAmt']) > 0 else 'SHORT',
+                            'entry_price': float(pos.get('entryPrice', 0)),
+                            'unrealized_pnl': float(pos.get('unRealizedProfit', 0)),
+                            'mark_price': float(pos.get('markPrice', 0)),
+                            'leverage': int(pos.get('leverage', 1))
+                        }
+            return None
+        except Exception as e:
+            logger.error(f"[BINANCE_SYNC] Failed to get position detail for {symbol}: {e}")
+            return None
     
     def _create_mock_binance_position(self, symbol: str) -> Dict:
         """Create mock position data for Binance-only positions to enable SL/TP management"""
@@ -855,8 +895,23 @@ class TradingEngine:
                         reason = f"Claude AI Exit (sentiment changed, PnL: {pnl_pct:+.2f}%)"
                     
                     logger.warning(f"[ALERT] EXIT: {symbol} - {reason}")
+                    
+                    # BINANCE SYNC: Verify position exists on Binance before closing (source of truth)
+                    binance_detail = self._get_binance_position_detail(symbol)
+                    if not binance_detail:
+                        logger.error(f"[BINANCE_SYNC] {symbol} — No position found on Binance! Cleaning DynamoDB ghost.")
+                        self.persistence.log_trade_close(pos['trade_id'], current_price, 0, f"GHOST: DynamoDB-only, no Binance position (original: {reason})")
+                        self.persistence.delete_position(symbol)
+                        del positions[symbol]
+                        continue
+                    
+                    # Use real Binance quantity (source of truth, not DynamoDB)
+                    real_qty = binance_detail['quantity']
+                    if real_qty != float(pos.get('quantity', 0)):
+                        logger.warning(f"[BINANCE_SYNC] {symbol} qty mismatch: DB={pos.get('quantity')} vs Binance={real_qty}. Using Binance.")
+                    
                     exit_side = 'sell' if direction == 'LONG' else 'buy'
-                    exit_order = self.exchange.create_market_order(symbol, exit_side, pos['quantity'])
+                    exit_order = self.exchange.create_market_order(symbol, exit_side, real_qty)
                     exit_price = float(exit_order.get('average', current_price))
                     
                     self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))

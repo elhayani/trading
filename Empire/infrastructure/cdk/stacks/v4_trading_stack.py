@@ -67,11 +67,27 @@ class V4TradingStack(Stack):
             projection_type=dynamodb.ProjectionType.ALL
         )
         
-        # Unified History Table (EmpireTradesHistory) - USE FROM_TABLE_NAME if it exists
-        # This avoiding deployment failures if the table already exists.
+        # Unified History Table (EmpireTradesHistory) - OPEN/CLOSED trades only
         unified_trades_table = dynamodb.Table.from_table_name(
             self, "UnifiedEmpireTable",
             table_name="EmpireTradesHistory"
+        )
+        
+        # Skipped Trades Table (séparation V13.4 - évite de polluer l'historique)
+        skipped_table = dynamodb.Table(
+            self, "SkippedTradesTable",
+            table_name="EmpireSkippedTrades",
+            partition_key=dynamodb.Attribute(
+                name="trader_id",
+                type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="timestamp",
+                type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+            time_to_live_attribute="ttl"  # Auto-delete old skips after 7 days
         )
 
         # ✅ NOUVEAU GSI — Daily PnL optimisé (Audit #V9.5)
@@ -119,6 +135,7 @@ class V4TradingStack(Stack):
             environment={
                 "STATE_TABLE": state_table.table_name,
                 "HISTORY_TABLE": "EmpireTradesHistory",
+                "SKIPPED_TABLE": "EmpireSkippedTrades",
                 "TRADING_MODE": "live",
                 "SECRET_NAME": "trading/binance", # 🛡️ SECURE: No hardcoded keys
                 "CAPITAL": "1000",
@@ -134,6 +151,7 @@ class V4TradingStack(Stack):
         # Grant DynamoDB permissions
         state_table.grant_read_write_data(trading_lambda)
         unified_trades_table.grant_read_write_data(trading_lambda)
+        skipped_table.grant_read_write_data(trading_lambda)
         empire_crypto_table.grant_read_write_data(trading_lambda)
         
         # 🛡️ AWS Secrets Manager Permission
