@@ -99,11 +99,11 @@ def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = 
     vol_ratio = current_volume / avg_volume_10 if avg_volume_10 > 0 else 1.0
 
     base_config = {
-        # RSI thresholds remain strict (V13.7 standards)
-        AssetClass.CRYPTO:      {'buy': 28, 'sell': 72, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO},
-        AssetClass.FOREX:       {'buy': 30, 'sell': 70, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_FOREX},
-        AssetClass.INDICES:     {'buy': 30, 'sell': 70, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_INDICES},
-        AssetClass.COMMODITIES: {'buy': 30, 'sell': 70, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_COMMODITIES}
+        # RSI thresholds widened to catch "Heating" moves (V14.2 Aggressive)
+        AssetClass.CRYPTO:      {'buy': 33, 'sell': 67, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO},
+        AssetClass.FOREX:       {'buy': 33, 'sell': 67, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_FOREX},
+        AssetClass.INDICES:     {'buy': 33, 'sell': 67, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_INDICES},
+        AssetClass.COMMODITIES: {'buy': 33, 'sell': 67, 'min_score': TradingConfig.MIN_TECHNICAL_SCORE_COMMODITIES}
     }
     cfg = base_config.get(asset_class, base_config[AssetClass.CRYPTO])
     # Scoring logic adjusted for V13.8 (Baseline 82 to clear 80 hurdle)

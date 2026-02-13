@@ -572,7 +572,11 @@ class TradingEngine:
                         reasons.append(f"RSI neutral ({rsi:.1f})")
                     
                     if score < 50:
-                        reasons.append(f"Low technical score ({score})")
+                        # 🏛️ EMPIRE V14.2: Detailed AI Reasoning for Score Failure
+                        rsi_val = ta_result['indicators']['rsi']
+                        vol_ratio = ta_result['indicators']['vol_ratio']
+                        context = ta_result.get('market_context', 'N/A')
+                        reasons.append(f"Low Score ({score}/100) -> RSI:{rsi_val:.1f} (Neutral), Vol:{vol_ratio:.1f}x, Ctx:{context}")
                     
                     # Check volume if available
                     if 'volume_spike' in ta_result.get('market_context', ''):
@@ -959,13 +963,34 @@ class TradingEngine:
         for symbol, pos in list(positions.items()):
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
-                # 🏛️ EMPIRE V13.9: Use Mark Price for SL safety if available
-                current_price = float(ticker.get('markPrice', ticker.get('last', 0)))
-                if current_price == 0 and 'info' in ticker:
-                     current_price = float(ticker['info'].get('markPrice', ticker['last']))
+                if not ticker:
+                    logger.warning(f"[MANAGE] Could not fetch ticker for {symbol}")
+                    continue
+
+                # 🏛️ EMPIRE V14.2: Robust Price Fetching (Fix float(NoneType) error)
+                # Prioritize Mark Price, then Last Price, then Info values
+                raw_price = ticker.get('markPrice')
+                if raw_price is None:
+                    raw_price = ticker.get('last')
+                if raw_price is None and 'info' in ticker:
+                    # Fallback to provider-specific info field
+                    raw_price = ticker['info'].get('markPrice', ticker['info'].get('lastPrice'))
                 
-                entry_price = float(pos.get('entry_price', 0))
-                direction = pos['direction']
+                if raw_price is None:
+                    logger.warning(f"[MANAGE] No valid price found for {symbol}. Skipping.")
+                    continue
+                    
+                current_price = float(raw_price)
+                
+                # Safe Entry Price
+                entry_val = pos.get('entry_price')
+                if entry_val is None:
+                    logger.warning(f"[MANAGE] Missing entry_price for {symbol}")
+                    continue
+                entry_price = float(entry_val)
+                if entry_price == 0: continue 
+
+                direction = pos.get('direction', 'LONG')
                 
                 # Calculate current PnL %
                 if direction == 'LONG':
@@ -973,17 +998,26 @@ class TradingEngine:
                 else:
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
                 
-                # Check traditional TP/SL
-                stop_loss = float(pos['stop_loss'])
-                take_profit = float(pos['take_profit'])
-                hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
-                hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
+                # Check traditional TP/SL - Safe Conversion
+                sl_val = pos.get('stop_loss')
+                tp_val = pos.get('take_profit')
                 
-                # EMPIRE V13.9: "NOUVELLE PAGE BLANCHE" - 0.5% PROFIT PROTECTION
-                # Philosophy: Securing profits at the Sniper threshold (0.5%)
-                hit_profit_sniper = pnl_pct >= 0.5
+                stop_loss = float(sl_val) if sl_val is not None else 0.0
+                take_profit = float(tp_val) if tp_val is not None else 0.0
+                
+                # Only check SL/TP if they are set (non-zero)
+                hit_sl = False
+                hit_tp = False
+                if stop_loss > 0:
+                    hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
+                if take_profit > 0:
+                    hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
+                
+                # EMPIRE V14.2: Dynamic Sniper Profit (Uses Config 0.40%)
+                threshold_pct = TradingConfig.SCALP_TP_MIN * 100
+                hit_profit_sniper = pnl_pct >= threshold_pct
                 if hit_profit_sniper:
-                    logger.warning(f"🏛️ [SNIPER_PROFIT] {symbol} reached +{pnl_pct:.2f}% - securing profit! (Nouvelle Page Blanche)")
+                    logger.info(f"🏛️ [SNIPER_PROFIT] {symbol} reached +{pnl_pct:.2f}% (Target: {threshold_pct:.2f}%) - securing profit!")
                 
                 # EMPIRE V12.3: Time-based exits
                 entry_time_str = pos.get('entry_time', '')

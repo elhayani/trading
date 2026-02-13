@@ -21,18 +21,18 @@ class TradingConfig:
     COMMISSION_RATE = 0.001     # 0.1% per leg
     SLIPPAGE_BUFFER = 0.001     # 0.1% buffer
     
-    # --- Scalping Strategy (V13.9 Sniper) ---
+    # --- Scalping Strategy (V14.2 Hyper-Velocity) ---
     LEVERAGE = 3                # Levier x3 pour puissance de frappe Elite
-    SCALP_TP_MIN = 0.0050       # 0.50% profit target (Quick Scalp)
-    SCALP_TP_MAX = 0.0050       # 0.50% profit target (Fixed)
-    SCALP_SL = 0.0040           # 0.40% stop loss (Sniper Protection)
+    SCALP_TP_MIN = 0.0035       # 0.35% profit target (Hyper-Velocity)
+    SCALP_TP_MAX = 0.0035       # 0.35% profit target (Fixed)
+    SCALP_SL = 0.0030           # 0.30% stop loss (Optimized R:R 1.17)
     USE_LIMIT_ORDERS = True     # Use limit orders for better execution
     MAX_OPEN_TRADES = 4         # Maximum 4 concurrent positions (slot management)
     
     # --- PAXG Specific (Gold tokenisé - Levier x6) ---
     PAXG_LEVERAGE = 6           # Levier x6 pour compenser la faible volatilité de l'or
-    PAXG_TP = 0.0050            # 0.50% profit target
-    PAXG_SL = 0.0040            # 0.40% stop loss (Sniper Protection)
+    PAXG_TP = 0.0035            # 0.35% profit target
+    PAXG_SL = 0.0030            # 0.30% stop loss
     
     # --- Confidence / Sizing ---
     MIN_CONFIDENCE = 0.7        # Raised to 70% for scalping (high-probability only)
