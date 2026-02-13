@@ -28,14 +28,16 @@ from enum import Enum
 
 import boto3
 from botocore.exceptions import ClientError
+import pandas as pd
 
 # Absolute imports
 import models
 from models import MarketRegime, AssetClass
 import config
 from config import TradingConfig
+import concurrent.futures
 import market_analysis
-from market_analysis import analyze_market, classify_asset
+from market_analysis import analyze_market, classify_asset, calculate_rsi
 import news_fetcher
 from news_fetcher import NewsFetcher
 import exchange_connector
@@ -1086,17 +1088,150 @@ class TradingEngine:
 
             except Exception as e: logger.error(f"[ERROR] Manage failed for {symbol}: {e}")
 
+    def _safe_fetch_rsi_volume(self, symbol: str) -> Optional[Dict]:
+        """Helper for parallel fetch of RSI and Volume (Double Alpha) with Strict Sanitization (V14.1)"""
+        try:
+            # 1. Fetch OHLCV (Limit 50 for speed)
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
+            if not ohlcv or len(ohlcv) < 20: return None
+            
+            # 2. Get Volume (24h) & RSI with Zero-Tolerance Sanitization
+            try:
+                # Use mean volume of last 24 candles as a robust proxy for 24h volume/liquidity
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                # Strict Type Conversion
+                df['close'] = pd.to_numeric(df['close'], errors='coerce')
+                df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+                
+                # Check for empty or invalid data (NaNs)
+                if df['close'].isnull().any() or df['volume'].isnull().any():
+                     # logger.warning(f"[SKIP] {symbol}: Corrupt OHLCV data found (NaNs).")
+                     return None
+                
+                rsi_series = calculate_rsi(df['close'], period=14)
+                
+                # Validation: RSI must be a valid float
+                rsi_val = rsi_series.iloc[-1]
+                if pd.isna(rsi_val): return None
+                rsi = float(rsi_val)
+                
+                # Validation: Volume must be valid
+                vol_val = df['volume'].iloc[-24:].sum()
+                if pd.isna(vol_val) or vol_val <= 0: return None
+                volume = float(vol_val)
+                
+                # Validation: Price must be valid
+                price_val = df['close'].iloc[-1]
+                if pd.isna(price_val) or price_val <= 0: return None
+                price = float(price_val)
+                
+                return {
+                    'symbol': symbol,
+                    'rsi': rsi,
+                    'volume': volume,
+                    'price': price
+                }
+            except Exception as e:
+                # logger.debug(f"[calc_error] {symbol}: {e}")
+                return None
+                
+        except Exception as e:
+            # logger.debug(f"Failed to fetch {symbol}: {e}")
+            return None
+
+    def scan_market_double_alpha(self) -> List[str]:
+        """
+        🏛️ EMPIRE V14.0: DOUBLE ALPHA SELECTION
+        1. Fetch all 415+ Futures (Dynamic API Call)
+        2. Short Hunter: Top 20 (RSI Desc -> Top 50 -> Vol Desc)
+        3. Long Sniper: Top 20 (RSI Asc -> Top 50 -> Vol Desc)
+        4. Merge & Return
+        """
+        logger.info(f"\n{'='*70}\n[INFO] STARTING DOUBLE ALPHA SCAN (V14.0)\n{'='*70}")
+        
+        # 1. Fetch All Symbols (Dynamic List from Binance API)
+        # Using the new robust method to avoid MATIC/POL issues
+        try:
+            all_symbols = self.exchange.get_all_futures_symbols()
+        except Exception as e:
+            logger.error(f"[SCAN_CRITICAL] Failed to get symbols: {e}")
+            all_symbols = []
+            
+        if not all_symbols:
+             logger.warning("[SCAN] Zero candidates found! Falling back to configured assets.")
+             return list(TradingConfig.EMPIRE_ASSETS.keys())
+
+        logger.info(f"[SCAN] Found {len(all_symbols)} active USDT perpetuals. Fetching data...")
+        
+        candidates = []
+        # Parallel fetch for speed (LIMIT 50 workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+            future_to_symbol = {executor.submit(self._safe_fetch_rsi_volume, sym): sym for sym in all_symbols}
+            
+            for future in concurrent.futures.as_completed(future_to_symbol):
+                res = future.result()
+                if res and res['volume'] > 0: # Basic filter
+                    candidates.append(res)
+        
+        logger.info(f"[SCAN] Successfully analyzed {len(candidates)} assets.")
+        
+        if not candidates:
+            return list(TradingConfig.EMPIRE_ASSETS.keys())
+
+        # 2. Double Alpha Logic
+        
+        # A. Short Hunter (RSI Descending)
+        # Sort by RSI DESC (High RSI first)
+        sorted_rsi_desc = sorted(candidates, key=lambda x: x['rsi'], reverse=True)
+        # Take Top 50
+        short_pool = sorted_rsi_desc[:50]
+        # Sort these 50 by Volume DESC (Big Volume first)
+        short_final = sorted(short_pool, key=lambda x: x['volume'], reverse=True)[:20]
+        
+        # B. Long Sniper (RSI Ascending)
+        # Sort by RSI ASC (Low RSI first)
+        sorted_rsi_asc = sorted(candidates, key=lambda x: x['rsi'], reverse=False)
+        # Take Top 50
+        long_pool = sorted_rsi_asc[:50]
+        # Sort these 50 by Volume DESC (Big Volume first)
+        long_final = sorted(long_pool, key=lambda x: x['volume'], reverse=True)[:20]
+        
+        # 3. Merge Lists
+        final_set = set()
+        
+        logger.info(f"\n--- SHORT HUNTER (Top 20) ---")
+        for i, c in enumerate(short_final):
+            logger.info(f"#{i+1:02d} SHORT: {c['symbol']:<15} | RSI: {c['rsi']:>5.1f} | Vol: {c['volume']:,.0f}")
+            final_set.add(c['symbol'])
+            
+        logger.info(f"\n--- LONG SNIPER (Top 20) ---")
+        for i, c in enumerate(long_final):
+            logger.info(f"#{i+1:02d} LONG : {c['symbol']:<15} | RSI: {c['rsi']:>5.1f} | Vol: {c['volume']:,.0f}")
+            final_set.add(c['symbol'])
+            
+        # Return unique symbols list
+        final_list = list(final_set)
+        logger.info(f"[SCAN] Final Selection: {len(final_list)} assets sent to Analysis Engine.")
+        return final_list
+
 # ==================== LAMBDA HANDLER ====================
 
 def lambda_handler(event, context):
     try:
         engine = TradingEngine()
         
-        default_symbols = ",".join(TradingConfig.EMPIRE_ASSETS.keys())
-        symbols_str = event.get('symbols') or os.getenv('SYMBOLS') or default_symbols
-        symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
+        # 🏛️ EMPIRE V14.0: DOUBLE ALPHA SELECTION
+        # Use event['symbols'] for manual override, otherwise run the scan
+        if event.get('symbols'):
+             symbols_str = event.get('symbols')
+             symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
+             logger.info(f"[INFO] Manual symbol override: {len(symbols)} assets")
+        else:
+             # Run the full V14.0 scan
+             symbols = engine.scan_market_double_alpha()
         
-        logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
+        logger.info(f"[INFO] Processing {len(symbols)} symbols: {', '.join(symbols)}")
         
         risk_state = engine.persistence.load_risk_state()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')

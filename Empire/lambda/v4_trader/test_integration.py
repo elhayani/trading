@@ -119,7 +119,7 @@ INFO = "📊"
 
 # ==================== OHLCV GENERATOR ====================
 
-def generate_ohlcv(base_price: float, scenario: str = 'neutral', num_candles: int = 300) -> List:
+def generate_ohlcv(base_price: float, scenario: str = 'neutral', num_candles: int = 300, volume_mult: float = 1.0) -> List:
     candles = []
     now = int(time.time() * 1000)
     interval_ms = 3600000  # 1h
@@ -141,10 +141,14 @@ def generate_ohlcv(base_price: float, scenario: str = 'neutral', num_candles: in
         close_price = price * (1 + change)
         high = max(open_price, close_price) * (1 + random.uniform(0.0005, 0.002))
         low = min(open_price, close_price) * (1 - random.uniform(0.0005, 0.002))
-        # 🏛️ EMPIRE V13.7: Stable volume with a strong spike to guarantee passing the filter
-        volume = 1000.0 * (base_price / 100)
-        if i == num_candles - 1:
-            volume *= 3.0
+        
+        # Volume logic: base * multiplier
+        volume = (100000.0 / base_price) * volume_mult # Normalized somewhat to price
+        
+        # Add noise
+        volume *= random.uniform(0.8, 1.2)
+        
+        # Spike last candle for 'neutral' sometimes? No, let scenario dictate price.
         
         candles.append([ts, open_price, high, low, close_price, volume])
         price = close_price
@@ -160,6 +164,7 @@ class MockExchange:
         self.exchange = MagicMock()
         self.exchange.fapiPrivateV2GetPositionRisk.return_value = []
         self.markets = {sym: {'precision': {'amount': 3, 'price': 2}, 'limits': {'amount': {'min': 0.001}}, 'symbol': sym} for sym in ALL_ASSETS}
+        self.ohlcv_data = {} # To look up data by symbol
 
     def resolve_symbol(self, symbol: str) -> str: return symbol
     def get_market_info(self, symbol: str) -> Dict: return {'precision': {'amount': 3, 'price': 2}, 'min_amount': 0.001, 'symbol': symbol}
@@ -194,6 +199,19 @@ class MockExchange:
             amt = pos['qty'] if pos['side'] == 'LONG' else -pos['qty']
             result.append({'symbol': binance_sym, 'positionAmt': str(amt), 'entryPrice': str(pos['entry_price']), 'markPrice': str(pos['entry_price']), 'unRealizedProfit': '0', 'leverage': str(pos['leverage'])})
         return result
+        
+    def get_all_futures_symbols(self) -> List[str]:
+        return list(self.markets.keys())
+        
+    def fetch_ohlcv(self, symbol: str, timeframe: str = '1h', limit: int = 500) -> List:
+        if symbol in self.ohlcv_data:
+            return self.ohlcv_data[symbol]
+        # Fallback if not generated (should not happen in valid test)
+        return generate_ohlcv(BASE_PRICES.get(symbol, 10.0))
+        
+    def fetch_tickers(self) -> Dict:
+        # Mock tickers if needed, although scan uses ohlcv
+        return {}
 
 # ==================== MOCK NEWS FETCHER ====================
 
@@ -270,9 +288,14 @@ class IntegrationTest:
         self.results = []
         self.test_trade_ids = []
         self.ohlcv_cache = {}
+        
+        # Generate OHLCV for BATCH assets specifically (keep existing logic)
         for batch in BATCHES:
             for symbol, cfg in batch['assets'].items():
                 self.ohlcv_cache[symbol] = generate_ohlcv(BASE_PRICES[symbol], cfg['scenario'], 300)
+        
+        # Feed existing batch data into mock_exchange for backward compatibility
+        self.mock_exchange.ohlcv_data.update(self.ohlcv_cache)
 
     def test(self, name: str, condition: bool, detail: str = "") -> bool:
         status = PASS if condition else FAIL
@@ -290,7 +313,7 @@ class IntegrationTest:
         return engine
 
     def _run_cycle(self, engine, symbol: str, btc_rsi: Optional[float] = None) -> Dict:
-        ohlcv = self.ohlcv_cache.get(symbol)
+        ohlcv = self.mock_exchange.fetch_ohlcv(symbol) # Use the exchange fetcher now
         asset_class = classify_asset(symbol)
         ta_result = analyze_market(ohlcv, symbol=symbol, asset_class=asset_class)
         positions = self.persistence.load_positions()
@@ -312,9 +335,66 @@ class IntegrationTest:
         self.persistence.save_position(symbol, {'trade_id': trade_id, 'entry_price': float(order['average']), 'quantity': float(order['filled']), 'direction': direction, 'stop_loss': sl, 'take_profit': tp, 'asset_class': str(asset_class)}, is_test=True)
         return {'symbol': symbol, 'status': f'{direction}_OPEN', 'reason': '', 'ta': ta_result}
 
+    def _test_double_alpha_scan(self):
+        # 🏛️ EMPIRE V14.0: Simulate Real Binance Extension (415 Assets)
+        print(f"\n⚡ Test V14.0: DOUBLE ALPHA SCAN (Simulating 415 Real Assets)")
+        
+        # 1. Generate a massive list of symbols mimicking Binance
+        # Real leaders + 400 fake alts
+        real_leaders = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT']
+        fake_alts = [f"COIN{i:03d}/USDT:USDT" for i in range(1, 411)]
+        all_test_assets = real_leaders + fake_alts
+        
+        # Update Mock Exchange to know about these 415 assets
+        self.mock_exchange.markets = {sym: {'precision': {'amount': 3, 'price': 2}, 'limits': {'amount': {'min': 0.001}}, 'symbol': sym, 'linear': True, 'quote': 'USDT', 'active': True} for sym in all_test_assets}
+        
+        # 2. Plant specific signals (The "Needle in the Haystack")
+        
+        # A. Short Hunter Candidates: High RSI (>72) + High Volume
+        shorts = ['COIN100/USDT:USDT', 'COIN101/USDT:USDT', 'COIN102/USDT:USDT']
+        for s in shorts:
+            self.mock_exchange.ohlcv_data[s] = generate_ohlcv(10, 'overbought', volume_mult=100.0) # RSI ~80, Vol Huge
+
+        # B. Long Sniper Candidates: Low RSI (<28) + High Volume
+        longs = ['COIN200/USDT:USDT', 'COIN201/USDT:USDT', 'COIN202/USDT:USDT']
+        for s in longs:
+            self.mock_exchange.ohlcv_data[s] = generate_ohlcv(10, 'oversold', volume_mult=100.0) # RSI ~20, Vol Huge
+            
+        # C. Traps: High Signals but Low Volume (Should be ignored)
+        traps = ['COIN300/USDT:USDT', 'COIN301/USDT:USDT']
+        for s in traps:
+            self.mock_exchange.ohlcv_data[s] = generate_ohlcv(10, 'oversold', volume_mult=0.01) # RSI ~20, Vol Tiny
+            
+        # D. Noise: The other 400 assets are neutral/random
+        for sym in all_test_assets:
+            if sym not in self.mock_exchange.ohlcv_data:
+                 self.mock_exchange.ohlcv_data[sym] = generate_ohlcv(10, 'neutral', volume_mult=1.0)
+                
+        # 3. Run Scan
+        engine = self._build_engine({})
+        engine.exchange = self.mock_exchange # Bind updated exchange
+        
+        print(f"  🌊 Scanning {len(all_test_assets)} assets...")
+        start = time.time()
+        selected = engine.scan_market_double_alpha()
+        duration = time.time() - start
+        
+        print(f"  ⏱️  Scan time: {duration:.2f}s")
+        
+        # 4. Validations
+        found_shorts = [s for s in shorts if s in selected]
+        found_longs = [s for s in longs if s in selected]
+        found_traps = [s for s in traps if s in selected]
+        
+        self.test("Volume Filter SHORT ok", len(found_shorts) == len(shorts), f"Found {len(found_shorts)}/{len(shorts)}")
+        self.test("Volume Filter LONG ok", len(found_longs) == len(longs), f"Found {len(found_longs)}/{len(longs)}")
+        self.test("Low Volume Traps Excluded", len(found_traps) == 0, f"Traps found: {found_traps}")
+        self.test("Total Selection < 40", len(selected) <= 40, f"Count: {len(selected)}")
+        
     def run_all(self):
-        print("\n🧪 EMPIRE V13.5 — Bedrock Integration Test")
+        print("\n🧪 EMPIRE V14.0 — Integration Test Suite")
         self._test_open_batches()
+        self._test_double_alpha_scan() # NEW: 415 Asset Simulation
         self._test_close_flow()
         self._print_summary()
 

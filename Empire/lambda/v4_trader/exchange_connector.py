@@ -252,3 +252,61 @@ class ExchangeConnector:
             logger.info(f"[CANCEL_ALL] Orders cleaned for {symbol}")
         except Exception as e:
             logger.warning(f"[WARN] Order cleanup failed for {symbol}: {e}")
+    def get_all_tickers(self) -> Dict:
+        """Fetch all tickers in one call (Efficient for Volume/Price scanning)"""
+        try:
+            return self.exchange.fetch_tickers()
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch all tickers: {e}")
+            return {}
+
+    def get_all_futures_symbols(self) -> List[str]:
+        """
+        Fetch all linear futures symbols (USDT margined) dynamically from Binance API.
+        This ignores CCXT local cache to avoid MATIC/POL outdated mappings.
+        (User Request #DynamicList)
+        """
+        try:
+            # Direct API call to bypass CCXT cache issues
+            exchange_info = self.exchange.fapiPublicGetExchangeInfo()
+            
+            # Filter solely for TRADING status, USDT quote, and PERPETUAL contract type
+            symbols = [
+                s['symbol'] for s in exchange_info['symbols'] 
+                if s['status'] == 'TRADING' 
+                and s['quoteAsset'] == 'USDT'
+                and s['contractType'] == 'PERPETUAL'
+            ]
+            
+            # Format for Empire Engine (BTCUSDT -> BTC/USDT:USDT)
+            formatted_symbols = []
+            for s in symbols:
+                try:
+                    # Robust parsing: Find "USDT" index
+                    base = s[:s.index('USDT')]
+                    formatted_symbols.append(f"{base}/USDT:USDT")
+                except:
+                   pass
+            
+            logger.info(f"[DYNAMIC_LIST] Fetched {len(formatted_symbols)} active USDT perpetuals.")
+            return formatted_symbols
+            
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch dynamic futures symbols: {e}")
+            # Fallback to CCXT load_markets if direct call fails
+            return self._get_all_futures_symbols_fallback()
+
+    def _get_all_futures_symbols_fallback(self) -> List[str]:
+        """Fallback method using standard CCXT load_markets"""
+        try:
+            if not self.markets:
+                self.markets = self.exchange.load_markets()
+            
+            symbols = []
+            for s, m in self.markets.items():
+                if m.get('linear') and m.get('quote') == 'USDT' and m.get('active'):
+                    symbols.append(s)
+            return symbols
+        except Exception as e:
+            logger.error(f"[ERROR] Fallback symbol fetch failed: {e}")
+            return []
