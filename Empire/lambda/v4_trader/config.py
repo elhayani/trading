@@ -38,12 +38,6 @@ class TradingConfig:
     # Stop Loss (tight for quick scalping)
     SL = 0.0020         # 0.20% stop loss
     
-    # Backward compatibility (used by risk_manager.py)
-    SCALP_TP_MIN = TP_QUICK
-    SCALP_TP_MAX = TP_FINAL
-    SCALP_SL = SL
-    SCALP_SL_SHORT = SL
-    
     # Quick Exit Settings
     USE_PROGRESSIVE_EXIT = True  # Enable TP ladder
     QUICK_EXIT_PERCENTAGE = 0.70  # 70% exit at TP_QUICK
@@ -68,8 +62,7 @@ class TradingConfig:
     MIN_CONFIDENCE = 0.65  # Lowered from 0.70 for more opportunities
     MAX_CONFIDENCE = 1.0
     
-    # --- News Sentiment (disabled for speed) ---
-    NEWS_FRESHNESS_MULTIPLIER = 1.0  # Disabled
+    # --- News Sentiment ---
     NEWS_SENTIMENT_THRESHOLD = 0.5    # Very high threshold = disabled
     
     # --- Macro Regime Adjustments ---
@@ -98,14 +91,7 @@ class TradingConfig:
     # ATR Filters
     # ================================================================
     ATR_SL_MULTIPLIER = 1.5
-    ATR_MAX_SL_MULTIPLIER = 2.5  # Cap SL at 2.5x base (prevents huge SLs)
-    
-    ATR_MAX_VOLATILITY = {
-        'crypto': 5.0,
-        'forex': 1.0,
-        'indices': 2.0,
-        'commodities': 3.0
-    }
+    ATR_MAX_SL_MULTIPLIER = 2.5
 
     # ================================================================
     # PERFORMANCE TARGETS (for monitoring)

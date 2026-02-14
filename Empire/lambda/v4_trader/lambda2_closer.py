@@ -12,7 +12,7 @@ import os
 import time
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from decimal import Decimal
 
 import boto3
@@ -30,21 +30,6 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'eu-west-3'))
 secretsmanager = boto3.client('secretsmanager', region_name=os.getenv('AWS_REGION', 'eu-west-3'))
 
-def get_binance_credentials():
-    """Fetch credentials from Secrets Manager (cached)"""
-    if not hasattr(get_binance_credentials, 'cache'):
-        secret_name = os.getenv('SECRET_NAME', 'trading/binance')
-        try:
-            response = secretsmanager.get_secret_value(SecretId=secret_name)
-            secret = json.loads(response['SecretString'])
-            get_binance_credentials.cache = {
-                'api_key': secret.get('api_key') or secret.get('apiKey'),
-                'api_secret': secret.get('api_secret') or secret.get('secret') or secret.get('apiSecret')
-            }
-        except Exception as e:
-            logger.error(f"Failed to fetch secrets: {e}")
-            raise
-    return get_binance_credentials.cache
 
 def load_open_positions() -> Dict:
     """
@@ -264,12 +249,12 @@ def lambda_handler(event, context):
     lambda_role = os.getenv('LAMBDA_ROLE', 'CLOSER_UNKNOWN')
     
     # ⏱️ STAGGER LOGIC (Architecture 3-Lambda)
-    # Use delay from event payload (EventBridge Scheduler integration)
+    # EventBridge Scheduler handles the timing delay before Lambda invocation
+    # The delay_seconds is just for logging purposes
     delay_seconds = event.get('delay_seconds', 0)
     if delay_seconds > 0 and not event.get('manual'):
-        logger.info(f"⏱️ Processing with {delay_seconds}s delay from scheduler...")
-        # Note: EventBridge Scheduler handles the delay, not the Lambda
-        # This prevents wasting Lambda execution time on sleep
+        logger.info(f"⏱️ Scheduled execution with {delay_seconds}s delay from EventBridge")
+        # No sleep needed - EventBridge already delayed the invocation
 
     start_time = time.time()
     logger.info("=" * 60)
@@ -277,11 +262,8 @@ def lambda_handler(event, context):
     logger.info("=" * 60)
     
     try:
-        # Initialize exchange connector (Updated to match Architecture 3-Lambda)
-        creds = get_binance_credentials()
+        # Initialize exchange connector (uses env vars directly)
         exchange = ExchangeConnector(
-            api_key=creds['api_key'],
-            secret=creds['api_secret'],
             live_mode=TradingConfig.LIVE_MODE
         )
         

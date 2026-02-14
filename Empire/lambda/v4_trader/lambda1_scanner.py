@@ -11,7 +11,7 @@ import os
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import List
 
 import boto3
 

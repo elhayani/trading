@@ -167,19 +167,4 @@ class AtomicPersistence:
             logger.error(f"[ERROR] Failed to atomically remove risk for {symbol}: {e}")
             return False
     
-    def get_portfolio_risk_snapshot(self) -> Dict:
-        """
-        Get current portfolio risk state (non-atomic read).
-        """
-        try:
-            response = self.table.get_item(Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'})
-            item = response.get('Item', {})
-            
-            return {
-                'total_risk': float(item.get('total_risk', 0)),
-                'active_trades': item.get('active_trades', {}),
-                'last_updated': item.get('last_updated', 'Never')
-            }
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to get portfolio snapshot: {e}")
-            return {'total_risk': 0, 'active_trades': {}, 'last_updated': 'Error'}
+    
