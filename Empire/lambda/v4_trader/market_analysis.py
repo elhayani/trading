@@ -349,7 +349,7 @@ def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = 
         'price': float(current['close'])
     }
 
-def mobility_score(ohlcv_1min: List) -> tuple[int, str]:
+def mobility_score(ohlcv_1min: List, hour_utc: int = None, btc_atr_pct: float = None) -> tuple[int, str]:
     """
     Pre-filter: évalue si l'actif EST EN MOUVEMENT maintenant.
     Retourne (score, raison_skip)
@@ -369,28 +369,43 @@ def mobility_score(ohlcv_1min: List) -> tuple[int, str]:
     
     score = 0
     
-    # 1. ATR récent (volatilité)
+    # 1. ATR récent (volatilité) - adaptatif selon session
     atr_10 = calculate_atr(df['high'], df['low'], df['close'], period=10).iloc[-1]
     atr_pct = (atr_10 / df['close'].iloc[-1]) * 100
     
+    # ATR minimum adaptatif
+    if hour_utc is not None and btc_atr_pct is not None:
+        from lambda1_scanner import get_min_atr
+        min_atr = get_min_atr(hour_utc, btc_atr_pct)
+    else:
+        min_atr = TradingConfig.MIN_ATR_PCT_1MIN
+    
     if atr_pct >= 0.50:
         score += 40  # Très volatile ✅
-    elif atr_pct >= 0.25:
-        score += 20  # Acceptable
+    elif atr_pct >= min_atr:
+        score += 20  # Acceptable (adaptatif)
     else:
         return 0, 'FLAT'  # Skip immédiat
     
-    # 2. Volume surge (accélération volume)
-    vol_recent = df['volume'].iloc[-3:].mean()
-    vol_avg = df['volume'].iloc[-23:-3].mean()
-    vol_ratio = vol_recent / vol_avg if vol_avg > 0 else 0
-    
-    if vol_ratio >= 2.0:
-        score += 35  # Explosion de volume ✅
-    elif vol_ratio >= 1.3:
-        score += 15  # Volume correct
+    # 2. Volume session (vérification volume horaire)
+    if hour_utc is not None:
+        from lambda1_scanner import check_session_volume
+        if not check_session_volume(ohlcv_1min, hour_utc):
+            return 0, 'LOW_SESSION_VOLUME'
+        else:
+            score += 35  # Volume session OK ✅
     else:
-        return 0, 'NO_VOLUME'  # Skip immédiat
+        # Fallback sur volume surge classique
+        vol_recent = df['volume'].iloc[-3:].mean()
+        vol_avg = df['volume'].iloc[-23:-3].mean()
+        vol_ratio = vol_recent / vol_avg if vol_avg > 0 else 0
+        
+        if vol_ratio >= 2.0:
+            score += 35  # Explosion de volume ✅
+        elif vol_ratio >= 1.3:
+            score += 15  # Volume correct
+        else:
+            return 0, 'NO_VOLUME'  # Skip immédiat
     
     # 3. Price thrust (amplitude mouvement)
     thrust = abs(df['close'].iloc[-1] - df['close'].iloc[-6]) / df['close'].iloc[-6] * 100

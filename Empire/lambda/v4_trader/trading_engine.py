@@ -469,7 +469,24 @@ class TradingEngine:
             
             # 2. Vérifier la mobilité avant tout calcul
             from market_analysis import mobility_score
-            mob_score, mob_reason = mobility_score(ohlcv_light)
+            
+            # Récupérer l'ATR BTC pour l'ATR adaptatif
+            btc_atr_pct = 0.25  # Default, sera remplacé si disponible
+            try:
+                btc_ohlcv = self.exchange.fetch_ohlcv_1min('BTCUSDT', limit=15)
+                if len(btc_ohlcv) >= 15:
+                    import pandas as pd
+                    from market_analysis import calculate_atr
+                    df_btc = pd.DataFrame(btc_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    for col in ['open', 'high', 'low', 'close']:
+                        df_btc[col] = pd.to_numeric(df_btc[col], errors='coerce')
+                    btc_atr = calculate_atr(df_btc['high'], df_btc['low'], df_btc['close'], period=10).iloc[-1]
+                    btc_atr_pct = (btc_atr / df_btc['close'].iloc[-1]) * 100
+            except Exception as e:
+                logger.warning(f"[WARNING] Failed to fetch BTC ATR: {e}")
+            
+            hour_utc = datetime.utcnow().hour
+            mob_score, mob_reason = mobility_score(ohlcv_light, hour_utc, btc_atr_pct)
             
             if mob_score == 0:
                 self.persistence.log_skipped_trade(symbol, f"MOBILITY_{mob_reason}", asset_class)

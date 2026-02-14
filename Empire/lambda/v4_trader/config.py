@@ -53,6 +53,11 @@ class TradingConfig:
     MIN_ATR_PCT_1MIN = 0.25          # Rentable dès ce niveau avec $10K
     MAX_NOTIONAL_PCT_OF_VOLUME = 0.005  # 0.5% max du volume 24h par trade
     
+    # Session optimization
+    SESSION_BOOST_ENABLED = True       # Activer pondération par session
+    NIGHT_PUMP_DETECTION = True        # Détecter pumps nocturnes
+    MIN_VOL_1H_USDT = 150_000         # $150K/heure minimum
+    
     # Multi-Lambda Coordination
     USE_LIMIT_ORDERS = True
     
