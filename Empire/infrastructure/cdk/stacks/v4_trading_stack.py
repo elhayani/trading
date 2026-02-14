@@ -274,12 +274,12 @@ class V4TradingStack(Stack):
         lambda3_closer40.add_layers(dependency_layer)
         
         # Lambda 4: Closer 30s (nouveau pour momentum 1min)
-        lambda4_closer30 = _lambda.Function(
+        lambda4_closer30 = lambda_.Function(
             self, "Lambda4Closer30",
             function_name="V4_Closer_30s",
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda2_closer.lambda_handler",
-            code=_lambda.Code.from_asset("lambda/v4_trader"),
+            code=lambda_.Code.from_asset("lambda/v4_trader"),
             timeout=Duration.seconds(30),
             memory_size=Size.mebibytes(256),
             environment={

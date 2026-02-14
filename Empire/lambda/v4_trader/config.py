@@ -78,7 +78,8 @@ class TradingConfig:
     MAX_CONFIDENCE = 1.0
     
     # --- News Sentiment ---
-    NEWS_SENTIMENT_THRESHOLD = 0.5    # Very high threshold = disabled
+    # REMOVED: News sentiment disabled for momentum scalping (1-10min holding)
+    # NEWS_SENTIMENT_THRESHOLD = 0.5  # Not used - scalping relies on price action only
     
     # --- Macro Regime Adjustments ---
     RISK_OFF_HURDLE = 5

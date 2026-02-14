@@ -61,8 +61,8 @@ class DecisionEngine:
         # All markets considered open for trading
 
         confidence = score / 100.0
-        if news_score > 0.3: confidence *= 1.2
-        elif news_score < -0.3: confidence *= 0.8
+        # News sentiment removed for momentum scalping (1-10min holding)
+        # Price action only - no need for slow news impact
         
         return True, "PROCEED", min(1.0, confidence)
 

@@ -27,6 +27,13 @@ from config import TradingConfig
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Helper function to avoid DynamoDB code duplication
+def get_persistence():
+    """Get AtomicPersistence instance (avoid code duplication)"""
+    table_name = os.getenv('STATE_TABLE', 'V4TradingState')
+    table = dynamodb.Table(table_name)
+    return AtomicPersistence(table)
+
 # AWS Clients (lightweight)
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'eu-west-3'))
 secretsmanager = boto3.client('secretsmanager', region_name=os.getenv('AWS_REGION', 'eu-west-3'))
@@ -119,12 +126,7 @@ def check_and_close_position(
                     
                     # Remove from atomic risk
                     try:
-                        from atomic_persistence import AtomicPersistence
-                        import boto3
-                        table_name = os.getenv('STATE_TABLE', 'V4TradingState')
-                        dynamodb = boto3.resource('dynamodb')
-                        table = dynamodb.Table(table_name)
-                        persistence = AtomicPersistence(table)
+                        persistence = get_persistence()
                         risk_dollars = (entry_price * quantity) / float(position.get('leverage', 5))
                         persistence.atomic_remove_risk(symbol, risk_dollars)
                         logger.info(f"🧹 {symbol} - Atomic risk removed: ${risk_dollars:.2f}")
@@ -206,17 +208,9 @@ def check_and_close_position(
                 update_position_status(symbol, 'CLOSED', current_price, exit_reason, pnl_pct)
                 
                 # Remove from atomic risk (CRITICAL!)
-                try:
-                    from atomic_persistence import AtomicPersistence
-                    import boto3
-                    table_name = os.getenv('STATE_TABLE', 'V4TradingState')
-                    dynamodb = boto3.resource('dynamodb')
-                    table = dynamodb.Table(table_name)
-                    persistence = AtomicPersistence(table)
-                    persistence.atomic_remove_risk(symbol, risk_dollars)
-                    logger.info(f"🧹 {symbol} - Atomic risk removed: ${risk_dollars:.2f}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to remove atomic risk for {symbol}: {e}")
+                persistence = get_persistence()
+                persistence.atomic_remove_risk(symbol, risk_dollars)
+                logger.info(f"🧹 {symbol} - Atomic risk removed: ${risk_dollars:.2f}")
                 
                 return {
                     'action': 'CLOSED',
