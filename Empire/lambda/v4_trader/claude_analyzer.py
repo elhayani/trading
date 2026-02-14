@@ -90,8 +90,13 @@ Format exact:
   "urgency": "HIGH"
 }"""
         
-        # Determine if symbol is an altcoin for BTC correlation check
-        is_altcoin = symbol not in ['BTC/USDT:USDT', 'BTCUSDT', 'PAXG/USDT:USDT', 'PAXGUSDT']
+        # Determine if symbol is an altcoin (not BTC or PAXG)
+        # Normalize symbol format for comparison
+        symbol_normalized = symbol.replace('/USDT:USDT', '').replace('USDT', '')
+        is_btc = symbol_normalized in ['BTC']
+        is_paxg = symbol_normalized in ['PAXG']
+        is_altcoin = not (is_btc or is_paxg)
+        
         altcoin_note = "\n\n⚠️ IMPORTANT: Cet actif est une ALTCOIN. Vérifie d'abord le sentiment du BTC. Si BTC est en panique, amplifie le score BEARISH." if is_altcoin else ""
         
         # User message with news

@@ -527,7 +527,7 @@ class TradingEngine:
         if quantity < min_amount: quantity = min_amount
 
         # PAXG-specific: leverage x4 for low-volatility gold token
-        is_paxg = 'PAXG' in symbol
+        is_paxg = TradingConfig.is_paxg(symbol)
         leverage = TradingConfig.PAXG_LEVERAGE if is_paxg else TradingConfig.LEVERAGE
         
         try:
@@ -560,7 +560,7 @@ class TradingEngine:
             return {'symbol': symbol, 'status': 'BLOCKED_ATOMIC', 'reason': reason}
         
         # PAXG: TP 0.35% brut (~0.30% net) / SL 0.50% | Others: standard scalping config
-        if is_paxg:
+        if TradingConfig.is_paxg(symbol):
             tp_pct = TradingConfig.PAXG_TP
             sl_pct = TradingConfig.PAXG_SL
             logger.info(f"[PAXG] Gold mode: Leverage {leverage}x | TP {tp_pct*100:.2f}% brut (~0.30% net) | SL {sl_pct*100:.2f}%")
@@ -855,10 +855,30 @@ def lambda_handler(event, context):
     try:
         engine = TradingEngine()
         
-        # Get symbols from event or environment variable (11 symbols - V13.2 Binance Validated)
-        # Pump/News (1): DOGE | Tech L1 (1): AVAX | Oracle (1): LINK | Leaders (5): BTC, ETH, SOL, XRP, BNB | RWA (1): PAXG | Indices (1): SPX | Parking (1): USDC
-        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,USDC/USDT:USDT')
-        symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
+        # Get symbols from event or environment variable
+        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', '')
+        if not symbols_str:
+            # Si aucun symbole fourni, récupérer tous les symboles disponibles
+            try:
+                import requests
+                response = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=5)
+                response.raise_for_status()
+                data = response.json()
+                
+                symbols = []
+                for symbol_info in data['symbols']:
+                    if (symbol_info['status'] == 'TRADING' and 
+                        symbol_info['contractType'] == 'PERPETUAL' and
+                        symbol_info['quoteAsset'] == 'USDT'):
+                        symbols.append(f"{symbol_info['symbol']}/USDT:USDT")
+                
+                logger.info(f"[INFO] Dynamically loaded {len(symbols)} symbols from Binance API")
+                
+            except Exception as e:
+                logger.error(f"[ERROR] Failed to load symbols from API: {e}")
+                symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT']  # Minimal fallback
+        else:
+            symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
         
         logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
         

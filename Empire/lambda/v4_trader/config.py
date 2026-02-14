@@ -122,26 +122,27 @@ class TradingConfig:
     BREAKEVEN_WIN_RATE = 0.52       # 52% needed for profitability
 
     # ================================================================
-    # EMPIRE ASSET CONFIGURATION (unchanged)
+    # ASSET CONFIGURATION - Dynamic based on symbol detection
     # ================================================================
-    EMPIRE_ASSETS = {
-        "BTC/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Leader", "notes": "Global 24/7"},
-        "ETH/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Major Altcoin", "notes": "Global 24/7"},
-        "SOL/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "High Volatility", "notes": "Global 24/7"},
-        "AVAX/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Ecosystem Hub"},
-        "LINK/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Oracle Backbone"},
-        "ADA/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Research Based"},
-        "DOT/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Interoperability"},
-        "POL/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "L2 Alpha"},
-        "XRP/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "News/Asia", "notes": "Night (Asia)"},
-        "BNB/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Binance Eco", "notes": "Global 24/7"},
-        "DOGE/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Retail Sentiment", "notes": "Random"},
-        "PAXG/USDT:USDT": {"leverage": 6, "class": "commodities", "role": "Gold Shield", "notes": "Safe Haven"},
-        "OIL/USDT:USDT": {"leverage": 5, "class": "commodities", "role": "WTI Crude", "notes": "Geopolitical"},
-        "SPX/USDT:USDT": {"leverage": 5, "class": "indices", "role": "S&P 500", "notes": "15:30 (USA)"},
-        "DAX/USDT:USDT": {"leverage": 5, "class": "indices", "role": "GER40", "notes": "09:00 (Europe)"},
-        "NDX/USDT:USDT": {"leverage": 5, "class": "indices", "role": "NASDAQ 100", "notes": "V13.8 Elite High-Growth"},
-        "EUR/USD:USDT": {"leverage": 5, "class": "forex", "role": "Major Pair", "notes": "24/7"},
-        "GBP/USD:USDT": {"leverage": 5, "class": "forex", "role": "V13.8 Elite Sterling", "notes": "Volatile Forex"},
-        "USD/JPY:USDT": {"leverage": 5, "class": "forex", "role": "V13.8 Elite Yen", "notes": "Safe Haven FX"},
-    }
+    
+    @staticmethod
+    def get_asset_config(symbol: str) -> dict:
+        """Get dynamic asset configuration based on symbol"""
+        # Normalize symbol for comparison
+        symbol_normalized = symbol.replace('/USDT:USDT', '').replace('USDT', '')
+        
+        # Special configurations
+        if symbol_normalized == 'PAXG':
+            return {"leverage": TradingConfig.PAXG_LEVERAGE, "class": "commodities", "role": "Gold Shield", "notes": "Safe Haven"}
+        elif symbol_normalized == 'BTC':
+            return {"leverage": TradingConfig.LEVERAGE, "class": "crypto", "role": "Leader", "notes": "Global 24/7"}
+        elif symbol_normalized == 'ETH':
+            return {"leverage": TradingConfig.LEVERAGE, "class": "crypto", "role": "Major Altcoin", "notes": "Global 24/7"}
+        else:
+            # Default configuration for all other symbols
+            return {"leverage": TradingConfig.LEVERAGE, "class": "crypto", "role": "Altcoin", "notes": "Dynamic"}
+    
+    @staticmethod
+    def is_paxg(symbol: str) -> bool:
+        """Check if symbol is PAXG"""
+        return symbol.replace('/USDT:USDT', '').replace('USDT', '') == 'PAXG'

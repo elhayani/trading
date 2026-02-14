@@ -72,9 +72,12 @@ def lambda_handler(event, context):
             
         except Exception as e:
             logger.error(f"❌ Erreur récupération symboles: {e}")
-            # Fallback sur la liste par défaut
-            symbols_str = os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT')
+            # Si l'API échoue, utiliser les symboles depuis env var ou liste minimal
+            symbols_str = os.getenv('SYMBOLS', 'BTCUSDT,ETHUSDT')
+            # Convertir au format interne si nécessaire
             symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
+            # S'assurer du format /USDT:USDT
+            symbols = [f"{s}/USDT:USDT" if not '/' in s else s for s in symbols]
             logger.info(f"🔄 Utilisation liste fallback: {len(symbols)} symboles")
         
         # Load state (Architecture 3-Lambda: RiskManager handles state)

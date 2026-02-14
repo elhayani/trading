@@ -154,7 +154,8 @@ class V4TradingStack(Stack):
                 **common_env,
                 "TRADING_MODE": "dry_run",
                 "CAPITAL": "1000",
-                "SYMBOLS": "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,DAX/USDT:USDT,NDX/USDT:USDT,OIL/USDT:USDT,EUR/USD:USDT,GBP/USD:USDT,USD/JPY:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,ADA/USDT:USDT,DOT/USDT:USDT,POL/USDT:USDT",
+                "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
+                "MAX_SYMBOLS_PER_SCAN": "200",  # Limit symbols to prevent timeout
                 "USE_CLAUDE_ANALYSIS": "false",  # Disabled for speed
                 "LAMBDA_ROLE": "SCANNER"  # Identifies role
             },
@@ -214,7 +215,8 @@ class V4TradingStack(Stack):
             timeout=Duration.minutes(1),
             memory_size=256,
             environment={
-                "SYMBOLS": "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,PAXGUSDT,SPXUSDT,DAXUSDT,NDXUSDT,OILUSDT,EURUSDT,GBPUSDT,USDJPYUSDT,AVAXUSDT,LINKUSDT,ADAUSDT,DOTUSDT,POLMATUSDT",
+                "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
+                "MAX_SYMBOLS_PER_SCAN": "200",  # Limit symbols to prevent timeout
                 "TRADING_MODE": "dry_run",
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
