@@ -356,7 +356,11 @@ def scan_table_worker(table_name):
     """Worker function for parallel DDB scanning (No Pagination to avoid timeout)"""
     try:
         table = dynamodb.Table(table_name)
-        response = table.scan() # Returns up to 1MB
+        # 🏛️ EMPIRE V13.8: Ignore test data
+        response = table.scan(
+            FilterExpression='attribute_not_exists(is_test) OR is_test = :f',
+            ExpressionAttributeValues={':f': False}
+        ) # Returns up to 1MB
         return response.get('Items', [])
     except Exception as e:
         print(f"❌ Error scanning {table_name}: {e}")
@@ -597,13 +601,15 @@ def lambda_handler(event, context):
                 
                 # Fetch all recent trades from DynamoDB (including those with DynamoDB errors)
                 # Add limit to prevent excessive reads
+                # 🏛️ EMPIRE V13.8: Ignore test data
                 response = trades_table.scan(
-                    FilterExpression='#ts > :cutoff',
+                    FilterExpression='#ts > :cutoff AND (attribute_not_exists(is_test) OR is_test = :f)',
                     ExpressionAttributeNames={
                         '#ts': 'Timestamp'
                     },
                     ExpressionAttributeValues={
-                        ':cutoff': cutoff_iso
+                        ':cutoff': cutoff_iso,
+                        ':f': False
                     },
                     Limit=1000  # Prevent excessive DynamoDB reads
                 )
@@ -942,18 +948,8 @@ def lambda_handler(event, context):
         cutoff_48h = (datetime.now() - timedelta(hours=48)).isoformat()
         raw_recent = [t for t in trades_filtered if t.get('Timestamp', '') > cutoff_48h]
         
-        # --- AUDIT V11.4: Grouping & Filtering by Occurrences (Backend optimization) ---
-        # "N'affiche pas qd c'est moins de 4" - Reduce payload by only sending significant groups
-        occurrence_counts = {}
-        for t in all_trades_from_db:
-            pair = t.get('Pair') or t.get('Symbol') or 'UNK'
-            reason = t.get('ExitReason') or t.get('AI_Reason') or t.get('Reason') or t.get('reason') or '-'
-            key = f"{pair}||{reason}"
-            occurrence_counts[key] = occurrence_counts.get(key, 0) + 1
-        
-        # Filter raw_recent history trades based on global occurrence count
-        raw_recent = [t for t in raw_recent if occurrence_counts.get(f"{t.get('Pair') or t.get('Symbol') or 'UNK'}||{t.get('ExitReason') or t.get('AI_Reason') or t.get('Reason') or t.get('reason') or '-'}", 0) >= 4]
-        
+        # --- AUDIT V11.4: Grouping removed to show ALL recent trades ---
+        # The previous filter ">= 4" was hiding new closed trades.
         raw_recent = sorted(raw_recent, key=lambda x: x.get('Timestamp', ''), reverse=True)
         recent_trades = live_positions + raw_recent
 
@@ -972,7 +968,12 @@ def lambda_handler(event, context):
 
         # 7. Skipped Trades (V13.4: read from separate EmpireSkippedTrades table)
         try:
-            skip_response = skipped_table.scan(Limit=200)
+            # 🏛️ EMPIRE V13.8: Ignore test data
+            skip_response = skipped_table.scan(
+                Limit=200,
+                FilterExpression='attribute_not_exists(is_test) OR is_test = :f',
+                ExpressionAttributeValues={':f': False}
+            )
             skipped_trades = skip_response.get('Items', [])
             for skip in skipped_trades:
                 skip['Source'] = 'SKIPPED_TABLE'
