@@ -43,6 +43,21 @@ def _fetch_yahoo_data(symbol: str, period: str = '2d') -> Optional[Dict]:
 
 def get_macro_context(state_table=None) -> Dict:
     """
+    Récupère le contexte macro global pour filtrer les trades.
+    
+    IMPORTANT: Les indices traditionnels (S&P500, VIX) sont utilisés
+    comme INDICATEURS DE SENTIMENT uniquement. Ils ne sont PAS tradés
+    sur Binance.
+    
+    Usage:
+    - VIX > 35 → Regime = CRASH → Réduire leverage
+    - S&P500 < -3% → Risk-OFF → Skip altcoins risqués
+    - DXY pump → USD strength → Bearish crypto
+    
+    Sources de données:
+    - Yahoo Finance (^GSPC, ^VIX, UUP)
+    - Lecture seule, pas de trading
+    
     Get macro context with 2-level caching (Memory + DynamoDB).
     (Critique #3 New)
     """

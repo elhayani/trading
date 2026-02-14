@@ -163,14 +163,24 @@ def lambda_handler(event, context):
             response.raise_for_status()
             data = response.json()
             
+            # Quote assets valides pour le scanner (exclure BUSD)
+            VALID_QUOTE_ASSETS = ['USDT', 'FDUSD']
+            
             symbols = []
             for symbol_info in data['symbols']:
                 if (symbol_info['status'] == 'TRADING' and 
                     symbol_info['contractType'] == 'PERPETUAL' and
-                    symbol_info['quoteAsset'] == 'USDT'):
-                    symbols.append(symbol_info['symbol'])
+                    symbol_info['quoteAsset'] in VALID_QUOTE_ASSETS):
+                    
+                    # Normaliser au format CCXT
+                    raw_symbol = symbol_info['symbol']  # Ex: BTCUSDT, BTCFDUSD
+                    quote = symbol_info['quoteAsset']
+                    base = raw_symbol.replace(quote, '')
+                    normalized = f"{base}/{quote}:{quote}"
+                    
+                    symbols.append(normalized)
             
-            logger.info(f"✅ Trouvé {len(symbols)} symboles Futures USDT actifs")
+            logger.info(f"✅ Trouvé {len(symbols)} symboles Futures USDT+FDUSD actifs")
             
             # Limiter pour éviter timeout (configurable via env var)
             max_symbols = int(os.getenv('MAX_SYMBOLS_PER_SCAN', '100'))
