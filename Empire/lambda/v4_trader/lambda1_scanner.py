@@ -140,15 +140,37 @@ def lambda_handler(event, context):
         # CORE WORKFLOW: SCAN + OPEN ONLY
         # ================================================================
         
-        # Step 1: Process TOUS les symboles disponibles
-        logger.info(f"🔄 Processing TOUS les {len(symbols)} symboles disponibles...")
+        # Step 1: Pré-tri par mobilité (ultra-rapide)
+        logger.info(f"🔍 Pré-tri mobilité sur {len(symbols)} symboles...")
+        mobility_start = time.time()
+        
+        # Fetch 5 bougies sur tous les actifs pour trier par mobilité
+        mobility_scores = []
+        for symbol in symbols:
+            try:
+                ohlcv_micro = engine.exchange.fetch_ohlcv_1min(symbol, limit=5)
+                if len(ohlcv_micro) >= 5:
+                    # Calculer le mouvement récent (5 bougies)
+                    last_move = abs(ohlcv_micro[-1][4] - ohlcv_micro[-5][4]) / ohlcv_micro[-5][4] * 100
+                    mobility_scores.append((symbol, last_move))
+            except Exception as e:
+                logger.warning(f"[MOBILITY] Failed to fetch {symbol}: {e}")
+        
+        # Trier du plus mobile au plus stable
+        mobility_scores.sort(key=lambda x: x[1], reverse=True)
+        symbols_sorted = [s for s, _ in mobility_scores[:50]]  # TOP 50 les plus mobiles
+        
+        mobility_time = time.time() - mobility_start
+        logger.info(f"⚡ Pré-tri terminé: {len(symbols_sorted)} actifs mobiles en {mobility_time:.1f}s")
+        
+        # Step 2: Process only the mobile symbols
+        logger.info(f"🔄 Processing {len(symbols_sorted)} symboles mobiles...")
         scan_start = time.time()
         
-        # Step 2: Process each symbol (OPEN only)
         opened_count = 0
         skipped_count = 0
         
-        for symbol in symbols:
+        for symbol in symbols_sorted:
             # Attempt to open position - checks for limit, already open, and cooldown are now INSIDE engine
             try:
                 result = engine.run_cycle(symbol)
@@ -167,7 +189,8 @@ def lambda_handler(event, context):
                 skipped_count += 1
         
         scan_duration = time.time() - scan_start
-        logger.info(f"✅ Processing complete in {scan_duration:.1f}s - {len(symbols)} symbols")
+        total_duration = time.time() - start_time
+        logger.info(f"✅ Processing complete in {scan_duration:.1f}s - {len(symbols_sorted)} mobiles")
         
         # Step 3: Save state
         engine.persistence.save_risk_state(engine.risk_manager.get_state())
@@ -176,25 +199,26 @@ def lambda_handler(event, context):
         # RESPONSE
         # ================================================================
         
-        duration = time.time() - start_time
-        
         response = {
             'lambda': 'SCANNER',
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'duration_seconds': round(duration, 2),
+            'duration_seconds': round(total_duration, 2),
+            'mobility_duration': round(mobility_time, 2),
             'scan_duration': round(scan_duration, 2),
-            'candidates_found': len(symbols),
+            'total_symbols': len(symbols),
+            'mobile_symbols': len(symbols_sorted),
+            'candidates_found': len(symbols_sorted),
             'positions_opened': opened_count,
             'opportunities_skipped': skipped_count,
             'total_open_positions': existing_count + opened_count,
-            'symbols_scanned': len(symbols),
-            'top_candidates': symbols[:5]
+            'symbols_scanned': len(symbols_sorted),
+            'top_candidates': symbols_sorted[:5]
         }
         
         logger.info("=" * 80)
         logger.info(f"✅ LAMBDA 1 Complete: {opened_count} opened, {skipped_count} skipped")
-        logger.info(f"📊 Processed: {len(symbols)} symbols total")
-        logger.info(f"⏱️  Duration: {duration:.2f}s")
+        logger.info(f"📊 Processed: {len(symbols)} total → {len(symbols_sorted)} mobiles")
+        logger.info(f"⏱️  Duration: {total_duration:.2f}s (mobility: {mobility_time:.1f}s)")
         logger.info("=" * 80)
         
         return {

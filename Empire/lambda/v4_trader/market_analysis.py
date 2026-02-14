@@ -349,6 +349,61 @@ def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = 
         'price': float(current['close'])
     }
 
+def mobility_score(ohlcv_1min: List) -> tuple[int, str]:
+    """
+    Pre-filter: évalue si l'actif EST EN MOUVEMENT maintenant.
+    Retourne (score, raison_skip)
+    Score 0 = skip, 100 = candidat parfait
+    """
+    if len(ohlcv_1min) < 25:
+        return 0, 'INSUFFICIENT_DATA'
+    
+    import pandas as pd
+    from config import TradingConfig
+    
+    df = pd.DataFrame(ohlcv_1min, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    
+    # Conversions numériques
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    score = 0
+    
+    # 1. ATR récent (volatilité)
+    atr_10 = calculate_atr(df['high'], df['low'], df['close'], period=10).iloc[-1]
+    atr_pct = (atr_10 / df['close'].iloc[-1]) * 100
+    
+    if atr_pct >= 0.50:
+        score += 40  # Très volatile ✅
+    elif atr_pct >= 0.25:
+        score += 20  # Acceptable
+    else:
+        return 0, 'FLAT'  # Skip immédiat
+    
+    # 2. Volume surge (accélération volume)
+    vol_recent = df['volume'].iloc[-3:].mean()
+    vol_avg = df['volume'].iloc[-23:-3].mean()
+    vol_ratio = vol_recent / vol_avg if vol_avg > 0 else 0
+    
+    if vol_ratio >= 2.0:
+        score += 35  # Explosion de volume ✅
+    elif vol_ratio >= 1.3:
+        score += 15  # Volume correct
+    else:
+        return 0, 'NO_VOLUME'  # Skip immédiat
+    
+    # 3. Price thrust (amplitude mouvement)
+    thrust = abs(df['close'].iloc[-1] - df['close'].iloc[-6]) / df['close'].iloc[-6] * 100
+    
+    if thrust >= 0.50:
+        score += 25  # Mouvement fort ✅
+    elif thrust >= 0.20:
+        score += 10  # Mouvement présent
+    else:
+        return 0, 'NO_THRUST'  # Skip immédiat
+    
+    return score, 'OK'
+
 def analyze_momentum(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
     """
     Momentum scanner sur bougies 1 minute.

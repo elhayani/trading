@@ -460,16 +460,27 @@ class TradingEngine:
             if positions and balance < 500:  # Less than $500 available
                 logger.info(f"[TRIM_CHECK] Low capital (${balance:.0f}), checking for better opportunities...")
             
-            # 1. Fetch des bougies 1 minute pour momentum
-            ohlcv_1min = self.exchange.fetch_ohlcv_1min(symbol, limit=50)
+            # 1. Pré-filtre de mobilité (25 bougies légères)
+            ohlcv_light = self.exchange.fetch_ohlcv_1min(symbol, limit=25)
             
-            if len(ohlcv_1min) < 30:
+            if len(ohlcv_light) < 25:
                 self.persistence.log_skipped_trade(symbol, "INSUFFICIENT_1MIN_DATA", asset_class)
                 return {'symbol': symbol, 'status': 'SKIPPED', 'reason': 'INSUFFICIENT_1MIN_DATA'}
             
-            # 2. Appeler la nouvelle fonction momentum
-            from market_analysis import analyze_momentum
+            # 2. Vérifier la mobilité avant tout calcul
+            from market_analysis import mobility_score
+            mob_score, mob_reason = mobility_score(ohlcv_light)
+            
+            if mob_score == 0:
+                self.persistence.log_skipped_trade(symbol, f"MOBILITY_{mob_reason}", asset_class)
+                return {'symbol': symbol, 'status': 'SKIPPED', 'reason': f"MOBILITY_{mob_reason}"}
+            
+            # 3. Fetch complet et analyse momentum (uniquement sur les mobiles)
+            ohlcv_1min = self.exchange.fetch_ohlcv_1min(symbol, limit=50)
             ta_result = analyze_momentum(ohlcv_1min, symbol)
+            
+            # Ajouter le score de mobilité pour logging
+            ta_result['mobility_score'] = mob_score
             
             if ta_result.get('market_context', '').startswith('VOLATILITY_SPIKE'):
                 reason = ta_result['market_context']
