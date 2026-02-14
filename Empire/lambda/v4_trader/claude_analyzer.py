@@ -5,6 +5,7 @@ Elite prompt engineering for advanced sentiment analysis
 import json
 import logging
 import boto3
+import botocore.config
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -22,14 +23,22 @@ class ClaudeNewsAnalyzer:
         Model ID: anthropic.claude-3-5-sonnet-20241022-v2:0
         """
         try:
+            # Configuration with timeout and retry
+            config = botocore.config.Config(
+                read_timeout=15,
+                connect_timeout=5,
+                retries={'max_attempts': 2, 'mode': 'adaptive'}
+            )
+            
             self.bedrock = boto3.client(
                 service_name='bedrock-runtime',
-                region_name=region
+                region_name=region,
+                config=config
             )
             self.model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-            logger.info(f"[CLAUDE] Initialized with model: {self.model_id}")
+            logger.info(f"[CLAUDE] Initialized with model: {self.model_id} (timeout: 15s)")
         except Exception as e:
-            logger.error(f"[CLAUDE ERROR] Failed to initialize Bedrock client: {e}")
+            logger.error(f"[CLAUDE] Failed to initialize: {e}")
             self.bedrock = None
     
     def analyze_news_batch(self, symbol: str, news_articles: List[Dict]) -> Dict:

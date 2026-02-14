@@ -23,19 +23,33 @@ class AtomicPersistence:
         """
         self.table = state_table
         
-    def load_positions(self):
+    def load_positions(self) -> Dict[str, Dict]:
         """
-        GSI Optimized Query (Audit #V11.5)
-        Gain: 500ms -> 18ms
+        Load all open positions from DynamoDB using GSI with projection optimization.
+        Returns: {symbol: position_data}
         """
         try:
+            # Query using status-timestamp-index for OPEN positions with projection
             response = self.table.query(
                 IndexName='status-timestamp-index',
                 KeyConditionExpression='#status = :open',
                 ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':open': 'OPEN'}
+                ExpressionAttributeValues={':open': 'OPEN'},
+                ProjectionExpression='trader_id, symbol, entry_price, quantity, direction, stop_loss, take_profit, leverage, timestamp'
             )
-            return {item['trader_id'].replace('POSITION#', ''): item['position'] for item in response.get('Items', [])}
+            
+            positions = {}
+            for item in response.get('Items', []):
+                symbol = item['trader_id'].replace('POSITION#', '')
+                positions[symbol] = item
+            
+            logger.info(f"✅ Loaded {len(positions)} open positions")
+            return positions
+            
+        except ClientError as e:
+            logger.error(f"❌ Failed to load positions: {e}")
+            return {}
+        
         except Exception as e:
             logger.warning(f"[WARN] GSI Query failed, falling back to scan: {e}")
             try:
@@ -43,7 +57,7 @@ class AtomicPersistence:
                     FilterExpression='begins_with(trader_id, :prefix)',
                     ExpressionAttributeValues={':prefix': 'POSITION#'}
                 )
-                return {item['trader_id'].replace('POSITION#', ''): item['position'] for item in response.get('Items', [])}
+                return {item['trader_id'].replace('POSITION#', ''): item for item in response.get('Items', [])}
             except Exception as e2:
                 logger.error(f"[ERROR] Failed to load positions (Scan): {e2}")
                 return {}
@@ -83,54 +97,43 @@ class AtomicPersistence:
             
             # Ensure active_trades map exists first
             try:
+                response = self.table.update_item(
+                    Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
+                    UpdateExpression='SET total_risk = if_not_exists(total_risk, :start) + :new_risk, last_updated = :ts, #active_trades = if_not_exists(#active_trades, :empty)',
+                    ConditionExpression='attribute_not_exists(total_risk) OR (total_risk + :new_risk) <= :max_risk',
+                    ExpressionAttributeNames={
+                        '#active_trades': 'active_trades'
+                    },
+                    ExpressionAttributeValues={
+                        ':start': 0,
+                        ':new_risk': new_risk,
+                        ':max_risk': max_risk,
+                        ':ts': datetime.now(timezone.utc).isoformat(),
+                        ':empty': {}
+                    },
+                    ReturnValues='ALL_NEW'
+                )
+                
+                updated_risk = float(response['Attributes'].get('total_risk', 0))
+                
+                # Add to active trades map
                 self.table.update_item(
                     Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
-                    UpdateExpression='SET active_trades = if_not_exists(active_trades, :empty_map)',
-                    ExpressionAttributeValues={':empty_map': {}}
+                    UpdateExpression='SET active_trades.#symbol = :trade_data',
+                    ExpressionAttributeNames={
+                        '#symbol': safe_symbol
+                    },
+                    ExpressionAttributeValues={
+                        ':trade_data': trade_data
+                    }
                 )
-            except Exception:
-                pass  # Ignore if it already exists
-            
-            # Atomic increment with condition
-            # DynamoDB does NOT support arithmetic in ConditionExpression
-            # So we compare total_risk <= (max_risk - new_risk) instead
-            response = self.table.update_item(
-                Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
-                UpdateExpression='''
-                    SET total_risk = if_not_exists(total_risk, :zero) + :new_risk,
-                        active_trades.#sym = :trade_data,
-                        last_updated = :timestamp
-                ''',
-                ConditionExpression='''
-                    attribute_not_exists(total_risk) OR 
-                    total_risk <= :risk_threshold
-                ''',
-                ExpressionAttributeNames={
-                    '#sym': safe_symbol  # Use sanitized symbol for DynamoDB key
-                },
-                ExpressionAttributeValues={
-                    ':zero': Decimal('0'),
-                    ':new_risk': new_risk,
-                    ':risk_threshold': risk_threshold,
-                    ':trade_data': trade_data,
-                    ':timestamp': datetime.now(timezone.utc).isoformat()
-                },
-                ReturnValues='UPDATED_NEW'
-            )
-            
-            new_total = float(response['Attributes']['total_risk'])
-            logger.info(f"[OK] Atomic risk registered: {symbol} ${risk_dollars:.2f} -> Portfolio Total: ${new_total:.2f}")
-            return True, "OK"
-            
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            
-            if error_code == 'ConditionalCheckFailedException':
-                logger.error(f"[ALERT] Portfolio risk cap would be exceeded. Trade {symbol} blocked atomically.")
-                return False, "PORTFOLIO_RISK_CAP_EXCEEDED"
-            else:
-                logger.error(f"[ERROR] DynamoDB atomic operation failed: {e}")
-                return False, f"DYNAMODB_ERROR_{error_code}"
+                
+                return True, f"Risk registered: ${risk_dollars:.2f} (Total: ${updated_risk:.2f})"
+                
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                    return False, f"Risk limit exceeded. Attempted: ${risk_dollars:.2f}, Max: ${max_risk:.2f}"
+                raise
         
         except Exception as e:
             logger.error(f"[ERROR] Unexpected error in atomic risk check: {e}")

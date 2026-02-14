@@ -94,17 +94,33 @@ def lambda_handler(event, context):
         ghost_cleaned = 0
         for symbol, pos_data in dynamo_positions.items():
             if symbol not in binance_positions:
-                logger.warning(f"� GHOST DETECTED: {symbol} exists in DynamoDB but not on Binance - CLEANING")
-                # Marquer comme GHOST et nettoyer
+                logger.warning(f"👻 GHOST TRADE DETECTED: {symbol} in DynamoDB but not on Binance")
+                
+                # Calculate risk to remove
+                entry_price = float(pos_data.get('entry_price', 0))
+                quantity = float(pos_data.get('quantity', 0))
+                leverage = float(pos_data.get('leverage', 1))
+                risk_dollars = (entry_price * quantity) / leverage
+                
+                # Log the trade as closed with GHOST_CLEANUP reason
                 engine.persistence.log_trade_close(
-                    trade_id=pos_data.get('trade_id', f"POSITION#{symbol}"),
-                    exit_price=pos_data.get('entry_price', 0),
-                    pnl=0,
-                    reason="GHOST_CLEANUP: Position not found on Binance"
+                    symbol=symbol,
+                    exit_price=0.0,
+                    exit_time=datetime.now(timezone.utc).isoformat(),
+                    pnl_pct=0.0,
+                    pnl_usd=0.0,
+                    exit_reason="GHOST_CLEANUP",
+                    strategy="GHOST_DETECTION"
                 )
-                # Supprimer de risk_manager
-                engine.risk_manager.close_trade(symbol, pos_data.get('entry_price', 0))
+                
+                # Remove from risk manager
+                engine.risk_manager.close_trade(symbol, entry_price)
+                
+                # Remove from atomic risk (CRITICAL!)
+                engine.persistence.atomic_remove_risk(symbol, risk_dollars)
+                
                 ghost_cleaned += 1
+                logger.info(f"🧹 Ghost {symbol} cleaned - Risk removed: ${risk_dollars:.2f}")
         
         # Sauvegarder l'état après nettoyage
         if ghost_cleaned > 0:

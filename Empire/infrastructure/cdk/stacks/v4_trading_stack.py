@@ -148,7 +148,7 @@ class V4TradingStack(Stack):
             handler="lambda1_scanner.lambda_handler",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
             timeout=Duration.seconds(90),  # Extended timeout for Claude analysis
-            memory_size=2048,  # Increased memory for Claude processing
+            memory_size=1024,  # Optimized memory for Claude processing
             ephemeral_storage_size=Size.mebibytes(1024),
             environment={
                 **common_env,
