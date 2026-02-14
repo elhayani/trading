@@ -47,7 +47,6 @@ from decision_engine import DecisionEngine
 import macro_context
 from atomic_persistence import AtomicPersistence
 from anti_spam_helpers import is_in_cooldown, record_trade_timestamp, get_real_binance_positions
-from trim_switch import evaluate_trim_and_switch
 
 @dataclass
 class MacroContext:
@@ -496,13 +495,7 @@ class TradingEngine:
                 self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
             
-            # TRIM & SWITCH: If we have a high-confidence signal but low capital, consider trimming positions
-            if positions and balance < 500 and decision['confidence'] >= 0.75:
-                trim_result = self._evaluate_trim_and_switch(positions, symbol, decision, balance)
-                if trim_result['action'] == 'TRIMMED':
-                    balance = trim_result['freed_capital']
-                    logger.info(f"[TRIM_SUCCESS] Freed ${balance:.0f} for {symbol} opportunity")
-            
+                        
             return self._execute_entry(symbol, direction, decision, ta_result, asset_class, balance)
             
         except Exception as e:
@@ -693,17 +686,7 @@ class TradingEngine:
             logger.error(f"[MOCK_ERROR] Failed to create mock position for {symbol}: {e}")
             return {}
     
-    def _evaluate_trim_and_switch(self, positions: Dict, new_symbol: str, new_decision: Dict, current_balance: float) -> Dict:
-        """Evaluate if we should trim existing positions for better opportunities"""
-        return evaluate_trim_and_switch(
-            self.exchange,
-            self.persistence,
-            positions,
-            new_symbol,
-            new_decision,
-            current_balance
-        )
-    
+        
     def _manage_positions(self, positions: Dict):
         logger.info(f"\n{'='*70}\n[INFO] POSITION MANAGEMENT\n{'='*70}")
         for symbol, pos in list(positions.items()):

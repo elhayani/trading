@@ -8,7 +8,6 @@ import risk_manager
 from risk_manager import RiskManager
 import config
 from config import TradingConfig
-import micro_corridors as corridors
 
 logger = logging.getLogger(__name__)
 
