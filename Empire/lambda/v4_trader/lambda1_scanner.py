@@ -16,7 +16,7 @@ from typing import Dict, List
 import boto3
 
 # Imports from existing modules
-from v4_hybrid_lambda import (
+from trading_engine import (
     AWSClients,
     TradingEngine,
     logger

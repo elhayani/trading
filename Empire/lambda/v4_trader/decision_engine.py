@@ -48,7 +48,7 @@ class DecisionEngine:
             return False, f"Low 24H Volume (${volume_24h/1e6:.1f}M < ${min_vol/1e6:.0f}M)", 0.0
         
         # 🏛️ EMPIRE V13.5: The Bedrock Matrix (BTC Unified Filter)
-        # FIX: Use intended_direction (from RSI override in v4_hybrid_lambda.py line 574) 
+        # FIX: Use intended_direction (from RSI override in trading_engine.py line 574) 
         # instead of ta_result signal_type to prevent bypass when score < 60 sets signal to NEUTRAL
         if asset_class == AssetClass.CRYPTO and btc_rsi is not None and "BTC" not in symbol:
             direction = intended_direction if intended_direction else (

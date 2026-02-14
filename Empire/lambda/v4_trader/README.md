@@ -27,7 +27,7 @@ Evaluation of 8 distinct metrics to generate a 0-100 score:
 
 ## 📁 Architecture
 -   `binance_scanner.py`: **V15 Native Scanner**. Parallel fetch of Ticker, OHLCV, Orderbook, and Trades.
--   `v4_hybrid_lambda.py`: Core execution engine with `scan_market_double_alpha` capability.
+-   `trading_engine.py`: Core execution engine with market scanning and trading capabilities.
 -   `market_analysis.py`: Multi-path signal generation (RSI/ADX/VWAP paths).
 -   `exchange_connector.py`: Singleton CCXT with optimized `fetch_tickers` and V15 analysis methods.
 -   `atomic_persistence.py`: Risk state management with conditional writes.
