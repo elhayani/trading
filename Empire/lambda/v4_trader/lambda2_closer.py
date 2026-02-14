@@ -128,8 +128,8 @@ def check_and_close_position(
         anti_trend_hit = False
         if not (tp_hit or sl_hit) and direction == 'SHORT':
              try:
-                 # Only check if position is losing or price is stretching
-                 if current_price > entry_price:
+                 # Only check if position is losing more than 0.5%
+                 if current_price > entry_price * 1.005:  # Loss > 0.5%
                      from market_analysis import calculate_adx
                      ohlcv = exchange.fetch_ohlcv(symbol, '1h', limit=30)
                      import pandas as pd
@@ -157,8 +157,27 @@ def check_and_close_position(
             )
             
             if close_result and close_result.get('status') == 'closed':
+                # Calculate risk to remove
+                entry_price = float(position['entry_price'])
+                quantity = float(position['quantity'])
+                leverage = float(position.get('leverage', 5))  # Default leverage
+                risk_dollars = (entry_price * quantity) / leverage
+                
                 # Update DynamoDB (mark as CLOSED)
                 update_position_status(symbol, 'CLOSED', current_price, exit_reason, pnl_pct)
+                
+                # Remove from atomic risk (CRITICAL!)
+                try:
+                    from atomic_persistence import AtomicPersistence
+                    import boto3
+                    table_name = os.getenv('STATE_TABLE', 'V4TradingState')
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table(table_name)
+                    persistence = AtomicPersistence(table)
+                    persistence.atomic_remove_risk(symbol, risk_dollars)
+                    logger.info(f"🧹 {symbol} - Atomic risk removed: ${risk_dollars:.2f}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to remove atomic risk for {symbol}: {e}")
                 
                 return {
                     'action': 'CLOSED',
@@ -187,10 +206,9 @@ def update_position_status(
     table = dynamodb.Table(table_name)
     
     try:
-        # Find the position item
-        response = table.query(
-            IndexName='status-timestamp-index',
-            KeyConditionExpression='#status = :open AND symbol = :symbol',
+        # Find the position item using scan (GSI doesn't support symbol query)
+        response = table.scan(
+            FilterExpression='#status = :open AND symbol = :symbol',
             ExpressionAttributeNames={'#status': 'status'},
             ExpressionAttributeValues={
                 ':open': 'OPEN',
@@ -245,13 +263,12 @@ def lambda_handler(event, context):
     lambda_role = os.getenv('LAMBDA_ROLE', 'CLOSER_UNKNOWN')
     
     # ⏱️ STAGGER LOGIC (Architecture 3-Lambda)
-    if not event.get('manual'):
-        if '20S' in lambda_role:
-            logger.info("⏱️ Waiting 20 seconds...")
-            time.sleep(20)
-        elif '40S' in lambda_role:
-            logger.info("⏱️ Waiting 40 seconds...")
-            time.sleep(40)
+    # Use delay from event payload (EventBridge Scheduler integration)
+    delay_seconds = event.get('delay_seconds', 0)
+    if delay_seconds > 0 and not event.get('manual'):
+        logger.info(f"⏱️ Processing with {delay_seconds}s delay from scheduler...")
+        # Note: EventBridge Scheduler handles the delay, not the Lambda
+        # This prevents wasting Lambda execution time on sleep
 
     start_time = time.time()
     logger.info("=" * 60)

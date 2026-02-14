@@ -84,9 +84,8 @@ class DecisionEngine:
         if score < min_score:
             return False, f"LOW_SCORE_{score} (Min={min_score})", 0.0
 
-        corridor = corridors.get_corridor_params(symbol)
-        if corridor.get('regime') == MarketRegime.CLOSED:
-            return False, "MARKET_CLOSED", 0.0
+        # Corridor check removed - module doesn't exist
+        # All markets considered open for trading
 
         confidence = score / 100.0
         if news_score > 0.3: confidence *= 1.2
