@@ -13,12 +13,14 @@ from aws_cdk import (
     Duration,
     Size,
     aws_lambda as lambda_,
-    aws_events as events,
-    aws_events_targets as targets,
     aws_dynamodb as dynamodb,
     aws_iam as iam,
-    aws_logs as logs,
     aws_sns as sns,
+    aws_events as events,
+    aws_events_targets as targets,
+    aws_scheduler as scheduler,
+    aws_scheduler_targets as targets_scheduler,
+    aws_logs as logs,
     aws_secretsmanager as secretsmanager,
     RemovalPolicy,
     CfnOutput
@@ -157,6 +159,7 @@ class V4TradingStack(Stack):
                 "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
                 "MAX_SYMBOLS_PER_SCAN": "100",  # Reduced for Claude analysis performance
                 "USE_CLAUDE_ANALYSIS": "true",  # Enabled for advanced sentiment analysis
+                "LOG_LEVEL": "WARNING",  # Production: reduce CloudWatch costs
                 "LAMBDA_ROLE": "SCANNER"  # Identifies role
             },
             log_retention=logs.RetentionDays.ONE_WEEK
@@ -177,7 +180,8 @@ class V4TradingStack(Stack):
             environment={
                 **common_env,
                 "TRADING_MODE": "dry_run",
-                "LAMBDA_ROLE": "CLOSER_20S"
+                "LAMBDA_ROLE": "CLOSER_20S",
+                "LOG_LEVEL": "WARNING"  # Production: reduce CloudWatch costs
             },
             log_retention=logs.RetentionDays.ONE_WEEK
         )
@@ -197,7 +201,8 @@ class V4TradingStack(Stack):
             environment={
                 **common_env,
                 "TRADING_MODE": "dry_run",
-                "LAMBDA_ROLE": "CLOSER_40S"
+                "LAMBDA_ROLE": "CLOSER_40S",
+                "LOG_LEVEL": "WARNING"  # Production: reduce CloudWatch costs
             },
             log_retention=logs.RetentionDays.ONE_WEEK
         )
@@ -218,6 +223,7 @@ class V4TradingStack(Stack):
                 "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
                 "MAX_SYMBOLS_PER_SCAN": "100",  # Reduced for Claude analysis performance
                 "USE_CLAUDE_ANALYSIS": "true",  # Enabled for advanced sentiment analysis
+                "LOG_LEVEL": "WARNING",  # Production: reduce CloudWatch costs
                 "TRADING_MODE": "dry_run",
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
@@ -282,34 +288,62 @@ class V4TradingStack(Stack):
         )
         scanner_rule.add_target(targets.LambdaFunction(lambda1_scanner))
         
-        # Lambda 2: Every minute at :00, :20, :40 seconds
-        # EventBridge doesn't support sub-minute precision natively
-        # Workaround: Use Step Functions or custom logic
-        # For now: Run every minute, but add 20s delay logic in code
-        closer20_rule = events.Rule(
-            self, "Closer20Schedule",
-            rule_name="V4_Closer_20s",
-            description="Closer: Check positions every 20s",
-            schedule=events.Schedule.expression("cron(* * * * ? *)"),
-            enabled=True
+        # EventBridge Scheduler for precise timing (replaces blocking sleep)
+        # Create IAM role for EventBridge Scheduler
+        scheduler_role = iam.Role(
+            self, "SchedulerRole",
+            assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
+            description="Role for EventBridge Scheduler to invoke Lambda functions"
         )
-        closer20_rule.add_target(targets.LambdaFunction(
-            lambda2_closer20,
-            retry_attempts=0  # No retry for time-sensitive closers
-        ))
-        
-        # Lambda 3: Same as Lambda 2, but with 40s delay in code
-        closer40_rule = events.Rule(
-            self, "Closer40Schedule",
-            rule_name="V4_Closer_40s",
-            description="Closer: Check positions at 40s mark",
-            schedule=events.Schedule.expression("cron(* * * * ? *)"),
-            enabled=True
+        lambda2_closer20.grant_invoke(scheduler_role)
+        lambda3_closer40.grant_invoke(scheduler_role)
+
+        # Schedule 1: Immediate execution (0s delay)
+        scheduler.CfnSchedule(
+            self, "Closer0sSchedule",
+            name="V4_Closer_0s",
+            schedule_expression="cron(* * * * ? *)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=lambda2_closer20.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input=json.dumps({"delay_seconds": 0})
+            )
         )
-        closer40_rule.add_target(targets.LambdaFunction(
-            lambda3_closer40,
-            retry_attempts=0
-        ))
+
+        # Schedule 2: 20s delay
+        scheduler.CfnSchedule(
+            self, "Closer20sSchedule",
+            name="V4_Closer_20s",
+            schedule_expression="cron(* * * * ? *)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="FLEXIBLE",
+                maximum_window_in_minutes=1
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=lambda2_closer20.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input=json.dumps({"delay_seconds": 20}),
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
+            )
+        )
+
+        # Schedule 3: 40s delay
+        scheduler.CfnSchedule(
+            self, "Closer40sSchedule",
+            name="V4_Closer_40s",
+            schedule_expression="cron(* * * * ? *)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="FLEXIBLE",
+                maximum_window_in_minutes=1
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=lambda3_closer40.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input=json.dumps({"delay_seconds": 40}),
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
+            )
+        )
         
         # Reporter: Every 30 minutes during trading hours
         reporting_rule = events.Rule(

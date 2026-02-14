@@ -9,16 +9,17 @@ N'OUVRE JAMAIS de positions
 
 import json
 import os
-import logging
 import time
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from decimal import Decimal
 
 import boto3
 
-# Imports from existing modules
-from exchange_connector import ExchangeConnector
+# Configure log level based on environment
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+logging.getLogger().setLevel(getattr(logging, LOG_LEVEL))
 from config import TradingConfig
 
 # Setup logger

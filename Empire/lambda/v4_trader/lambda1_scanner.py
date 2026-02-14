@@ -15,6 +15,10 @@ from typing import Dict, List
 
 import boto3
 
+# Configure log level based on environment
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+logging.getLogger().setLevel(getattr(logging, LOG_LEVEL))
+
 # Imports from existing modules
 from trading_engine import (
     AWSClients,
