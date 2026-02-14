@@ -147,16 +147,16 @@ class V4TradingStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda1_scanner.lambda_handler",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(55),  # 55s (marge 5s avant timeout EventBridge)
-            memory_size=1536,  # Scanner needs OHLCV cache
+            timeout=Duration.seconds(90),  # Extended timeout for Claude analysis
+            memory_size=2048,  # Increased memory for Claude processing
             ephemeral_storage_size=Size.mebibytes(1024),
             environment={
                 **common_env,
                 "TRADING_MODE": "dry_run",
                 "CAPITAL": "1000",
                 "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
-                "MAX_SYMBOLS_PER_SCAN": "200",  # Limit symbols to prevent timeout
-                "USE_CLAUDE_ANALYSIS": "false",  # Disabled for speed
+                "MAX_SYMBOLS_PER_SCAN": "100",  # Reduced for Claude analysis performance
+                "USE_CLAUDE_ANALYSIS": "true",  # Enabled for advanced sentiment analysis
                 "LAMBDA_ROLE": "SCANNER"  # Identifies role
             },
             log_retention=logs.RetentionDays.ONE_WEEK
@@ -213,10 +213,11 @@ class V4TradingStack(Stack):
             handler="reporter.lambda_handler",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
             timeout=Duration.minutes(1),
-            memory_size=256,
+            memory_size=512,  # Increased memory for Claude processing
             environment={
                 "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
-                "MAX_SYMBOLS_PER_SCAN": "200",  # Limit symbols to prevent timeout
+                "MAX_SYMBOLS_PER_SCAN": "100",  # Reduced for Claude analysis performance
+                "USE_CLAUDE_ANALYSIS": "true",  # Enabled for advanced sentiment analysis
                 "TRADING_MODE": "dry_run",
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
