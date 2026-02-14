@@ -1,8 +1,10 @@
 """
-⚙️ EMPIRE TRADING CONFIGURATION - 3-LAMBDA ARCHITECTURE
-========================================================
-Optimized for: +1% per day target with Quick Exit strategy
+⚙️ EMPIRE TRADING CONFIGURATION - MOMENTUM SCALPING ARCHITECTURE
+================================================================
+Optimized for: 1-minute momentum scalping with compound effect
 """
+
+import os
 
 class TradingConfig:
     # --- Technical Analysis ---
@@ -25,26 +27,29 @@ class TradingConfig:
     SLIPPAGE_BUFFER = 0.001  # 0.1% slippage
     
     # ================================================================
-    # SCALPING STRATEGY - ELITE QUICK EXIT (3-LAMBDA OPTIMIZED)
+    # MOMENTUM SCALPING STRATEGY - 1 MINUTE PURE MOMENTUM
     # ================================================================
     
-    LEVERAGE = 5  # x5 leverage to amplify micro-movements
+    LEVERAGE = 5
+    MAX_OPEN_TRADES = 3
+    MIN_VOLUME_24H = 5_000_000      # $5M minimum
     
-    # Progressive TP Ladder (Quick Exit Strategy)
-    # Lambda 2/3 will capture these TPs at 20s/40s intervals
-    TP_QUICK = 0.0025   # 0.25% → First exit target (70% position)
-    TP_FINAL = 0.0050   # 0.50% → Second exit target (30% position)
+    # Momentum TP/SL (basés sur ATR 1 min)
+    TP_MULTIPLIER = 2.0             # TP = 2 × ATR_1min
+    SL_MULTIPLIER = 1.0             # SL = 1 × ATR_1min
+    MAX_HOLD_CANDLES = 10           # Fermer de force après 10 bougies 1min
     
-    # Stop Loss (tight for quick scalping)
-    SL = 0.0020         # 0.20% stop loss
+    # Momentum signal
+    EMA_FAST = 5                    # EMA rapide sur bougies 1min
+    EMA_SLOW = 13                   # EMA lente sur bougies 1min
+    VOLUME_SURGE_RATIO = 1.5        # Volume doit être 1.5x la moyenne des 20 dernières bougies
+    MIN_MOMENTUM_SCORE = 60         # Score minimum pour ouvrir
     
-    # Quick Exit Settings
-    USE_PROGRESSIVE_EXIT = True  # Enable TP ladder
-    QUICK_EXIT_PERCENTAGE = 0.70  # 70% exit at TP_QUICK
-    FINAL_EXIT_PERCENTAGE = 0.30  # 30% exit at TP_FINAL
+    # Compound
+    USE_COMPOUND = True             # Le gain de chaque trade s'ajoute au capital
+    COMPOUND_BASE_CAPITAL = float(os.getenv('CAPITAL', '1000'))
     
     # Multi-Lambda Coordination
-    MAX_OPEN_TRADES = 4  # Limited as requested by user
     USE_LIMIT_ORDERS = True
     
     # --- PAXG Specific (unchanged) ---

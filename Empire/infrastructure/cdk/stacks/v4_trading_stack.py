@@ -272,6 +272,25 @@ class V4TradingStack(Stack):
         lambda1_scanner.add_layers(dependency_layer)
         lambda2_closer20.add_layers(dependency_layer)
         lambda3_closer40.add_layers(dependency_layer)
+        
+        # Lambda 4: Closer 30s (nouveau pour momentum 1min)
+        lambda4_closer30 = _lambda.Function(
+            self, "Lambda4Closer30",
+            function_name="V4_Closer_30s",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="lambda2_closer.lambda_handler",
+            code=_lambda.Code.from_asset("lambda/v4_trader"),
+            timeout=Duration.seconds(30),
+            memory_size=Size.mebibytes(256),
+            environment={
+                "LAMBDA_ROLE": "CLOSER_30S",
+                "STATE_TABLE": dynamodb_table.table_name,
+                "AWS_REGION": self.region,
+                "LOG_LEVEL": "WARNING"
+            }
+        )
+        
+        lambda4_closer30.add_layers(dependency_layer)
         reporter_lambda.add_layers(dependency_layer)
         
         # =====================================================================
@@ -297,6 +316,7 @@ class V4TradingStack(Stack):
         )
         lambda2_closer20.grant_invoke(scheduler_role)
         lambda3_closer40.grant_invoke(scheduler_role)
+        lambda4_closer30.grant_invoke(scheduler_role)
 
         # Schedule 1: Immediate execution (0s delay)
         scheduler.CfnSchedule(
@@ -311,28 +331,25 @@ class V4TradingStack(Stack):
             )
         )
 
-        # Schedule 2: 20s delay
+        # Schedule 2: 10s delay (Lambda 2)
         scheduler.CfnSchedule(
-            self, "Closer20sSchedule",
-            name="V4_Closer_20s",
-            schedule_expression="cron(* * * * ? *)",
-            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
-                mode="FLEXIBLE",
-                maximum_window_in_minutes=1
-            ),
+            self, "Closer10sSchedule",
+            name="V4_Closer_10s",
+            schedule_expression="rate(10 seconds)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
             target=scheduler.CfnSchedule.TargetProperty(
                 arn=lambda2_closer20.function_arn,
                 role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 20}),
+                input=json.dumps({"delay_seconds": 10}),
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
             )
         )
 
-        # Schedule 3: 40s delay
+        # Schedule 3: 20s delay (Lambda 3)
         scheduler.CfnSchedule(
-            self, "Closer40sSchedule",
-            name="V4_Closer_40s",
-            schedule_expression="cron(* * * * ? *)",
+            self, "Closer20sSchedule",
+            name="V4_Closer_20s",
+            schedule_expression="rate(20 seconds)",
             flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
                 mode="FLEXIBLE",
                 maximum_window_in_minutes=1
@@ -340,7 +357,24 @@ class V4TradingStack(Stack):
             target=scheduler.CfnSchedule.TargetProperty(
                 arn=lambda3_closer40.function_arn,
                 role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 40}),
+                input=json.dumps({"delay_seconds": 20}),
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
+            )
+        )
+
+        # Schedule 4: 30s delay (Lambda 4)
+        scheduler.CfnSchedule(
+            self, "Closer30sSchedule",
+            name="V4_Closer_30s",
+            schedule_expression="rate(30 seconds)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="FLEXIBLE",
+                maximum_window_in_minutes=1
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=lambda4_closer30.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input=json.dumps({"delay_seconds": 30}),
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
             )
         )

@@ -348,3 +348,155 @@ def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = 
         'adx': adx_val,
         'price': float(current['close'])
     }
+
+def analyze_momentum(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
+    """
+    Momentum scanner sur bougies 1 minute.
+    Signal LONG  : EMA5 croise au-dessus EMA13 + volume surge + prix en hausse
+    Signal SHORT : EMA5 croise en-dessous EMA13 + volume surge + prix en baisse
+    """
+    import pandas as pd
+    from config import TradingConfig
+    
+    # 1. Charger les ohlcv_1min dans un DataFrame
+    if len(ohlcv_1min) < 30:
+        return {
+            'signal_type': 'NEUTRAL',
+            'score': 0,
+            'price': 0,
+            'atr': 0,
+            'atr_pct': 0,
+            'tp_price': 0,
+            'sl_price': 0,
+            'tp_pct': 0,
+            'sl_pct': 0,
+            'volume_ratio': 0,
+            'ema_fast': 0,
+            'ema_slow': 0,
+            'price_change_3': 0,
+            'blocked': False
+        }
+    
+    df = pd.DataFrame(ohlcv_1min, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    
+    # Conversions numériques
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 2. Calculer EMA_FAST (5) et EMA_SLOW (13)
+    df['ema_fast'] = df['close'].ewm(span=TradingConfig.EMA_FAST).mean()
+    df['ema_slow'] = df['close'].ewm(span=TradingConfig.EMA_SLOW).mean()
+    
+    # 3. Calculer ATR sur 14 périodes
+    atr_values = calculate_atr(df['high'], df['low'], df['close'], period=14)
+    df['atr'] = atr_values
+    
+    # 4. Calculer volume_ratio
+    volume_avg_20 = df['volume'].rolling(20).mean().iloc[-1]
+    volume_current = df['volume'].iloc[-1]
+    volume_ratio = volume_current / volume_avg_20 if volume_avg_20 > 0 else 1.0
+    
+    # 5. Détecter le croisement EMA
+    ema_fast_current = df['ema_fast'].iloc[-1]
+    ema_fast_prev = df['ema_fast'].iloc[-2]
+    ema_slow_current = df['ema_slow'].iloc[-1]
+    ema_slow_prev = df['ema_slow'].iloc[-2]
+    
+    crossover_up = ema_fast_current > ema_slow_current and ema_fast_prev <= ema_slow_prev
+    crossover_down = ema_fast_current < ema_slow_current and ema_fast_prev >= ema_slow_prev
+    
+    # 6. Calculer le score (0-100)
+    score = 0
+    signal = 'NEUTRAL'
+    
+    if crossover_up:
+        signal = 'LONG'
+        score += 40
+    elif crossover_down:
+        signal = 'SHORT'
+        score += 40
+    else:
+        # Pas de croisement = pas de signal
+        return {
+            'signal_type': 'NEUTRAL',
+            'score': 0,
+            'price': float(df['close'].iloc[-1]),
+            'atr': float(df['atr'].iloc[-1]),
+            'atr_pct': 0,
+            'tp_price': 0,
+            'sl_price': 0,
+            'tp_pct': 0,
+            'sl_pct': 0,
+            'volume_ratio': volume_ratio,
+            'ema_fast': float(ema_fast_current),
+            'ema_slow': float(ema_slow_current),
+            'price_change_3': 0,
+            'blocked': False
+        }
+    
+    # Confirmation momentum prix
+    price_change_3 = (df['close'].iloc[-1] - df['close'].iloc[-4]) / df['close'].iloc[-4] * 100
+    if signal == 'LONG' and price_change_3 > 0:
+        score += 20
+    elif signal == 'SHORT' and price_change_3 < 0:
+        score += 20
+    
+    # Volume confirmation (obligatoire)
+    if volume_ratio >= 1.5:
+        score += 25
+    elif volume_ratio >= 1.2:
+        score += 15
+    elif volume_ratio < 1.0:
+        score -= 20  # volume faible = faux signal probable
+    
+    # ATR minimum (le marché doit bouger assez pour couvrir les frais)
+    atr_current = df['atr'].iloc[-1]
+    close_current = df['close'].iloc[-1]
+    atr_pct = atr_current / close_current * 100
+    
+    if atr_pct >= 0.15:
+        score += 15
+    elif atr_pct < 0.10:
+        # trop plat, frais > gain
+        return {
+            'signal_type': 'NEUTRAL',
+            'score': 0,
+            'price': float(close_current),
+            'atr': float(atr_current),
+            'atr_pct': atr_pct,
+            'tp_price': 0,
+            'sl_price': 0,
+            'tp_pct': 0,
+            'sl_pct': 0,
+            'volume_ratio': volume_ratio,
+            'ema_fast': float(ema_fast_current),
+            'ema_slow': float(ema_slow_current),
+            'price_change_3': price_change_3,
+            'blocked': False
+        }
+    
+    # 7. Calculer TP et SL
+    if signal == 'LONG':
+        tp_price = close_current * (1 + atr_pct/100 * TradingConfig.TP_MULTIPLIER)
+        sl_price = close_current * (1 - atr_pct/100 * TradingConfig.SL_MULTIPLIER)
+    else:  # SHORT
+        tp_price = close_current * (1 - atr_pct/100 * TradingConfig.TP_MULTIPLIER)
+        sl_price = close_current * (1 + atr_pct/100 * TradingConfig.SL_MULTIPLIER)
+    
+    # 8. Retourner le résultat
+    return {
+        'signal_type': signal,
+        'score': score,
+        'price': float(close_current),
+        'atr': float(atr_current),
+        'atr_pct': atr_pct,
+        'tp_price': float(tp_price),
+        'sl_price': float(sl_price),
+        'tp_pct': atr_pct * TradingConfig.TP_MULTIPLIER,
+        'sl_pct': atr_pct * TradingConfig.SL_MULTIPLIER,
+        'volume_ratio': volume_ratio,
+        'ema_fast': float(ema_fast_current),
+        'ema_slow': float(ema_slow_current),
+        'price_change_3': price_change_3,
+        'blocked': False
+    }

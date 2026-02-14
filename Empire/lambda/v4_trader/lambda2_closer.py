@@ -84,10 +84,62 @@ def check_and_close_position(
         ticker = exchange.fetch_ticker(symbol)
         current_price = float(ticker['last'])
         
-        entry_price = position['entry_price']
+        entry_price = float(position['entry_price'])
         direction = position['direction']
-        take_profit = position.get('take_profit', 0)
-        stop_loss = position.get('stop_loss', 0)
+        take_profit = float(position.get('take_profit', 0))
+        stop_loss = float(position.get('stop_loss', 0))
+        
+        # TIMEOUT: Calculer l'âge de la position
+        from datetime import datetime, timezone
+        entry_time = datetime.fromisoformat(position['timestamp'])
+        age_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
+        
+        # Si age_minutes > (TradingConfig.MAX_HOLD_CANDLES * 1) : 10 minutes max
+        if age_minutes > (TradingConfig.MAX_HOLD_CANDLES * 1):
+            logger.warning(f"⏰ TIMEOUT close for {symbol} after {age_minutes:.0f}min")
+            # Fermer la position au prix actuel (market order)
+            exit_reason = 'TIMEOUT'
+            
+            try:
+                # Market order pour fermer
+                side = 'sell' if direction == 'LONG' else 'buy'
+                quantity = float(position['quantity'])
+                
+                close_result = exchange.close_position(symbol, side, quantity)
+                if close_result and close_result.get('status') == 'closed':
+                    # Calculate PnL
+                    if direction == 'LONG':
+                        pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:
+                        pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                    
+                    # Update DynamoDB
+                    update_position_status(symbol, 'CLOSED', current_price, exit_reason, pnl_pct)
+                    
+                    # Remove from atomic risk
+                    try:
+                        from atomic_persistence import AtomicPersistence
+                        import boto3
+                        table_name = os.getenv('STATE_TABLE', 'V4TradingState')
+                        dynamodb = boto3.resource('dynamodb')
+                        table = dynamodb.Table(table_name)
+                        persistence = AtomicPersistence(table)
+                        risk_dollars = (entry_price * quantity) / float(position.get('leverage', 5))
+                        persistence.atomic_remove_risk(symbol, risk_dollars)
+                        logger.info(f"🧹 {symbol} - Atomic risk removed: ${risk_dollars:.2f}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to remove atomic risk for {symbol}: {e}")
+                    
+                    return {
+                        'action': 'CLOSED',
+                        'symbol': symbol,
+                        'exit_price': current_price,
+                        'pnl_pct': pnl_pct,
+                        'reason': exit_reason
+                    }
+            except Exception as e:
+                logger.error(f"❌ Failed to timeout close {symbol}: {e}")
+                return None
         
         # Calculate PnL %
         if direction == 'LONG':
@@ -267,22 +319,22 @@ def lambda_handler(event, context):
             live_mode=TradingConfig.LIVE_MODE
         )
         
+        # Add jitter to avoid simultaneous DynamoDB reads
+        import random
+        jitter = random.uniform(0, 2)  # 0 to 2 seconds of jitter
+        time.sleep(jitter)
+        
         # Load open positions
         positions = load_open_positions()
         
         if not positions:
-            logger.info("ℹ️  No open positions to check")
+            logger.info("  No open positions to check")
             return {
                 'statusCode': 200,
-                'body': json.dumps({
-                    'lambda': lambda_role,
-                    'positions_checked': 0,
-                    'positions_closed': 0,
-                    'duration_seconds': round(time.time() - start_time, 2)
-                })
+                'body': json.dumps({'message': 'No open positions', 'positions_checked': 0})
             }
         
-        logger.info(f"📊 Checking {len(positions)} open positions...")
+        logger.info(f" Checking {len(positions)} open positions...")
         
         # Check each position
         closed_positions = []

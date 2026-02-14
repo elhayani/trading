@@ -431,5 +431,48 @@ class ExchangeConnector:
             logger.error(f"Failed to fetch ticker stats for {symbol}: {e}")
             return {}
 
+    def fetch_ohlcv_1min(self, symbol: str, limit: int = 50) -> List:
+        """
+        Récupère les dernières `limit` bougies 1 minute pour un symbole.
+        Utilise l'API Binance Futures directement via requests (plus rapide que ccxt).
+        """
+        import requests
+        
+        try:
+            # Convertir le symbole du format interne vers format Binance
+            binance_symbol = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
+            
+            # URL API Binance Futures
+            url = f"https://fapi.binance.com/fapi/v1/klines"
+            params = {
+                'symbol': binance_symbol,
+                'interval': '1m',
+                'limit': limit
+            }
+            
+            # Appel API avec timeout
+            response = requests.get(url, params=params, timeout=5)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            # Convertir toutes les valeurs en float
+            ohlcv_data = []
+            for candle in data:
+                ohlcv_data.append([
+                    float(candle[0]),  # timestamp
+                    float(candle[1]),  # open
+                    float(candle[2]),  # high
+                    float(candle[3]),  # low
+                    float(candle[4]),  # close
+                    float(candle[5])   # volume
+                ])
+            
+            return ohlcv_data
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch 1min OHLCV for {symbol}: {e}")
+            return []  # Ne jamais lever d'exception
+
     
     

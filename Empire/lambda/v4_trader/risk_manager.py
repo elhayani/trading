@@ -26,13 +26,20 @@ class RiskManager:
         confidence: float = 1.0,
         atr: float = 0.0,
         direction: str = "LONG",
-        leverage: float = None
+        leverage: float = None,
+        compound_capital: float = None
     ) -> Dict[str, Union[float, bool, str]]:
         # Convert all inputs to float to prevent Decimal/float arithmetic errors
         entry_price = float(entry_price)
         stop_loss_price = float(stop_loss_price)
         capital = float(capital)
         atr = float(atr)
+        
+        # 2. Si TradingConfig.USE_COMPOUND == True et compound_capital est fourni :
+        if TradingConfig.USE_COMPOUND and compound_capital is not None:
+            capital_to_use = compound_capital
+        else:
+            capital_to_use = capital
         
         # Force leverage to 1 for scalping safety (or use config default)
         leverage = leverage or TradingConfig.LEVERAGE
@@ -41,14 +48,14 @@ class RiskManager:
         if entry_price <= 0: return self._blocked("INVALID_ENTRY_PRICE", stop_loss_price)
 
         # 1. Daily loss circuit breaker
-        if capital > 0 and abs(self.daily_pnl / capital) >= TradingConfig.MAX_DAILY_LOSS_PCT:
+        if capital_to_use > 0 and abs(self.daily_pnl / capital_to_use) >= TradingConfig.MAX_DAILY_LOSS_PCT:
             return self._blocked("DAILY_LOSS_LIMIT", stop_loss_price)
 
         # 2. Puissance de Frappe (Striking Power) - 🏛️ EMPIRE V13.8
         # Logic: Position Size = (Capital / Slots) * Leverage * Confidence
         # This ensures that lev x3 means "3x the allocated margin"
         confidence = max(TradingConfig.MIN_CONFIDENCE, min(TradingConfig.MAX_CONFIDENCE, confidence))
-        margin_per_slot = capital / TradingConfig.MAX_OPEN_TRADES
+        margin_per_slot = capital_to_use / TradingConfig.MAX_OPEN_TRADES
         target_notional = margin_per_slot * leverage * confidence
         quantity = target_notional / entry_price
 

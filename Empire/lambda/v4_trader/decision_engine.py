@@ -46,43 +46,16 @@ class DecisionEngine:
             logger.warning(f"⚠️ {symbol} - Low 24H Volume: ${volume_24h/1e6:.1f}M < ${min_vol/1e6:.0f}M")
             return False, f"Low 24H Volume (${volume_24h/1e6:.1f}M < ${min_vol/1e6:.0f}M)", 0.0
         
-        # 🏛️ EMPIRE V13.5: The Bedrock Matrix (BTC Unified Filter)
-        # FIX: Use intended_direction (from RSI override in trading_engine.py line 574) 
-        # instead of ta_result signal_type to prevent bypass when score < 60 sets signal to NEUTRAL
-        if asset_class == AssetClass.CRYPTO and btc_rsi is not None and "BTC" not in symbol:
-            direction = intended_direction if intended_direction else (
-                'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
-            )
-            
-            # Relaxed Bedrock: Only block if BTC is truly pumping (>75) and asset is not an elite short (>80)
-            if btc_rsi > 75:
-                # If BTC is super pumped, only allow Elite Shorts (Score > 80)
-                if direction == 'SHORT':
-                    if ta_result.get('score', 0) < 80:
-                        return False, f"BEDROCK_BLOCK_SHORT (BTC_RSI={btc_rsi:.1f} > 75 & Score < 80)", 0.0
-            elif btc_rsi < 25:
-                # If BTC is super dumped, only allow Elite Longs
-                if direction == 'LONG':
-                    if ta_result.get('score', 0) < 80:
-                         return False, f"BEDROCK_BLOCK_LONG (BTC_RSI={btc_rsi:.1f} < 25 & Score < 80)", 0.0
-
-        base_thresholds = {
-            AssetClass.CRYPTO: TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO,
-            AssetClass.INDICES: TradingConfig.MIN_TECHNICAL_SCORE_INDICES,
-            AssetClass.FOREX: TradingConfig.MIN_TECHNICAL_SCORE_FOREX,
-            AssetClass.COMMODITIES: TradingConfig.MIN_TECHNICAL_SCORE_COMMODITIES
-        }
-        min_score = base_thresholds.get(asset_class, TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO)
-
-        if macro_regime in ['RISK_OFF', 'BEARISH']:
-            min_score += TradingConfig.RISK_OFF_HURDLE
-        elif macro_regime == 'CRASH':
-            min_score += TradingConfig.CRASH_HURDLE
-
+        # Momentum: Pas besoin de filtre BTC RSI - si le prix bouge fort maintenant, on trade maintenant
+        
+        # Momentum: Pas besoin de filtre macro_regime - trop lent pour du 1min
+        
+        # Vérification score minimum pour momentum
         score = ta_result.get('score', 0)
+        min_score = TradingConfig.MIN_MOMENTUM_SCORE
         
         if score < min_score:
-            return False, f"LOW_SCORE_{score} (Min={min_score})", 0.0
+            return False, f"LOW_MOMENTUM_SCORE_{score} (Min={min_score})", 0.0
 
         # Corridor check removed - module doesn't exist
         # All markets considered open for trading
@@ -104,7 +77,8 @@ class DecisionEngine:
         news_score: float = 0.0,
         macro_regime: str = "NORMAL",
         btc_rsi: Optional[float] = None,
-        history_context: Optional[Dict] = None
+        history_context: Optional[Dict] = None,
+        compound_capital: float = None
     ) -> Dict[str, Union[bool, str, float]]:
         proceed, reason, confidence = self.evaluate(
             context, ta_result, symbol, 
@@ -130,7 +104,8 @@ class DecisionEngine:
             stop_loss_price=stop_loss,
             confidence=confidence,
             atr=atr,
-            direction=direction
+            direction=direction,
+            compound_capital=compound_capital
         )
 
         if sizing["blocked"]:

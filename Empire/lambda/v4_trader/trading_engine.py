@@ -453,9 +453,16 @@ class TradingEngine:
             if positions and balance < 500:  # Less than $500 available
                 logger.info(f"[TRIM_CHECK] Low capital (${balance:.0f}), checking for better opportunities...")
             
-            # Smart OHLCV Fetching (Audit #V11.5)
-            ohlcv = self._get_ohlcv_smart(symbol, '1h')
-            ta_result = analyze_market(ohlcv, symbol=symbol, asset_class=asset_class)
+            # 1. Fetch des bougies 1 minute pour momentum
+            ohlcv_1min = self.exchange.fetch_ohlcv_1min(symbol, limit=50)
+            
+            if len(ohlcv_1min) < 30:
+                self.persistence.log_skipped_trade(symbol, "INSUFFICIENT_1MIN_DATA", asset_class)
+                return {'symbol': symbol, 'status': 'SKIPPED', 'reason': 'INSUFFICIENT_1MIN_DATA'}
+            
+            # 2. Appeler la nouvelle fonction momentum
+            from market_analysis import analyze_momentum
+            ta_result = analyze_momentum(ohlcv_1min, symbol)
             
             if ta_result.get('market_context', '').startswith('VOLATILITY_SPIKE'):
                 reason = ta_result['market_context']
@@ -475,10 +482,18 @@ class TradingEngine:
             
             direction = 'SHORT' if signal_type == 'SHORT' else 'LONG'
 
+            # Calcul du capital compound pour le momentum
+            if TradingConfig.USE_COMPOUND:
+                capital_actuel = TradingConfig.COMPOUND_BASE_CAPITAL + self.risk_manager.daily_pnl
+                logger.info(f"[COMPOUND] Capital actuel: ${capital_actuel:.2f} (base: ${TradingConfig.COMPOUND_BASE_CAPITAL:.2f} + PnL: ${self.risk_manager.daily_pnl:+.2f})")
+            else:
+                capital_actuel = balance
+
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
                 capital=balance, direction=direction, asset_class=asset_class,
-                news_score=news_score, macro_regime=macro.get('regime', 'NORMAL')
+                news_score=news_score, macro_regime=macro.get('regime', 'NORMAL'),
+                compound_capital=capital_actuel if TradingConfig.USE_COMPOUND else None
             )
             
             if not decision['proceed']:
@@ -552,19 +567,14 @@ class TradingEngine:
             self.persistence.log_skipped_trade(symbol, reason, asset_class)
             return {'symbol': symbol, 'status': 'BLOCKED_ATOMIC', 'reason': reason}
         
-        # PAXG: TP 0.35% brut (~0.30% net) / SL 0.50% | Others: standard scalping config
-        if TradingConfig.is_paxg(symbol):
-            tp_pct = TradingConfig.PAXG_TP
-            sl_pct = TradingConfig.PAXG_SL
-            logger.info(f"[PAXG] Gold mode: Leverage {leverage}x | TP {tp_pct*100:.2f}% brut (~0.30% net) | SL {sl_pct*100:.2f}%")
-        else:
-            tp_pct = TradingConfig.SCALP_TP_MIN + ((TradingConfig.SCALP_TP_MAX - TradingConfig.SCALP_TP_MIN) / 2)
-            sl_pct = TradingConfig.SCALP_SL
+        # Utiliser les TP/SL de analyze_momentum
+        tp = ta_result.get('tp_price', real_entry * 1.01)  # Fallback 1% si non fourni
+        sl = ta_result.get('sl_price', real_entry * 0.99)  # Fallback -1% si non fourni
         
-        tp = real_entry * (1 + tp_pct) if direction == 'LONG' else real_entry * (1 - tp_pct)
-        sl = real_entry * (1 - sl_pct) if direction == 'LONG' else real_entry * (1 + sl_pct)
+        tp_pct = abs(tp - real_entry) / real_entry
+        sl_pct = abs(sl - real_entry) / real_entry
         
-        logger.info(f"[SCALP] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({sl_pct*100:.2f}%)")
+        logger.info(f"[MOMENTUM] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({sl_pct*100:.2f}%)")
         
         # Build detailed reason with technical indicators
         reason_parts = []
