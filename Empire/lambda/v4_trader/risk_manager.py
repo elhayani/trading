@@ -17,6 +17,11 @@ class RiskManager:
         self.active_trades: Dict[str, Dict] = {}
         self.commission_rate = commission_rate or TradingConfig.COMMISSION_RATE
         self.slippage_buffer = slippage_buffer or TradingConfig.SLIPPAGE_BUFFER
+        self._current_volume_24h = 0  # Volume 24h de l'actif en cours
+    
+    def set_current_volume_24h(self, volume_24h: float):
+        """Définir le volume 24h pour la protection liquidité"""
+        self._current_volume_24h = volume_24h
 
     def calculate_position_size(
         self,
@@ -58,6 +63,20 @@ class RiskManager:
         margin_per_slot = capital_to_use / TradingConfig.MAX_OPEN_TRADES
         target_notional = margin_per_slot * leverage * confidence
         quantity = target_notional / entry_price
+        
+        # 3. Protection liquidité - limiter le notionnel max
+        volume_24h = getattr(self, '_current_volume_24h', 0)  # Volume 24h de l'actif
+        if volume_24h > 0:
+            max_notional = volume_24h * TradingConfig.MAX_NOTIONAL_PCT_OF_VOLUME
+            actual_notional = quantity * entry_price
+            
+            if actual_notional > max_notional:
+                # Réduire la taille pour respecter la limite de liquidité
+                quantity = max_notional / entry_price
+                logger.warning(f"[LIQUIDITY_CAP] {symbol} size capped at ${max_notional:.0f} (was ${actual_notional:.0f})")
+                
+                # Recalculer avec la nouvelle quantité
+                target_notional = max_notional
 
         # 3. Risk budget and distance to stop
         eff_entry = entry_price * (1 + self.slippage_buffer) if direction == "LONG" else entry_price * (1 - self.slippage_buffer)

@@ -47,7 +47,11 @@ class TradingConfig:
     
     # Compound
     USE_COMPOUND = True             # Le gain de chaque trade s'ajoute au capital
-    COMPOUND_BASE_CAPITAL = float(os.getenv('CAPITAL', '1000'))
+    COMPOUND_BASE_CAPITAL = float(os.getenv('CAPITAL', '10000'))
+    
+    # Capital scaling et protection liquidité
+    MIN_ATR_PCT_1MIN = 0.25          # Rentable dès ce niveau avec $10K
+    MAX_NOTIONAL_PCT_OF_VOLUME = 0.005  # 0.5% max du volume 24h par trade
     
     # Multi-Lambda Coordination
     USE_LIMIT_ORDERS = True
@@ -137,3 +141,39 @@ class TradingConfig:
     def is_paxg(symbol: str) -> bool:
         """Check if symbol is PAXG"""
         return symbol.replace('/USDT:USDT', '').replace('USDT', '') == 'PAXG'
+    
+    @staticmethod
+    def get_scaling_config(capital: float) -> dict:
+        """Configuration automatique selon le capital pour 415 actifs"""
+        if capital < 60_000:
+            return {
+                'min_volume':    5_000_000,
+                'max_trades':    3,
+                'leverage':      5,
+                'eligible':      '~115 actifs',
+                'note':          'Full universe - 415 actifs'
+            }
+        elif capital < 150_000:
+            return {
+                'min_volume':   20_000_000,
+                'max_trades':    3,
+                'leverage':      5,
+                'eligible':      '~55 actifs',
+                'note':          'Liquid mid-cap'
+            }
+        elif capital < 500_000:
+            return {
+                'min_volume':   50_000_000,
+                'max_trades':    3,
+                'leverage':      3,
+                'eligible':      '~15 actifs',
+                'note':          'Large cap only'
+            }
+        else:
+            return {
+                'min_volume':  200_000_000,
+                'max_trades':    2,
+                'leverage':      2,
+                'eligible':      '~5 actifs',
+                'note':          'BTC ETH SOL XRP BNB only'
+            }

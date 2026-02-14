@@ -448,6 +448,13 @@ class TradingEngine:
             balance = self.exchange.get_balance_usdt()
             if balance < 10: raise ValueError("Insufficient balance ( < $10 )")
             
+            # Scaling automatique selon le capital
+            scaling = TradingConfig.get_scaling_config(balance)
+            TradingConfig.MIN_VOLUME_24H = scaling['min_volume']
+            TradingConfig.MAX_OPEN_TRADES = scaling['max_trades']
+            TradingConfig.LEVERAGE = scaling['leverage']
+            logger.info(f"[SCALING] {scaling['note']} | Capital: ${balance:,.0f} | Eligible: {scaling['eligible']}")
+            
             # TRIM & SWITCH: Check if we should reduce existing positions for better opportunities
             # Only if we have positions AND low available capital
             if positions and balance < 500:  # Less than $500 available
@@ -489,6 +496,19 @@ class TradingEngine:
             else:
                 capital_actuel = balance
 
+            # Récupérer le volume 24h réel depuis exchange_connector
+            try:
+                ticker_stats = self.exchange.fetch_binance_ticker_stats(symbol)
+                volume_24h = ticker_stats.get('volume_24h', 0)
+                self.risk_manager.set_current_volume_24h(volume_24h)
+                
+                # Ajouter le volume 24h à ta_result pour logging
+                ta_result['volume_24h_usdt'] = volume_24h
+            except Exception as e:
+                logger.warning(f"[WARNING] Failed to fetch volume 24h for {symbol}: {e}")
+                volume_24h = 0
+                self.risk_manager.set_current_volume_24h(0)
+            
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
                 capital=balance, direction=direction, asset_class=asset_class,

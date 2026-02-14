@@ -498,5 +498,6 @@ def analyze_momentum(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
         'ema_fast': float(ema_fast_current),
         'ema_slow': float(ema_slow_current),
         'price_change_3': price_change_3,
+        'volume_24h_usdt': 0,  # Sera rempli par trading_engine.py
         'blocked': False
     }
