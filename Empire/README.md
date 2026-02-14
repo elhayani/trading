@@ -1,50 +1,53 @@
-# 👑 Empire Trading Ecosystem — V15.0 (Double Alpha)
-**High-Frequency Algorithmic Trading Infrastructure with Double Alpha Scanner.**
+# � Empire Trading Ecosystem — V16.0 (Momentum Scalping)
+**High-Frequency Algorithmic Trading Infrastructure with 1-Minute Momentum Strategy.**
 
 ## 📡 Architecture
 
 ### Core Trading Engine (`Empire/lambda/v4_trader/`)
-AWS Lambda now utilizes **Double Alpha Scanner** to monitor **415+ Binance Futures assets** in real-time (approx. 2s scan time). The system dynamically selects the best opportunities using a multi-metric scoring engine.
+AWS Lambda now utilizes **Momentum Scalping Scanner** to monitor **415+ Binance Futures assets** in real-time (approx. 16s scan time). The system dynamically selects the best opportunities using session-aware momentum scoring.
 
 | Catégorie | Description | Levier | TP | SL |
 |---|---|---|---|---|
-| **Crypto Leaders** | BTC, ETH, SOL, BNB, XRP | 5x | Ladder | Adaptive |
-| **Elite Alts** | AVAX, LINK, ADA, DOT, etc. | 5x | Ladder | Adaptive |
-| **Pump/Meme** | DOGE, SHIB, PEPE | 5x | Ladder | Adaptive |
-| **Commodities** | PAXG (Gold), OIL (WTI) | 5x (PAXG 4x) | 0.35%+ | 0.50% |
-| **Indices** | SPX, NDX, DAX | 5x | 0.25% | 0.40% |
-| **Forex** | EUR, GBP, JPY | 5x | 0.25% | 0.40% |
+| **Crypto Leaders** | BTC, ETH, SOL, BNB, XRP | **x2-x7** | 2×ATR | 1×ATR |
+| **Elite Alts** | AVAX, LINK, ADA, DOT, etc. | **x2-x7** | 2×ATR | 1×ATR |
+| **Pump/Meme** | DOGE, SHIB, PEPE | **x2-x7** | 2×ATR | 1×ATR |
+| **Commodities** | PAXG (Gold) | **x4** | 0.40% | 0.30% |
+| **Indices** | SPX, NDX, DAX | **x2-x7** | 2×ATR | 1×ATR |
+| **Forex** | EUR, GBP, JPY | **x2-x7** | 2×ATR | 1×ATR |
 
-> **Ladder Exit Strategy**:
-> - **TP1 (Quick Capture)**: 70% of position @ 0.25% gain
-> - **TP2 (Runner)**: 30% of position @ 0.50% gain
+> **Adaptive Leverage Strategy**:
+> - **Score 90+**: x7 (Elite signals)
+> - **Score 80+**: x5 (Strong signals)
+> - **Score 70+**: x3 (Good signals)
+> - **Score 60+**: x2 (Limit signals)
 
-### 🧠 V15 Scanner Logic
-The new **BinanceNativeScanner** evaluates 8 distinct metrics in parallel to generate a Composite Score (0-100):
+### 🧠 V16 Momentum Scanner Logic
+The new **Momentum Scanner** evaluates 3 core metrics in real-time to generate a Momentum Score (0-100):
 
-1.  **Momentum Shift**: Detects acceleration in price movement.
-2.  **Buy/Sell Pressure**: Net volume flow analysis (>52% buyer dominance).
-3.  **Delta Volume**: Aggressive market buying/selling (±10% threshold).
-4.  **Orderbook Imbalance**: Liquidity walls and bid/ask spread analysis.
-5.  **Whale Activity**: Large trade detection (>10x average size).
-6.  **Volatility**: Regimes (LOW, NORMAL, HIGH, SPIKE). *Spikes allow entry if Score > 80.*
-7.  **POC Distance**: Proximity to Point of Control (Volume Profile).
-8.  **Technical Convergence**: Multi-path signal confirmation (RSI + ADX + VWAP).
+1.  **EMA Crossover**: EMA5 crosses EMA13 on 1min timeframe
+2.  **Volume Surge**: Recent volume ≥ 1.5x average volume
+3.  **Price Thrust**: Price movement ≥ 0.20% in 5 minutes
+
+### Session-Aware Optimization (24/7 Trading)
+| Heure UTC | Session | Actifs boostés | Multiplicateur |
+|-----------|---------|----------------|---------------|
+| **00H-08H** | Asie active | BNB, TRX, ADA, DOT, JASMY | **×2.0** |
+| **07H-16H** | Europe active | BTC, ETH, LINK, UNI | **×1.8** |
+| **13H-22H** | US active | SOL, AVAX, DOGE, PEPE | **×2.0** |
+| **Autres** | Transition | Tous | **×1.0** |
 
 ### Key Features
--   **Double Alpha Scan**: Scans all 400+ USDT perps, pre-filters by volume (>1M) and volatility.
--   **Multi-Path Scoring**: Signals can be triggered by RSI extremes (>70/<30), ADX Trends (>25), or VWAP breakouts.
--   **Anti-Fragile Filtering**:
-    -   **ADX Filter**: Blocks trades against strong trends (ADX > 50).
-    -   **VWAP Guard**: Prevents longs below VWAP / shorts above VWAP unless signal is extremely strong.
-    -   **Volatility Opportunity**: Capitalizes on spikes if accompanied by strong whale/orderbook support.
--   **Smart Caching**: Local OHLCV cache reduces API latency by 82%.
--   **Parallel Processing**: ThreadPoolExecutor used for parallel I/O during scanning and analysis.
+-   **Momentum-First**: Pure momentum strategy (no mean reversion)
+-   **Session Boosts**: Dynamic weighting by trading session
+-   **Night Pump Detection**: Automatic detection of sudden moves
+-   **Adaptive Leverage**: Risk-adjusted exposure based on signal strength
+-   **Compound Capital**: Gains automatically reinvested
+-   **Smart Pre-filter**: Eliminates 90% of flat assets before analysis
 
 ### Tech Stack
 -   **Runtime**: Python 3.12, CCXT (Singleton/Warm), Pandas
 -   **Infra**: AWS Lambda (1536MB), DynamoDB (GSI Optimized), EventBridge (1min Cron)
--   **Safety**: Atomic Persistence (conditional writes), Circuit Breaker (-5% daily).
+-   **Safety**: Atomic Persistence (conditional writes), Circuit Breaker (-5% daily)
 
 ## 🚀 Deployment
 
@@ -55,8 +58,56 @@ cd Empire/scripts && python3 deploy.py
 ## 📊 Safety & Risk Management
 -   **Atomic Risk**: DynamoDB conditional writes prevent race conditions for double entries.
 -   **Circuit Breaker**: Triggered at -5% daily loss or 20% total portfolio risk.
--   **Max Open Positions**: 10 (Dynamic slot allocation).
--   **Cooldown**: 5 minutes per asset (except during active volatility spikes).
+-   **Max Open Positions**: 3 (Dynamic slot allocation).
+-   **Max Loss per Trade**: 2% of capital with automatic leverage reduction.
+-   **Liquidity Protection**: Max 0.5% of 24h volume per position.
+-   **Session-Aware**: Adaptive filters based on trading session volatility.
+
+## 📈 Performance Expectations
+- **Daily Trades**: 40-70 (vs 15 previously)
+- **Win Rate**: 55-60% (vs 21.7% previously)
+- **Daily Return**: +1% to +1.5% target
+- **Max Drawdown**: <5% (vs 24.8% previously)
+- **Coverage**: 24/7 trading with session optimization
+
+## 🎯 Strategy Philosophy
+> **Pure Momentum**: Buy when price rises with volume, sell when price falls with volume
+> 
+> **Quick Exits**: 2-10 minute holding periods with compound capital
+> 
+> **Session Optimization**: Different assets thrive during different market hours
+> 
+> **Adaptive Risk**: Higher conviction = higher leverage, lower conviction = reduced exposure
+
+## 🔧 Configuration Highlights
+```python
+# Momentum Strategy
+LEVERAGE = 5  # Adaptive 2-7 based on score
+MAX_OPEN_TRADES = 3
+MIN_VOLUME_24H = 5_000_000  # $5M minimum
+
+# TP/SL Dynamic
+TP_MULTIPLIER = 2.0  # TP = 2 × ATR_1min
+SL_MULTIPLIER = 1.0  # SL = 1 × ATR_1min
+MAX_HOLD_CANDLES = 10  # 10 minutes max
+
+# Momentum Indicators
+EMA_FAST = 5
+EMA_SLOW = 13
+MIN_MOMENTUM_SCORE = 60
+MIN_ATR_PCT_1MIN = 0.25
+
+# Features
+USE_COMPOUND = True
+SESSION_BOOST_ENABLED = True
+NIGHT_PUMP_DETECTION = True
+```
+
+## 🚀 Deployment
+
+```bash
+cd Empire/scripts && python3 deploy.py
+```
 
 ---
-*Capital: ~$4,677 | Objectif: +1% journalier net*
+*Capital: $10,000 | Target: +1% daily net | Strategy: Momentum Scalping 1Min*

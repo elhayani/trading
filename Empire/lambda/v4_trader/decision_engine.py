@@ -106,7 +106,8 @@ class DecisionEngine:
             atr=atr,
             direction=direction,
             compound_capital=compound_capital,
-            signal_score=ta_result.get('score', 60)
+            signal_score=ta_result.get('score', 60),
+            symbol=symbol
         )
 
         if sizing["blocked"]:

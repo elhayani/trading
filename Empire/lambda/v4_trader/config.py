@@ -17,7 +17,7 @@ class TradingConfig:
     MIN_TECHNICAL_SCORE_COMMODITIES = 60
     
     # Minimum 24H Volume in USDT for scalping eligibility
-    MIN_VOLUME_24H = 10_000_000  # $10M USDT/day
+    # Note: MIN_VOLUME_24H is defined below in momentum section
     
     # --- Risk Management ---
     MAX_LOSS_PER_TRADE = 0.02

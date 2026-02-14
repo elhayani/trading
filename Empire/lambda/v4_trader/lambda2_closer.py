@@ -16,6 +16,7 @@ from typing import Dict, Optional
 from decimal import Decimal
 
 import boto3
+from exchange_connector import ExchangeConnector
 
 # Configure log level based on environment
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -95,7 +96,7 @@ def check_and_close_position(
         age_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
         
         # Si age_minutes > (TradingConfig.MAX_HOLD_CANDLES * 1) : 10 minutes max
-        if age_minutes > (TradingConfig.MAX_HOLD_CANDLES * 1):
+        if age_minutes > TradingConfig.MAX_HOLD_CANDLES:
             logger.warning(f"⏰ TIMEOUT close for {symbol} after {age_minutes:.0f}min")
             # Fermer la position au prix actuel (market order)
             exit_reason = 'TIMEOUT'

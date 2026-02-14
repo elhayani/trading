@@ -49,7 +49,8 @@ class RiskManager:
         direction: str = "LONG",
         leverage: float = None,
         compound_capital: float = None,
-        signal_score: int = 60
+        signal_score: int = 60,
+        symbol: str = "UNKNOWN"
     ) -> Dict[str, Union[float, bool, str]]:
         # Convert all inputs to float to prevent Decimal/float arithmetic errors
         entry_price = float(entry_price)
@@ -59,7 +60,11 @@ class RiskManager:
         
         # 2. Si TradingConfig.USE_COMPOUND == True et compound_capital est fourni :
         if TradingConfig.USE_COMPOUND and compound_capital is not None:
-            capital_to_use = compound_capital
+            if compound_capital <= 0:
+                logger.error(f"[RISK] Invalid compound_capital: {compound_capital}, using base capital")
+                capital_to_use = capital
+            else:
+                capital_to_use = compound_capital
         else:
             capital_to_use = capital
         
