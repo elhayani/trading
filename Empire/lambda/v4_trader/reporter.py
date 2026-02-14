@@ -103,18 +103,18 @@ def normalize_trade(item: dict) -> dict:
 
     # Mapping logic: check snake_case (current V11) then PascalCase (Legacy)
     res = {
-        'symbol': item.get('symbol') or item.get('Pair') or 'UNKNOWN',
+        'symbol': item.get('symbol') or item.get('Symbol') or item.get('Pair') or 'UNKNOWN',
         'status': item.get('status') or item.get('Status') or 'UNKNOWN',
         'asset_class': (item.get('asset_class') or item.get('AssetClass') or 'Unknown').capitalize(),
         'entry_price': to_float(item.get('entry_price') or item.get('EntryPrice')),
         'side': (item.get('side') or item.get('Type') or 'LONG').upper(),
-        'size': to_float(item.get('size') or item.get('Size') or item.get('quantity')),
+        'size': to_float(item.get('size') or item.get('Size') or item.get('quantity') or item.get('Quantity')),
         'cost': to_float(item.get('cost') or item.get('Cost')),
         'pnl': to_float(item.get('pnl') or item.get('PnL')),
-        'exit_reason': item.get('exit_reason') or item.get('ExitReason') or item.get('Exit_Reason') or '',
+        'exit_reason': item.get('exit_reason') or item.get('ExitReason') or item.get('Reason') or item.get('reason') or '',
         'timestamp': item.get('timestamp') or item.get('Timestamp') or '',
         'exit_price': to_float(item.get('exit_price') or item.get('ExitPrice')),
-        'trade_id': item.get('trade_id') or item.get('Trade_ID') or 'N/A'
+        'trade_id': item.get('trade_id') or item.get('Trade_ID') or item.get('trader_id') or 'N/A'
     }
     
     # Financial Consistency Check (Audit Fix Round 4)

@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-CDK Stack: V4 HYBRID 3-Lambda Architecture
-==========================================
-Lambda 1: Scanner/Opener (1 minute)
-Lambda 2: Quick Closer (20 seconds)
-Lambda 3: Quick Closer (40 seconds)
+CDK Stack: V4 HYBRID Live Trading
+==================================
+Deploy V4 HYBRID on AWS Lambda with EventBridge cron
 """
 
 import os
@@ -26,12 +24,12 @@ from aws_cdk import (
 from constructs import Construct
 
 class V4TradingStack(Stack):
-    """Stack for V4 HYBRID 3-Lambda Trading System"""
+    """Stack for V4 HYBRID Live Trading System (Crypto)"""
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         
-        # Base directory for resolving assets
+        # Base directory for resolving assets (relative to this file)
         base_dir = os.path.dirname(os.path.realpath(__file__))
         lambda_root = os.path.join(base_dir, "../../../lambda")
 
@@ -48,6 +46,7 @@ class V4TradingStack(Stack):
         # DynamoDB Tables
         # =====================================================================
         
+        # Trading State Table (Keep as managed if it's new, or use from_table_name if legacy)
         state_table = dynamodb.Table(
             self, "TradingState",
             table_name="V4TradingState",
@@ -60,6 +59,7 @@ class V4TradingStack(Stack):
             point_in_time_recovery=True
         )
 
+        # ✅ GSI Optimized Query (Audit #V11.5)
         state_table.add_global_secondary_index(
             index_name="status-timestamp-index",
             partition_key=dynamodb.Attribute(name="status", type=dynamodb.AttributeType.STRING),
@@ -67,6 +67,7 @@ class V4TradingStack(Stack):
             projection_type=dynamodb.ProjectionType.ALL
         )
         
+        # Trades History Table (OPEN/CLOSED only — V13.4 clean table)
         unified_trades_table = dynamodb.Table(
             self, "TradesHistoryTable",
             table_name="EmpireTradesHistory",
@@ -82,6 +83,7 @@ class V4TradingStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
         
+        # Skipped Trades Table (séparation V13.4 - évite de polluer l'historique)
         skipped_table = dynamodb.Table(
             self, "SkippedTradesTable",
             table_name="EmpireSkippedTrades",
@@ -95,15 +97,22 @@ class V4TradingStack(Stack):
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.DESTROY,
-            time_to_live_attribute="ttl"
+            time_to_live_attribute="ttl"  # Auto-delete old skips after 7 days
         )
 
-        # Legacy tables
+        # ✅ NOUVEAU GSI — Daily PnL optimisé (Audit #V9.5)
+        # Note: If the table exists, you might need to add this manually in the console or use a Custom Resource,
+        # but in a CDK-managed context, we define it here.
+        # Since it's from_table_name, CDK won't manage the index creation automatically if it's external.
+        # But we keep it in the code as reference documentation for the infrastructure.
+        
+        # Legacy Crypto Table
         empire_crypto_table = dynamodb.Table.from_table_name(
             self, "EmpireCryptoTable",
             table_name="EmpireCryptoV4"
         )
 
+        # Other History Tables
         empire_forex_table = dynamodb.Table.from_table_name(
             self, "EmpireForexTable",
             table_name="EmpireForexHistory"
@@ -120,91 +129,65 @@ class V4TradingStack(Stack):
         )
         
         # =====================================================================
-        # Secrets Manager
+        # Lambda Function: V4 HYBRID Trader
         # =====================================================================
+        
+        trading_lambda = lambda_.Function(
+            self, "V4HybridTrader",
+            function_name="V4HybridLiveTrader",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="v4_hybrid_lambda.lambda_handler",
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            timeout=Duration.minutes(5),
+            memory_size=1536,  # 🚀 Optimization: 1.5GB for CCXT/Pandas/AI + OHLCV Cache
+            ephemeral_storage_size=Size.mebibytes(1024),  # ✅ 1GB /tmp for OHLCV cache
+            # reserved_concurrent_executions=1, # 🔒 Safety: Prevent double trades (Temporarily disabled due to env limit)
+            environment={
+                "STATE_TABLE": state_table.table_name,
+                "HISTORY_TABLE": "EmpireTradesHistory",
+                "SKIPPED_TABLE": "EmpireSkippedTrades",
+                "TRADING_MODE": "dry_run",
+                "SECRET_NAME": "trading/binance", # 🛡️ SECURE: No hardcoded keys
+                "CAPITAL": "1000",
+                "SYMBOLS": "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,DAX/USDT:USDT,NDX/USDT:USDT,OIL/USDT:USDT,EUR/USD:USDT,GBP/USD:USDT,USD/JPY:USDT,USDC/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,ADA/USDT:USDT,DOT/USDT:USDT,MATIC/USDT:USDT",
+                "RSI_THRESHOLD": "35",
+                "CHECK_INTERVAL": "3600",
+                "EXCHANGE": "binance",
+                "USE_CLAUDE_ANALYSIS": "true"  # Enable Claude 3.5 Sonnet for advanced analysis
+            },
+            log_retention=logs.RetentionDays.ONE_MONTH
+        )
+        
+        # Grant DynamoDB permissions
+        state_table.grant_read_write_data(trading_lambda)
+        unified_trades_table.grant_read_write_data(trading_lambda)
+        skipped_table.grant_read_write_data(trading_lambda)
+        empire_crypto_table.grant_read_write_data(trading_lambda)
+        
+        # 🛡️ AWS Secrets Manager Permission
         binance_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "BinanceKeys", "trading/binance"
         )
+        binance_secret.grant_read(trading_lambda)
         
-        # =====================================================================
-        # Shared Environment Variables
-        # =====================================================================
-        common_env = {
-            "STATE_TABLE": state_table.table_name,
-            "HISTORY_TABLE": "EmpireTradesHistory",
-            "SKIPPED_TABLE": "EmpireSkippedTrades",
-            "SECRET_NAME": "trading/binance",
-            "EXCHANGE": "binance",
-        }
-        
-        # =====================================================================
-        # Lambda 1: SCANNER / OPENER (1 minute)
-        # =====================================================================
-        
-        lambda1_scanner = lambda_.Function(
-            self, "Lambda1Scanner",
-            function_name="V4_Lambda1_Scanner",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="lambda1_scanner.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(55),  # 55s (marge 5s avant timeout EventBridge)
-            memory_size=1536,  # Scanner needs OHLCV cache
-            ephemeral_storage_size=Size.mebibytes(1024),
-            environment={
-                **common_env,
-                "TRADING_MODE": "dry_run",
-                "CAPITAL": "1000",
-                "SYMBOLS": "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,DAX/USDT:USDT,NDX/USDT:USDT,OIL/USDT:USDT,EUR/USD:USDT,GBP/USD:USDT,USD/JPY:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,ADA/USDT:USDT,DOT/USDT:USDT,POL/USDT:USDT",
-                "USE_CLAUDE_ANALYSIS": "false",  # Disabled for speed
-                "LAMBDA_ROLE": "SCANNER"  # Identifies role
-            },
-            log_retention=logs.RetentionDays.ONE_WEEK
+        # Grant Bedrock permissions for Claude 3.5 Sonnet (advanced news analysis)
+        trading_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream"
+                ],
+                resources=[
+                    "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+                ]
+            )
         )
         
         # =====================================================================
-        # Lambda 2: QUICK CLOSER (20 seconds)
+        # Reporter Lambda (Independent)
         # =====================================================================
-        
-        lambda2_closer20 = lambda_.Function(
-            self, "Lambda2Closer20s",
-            function_name="V4_Lambda2_Closer20s",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="lambda2_closer.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(18),  # 18s (marge 2s)
-            memory_size=256,  # Minimal - just price checks
-            environment={
-                **common_env,
-                "TRADING_MODE": "dry_run",
-                "LAMBDA_ROLE": "CLOSER_20S"
-            },
-            log_retention=logs.RetentionDays.ONE_WEEK
-        )
-        
-        # =====================================================================
-        # Lambda 3: QUICK CLOSER (40 seconds)
-        # =====================================================================
-        
-        lambda3_closer40 = lambda_.Function(
-            self, "Lambda3Closer40s",
-            function_name="V4_Lambda3_Closer40s",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="lambda2_closer.lambda_handler",  # Same handler
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(18),
-            memory_size=256,
-            environment={
-                **common_env,
-                "TRADING_MODE": "dry_run",
-                "LAMBDA_ROLE": "CLOSER_40S"
-            },
-            log_retention=logs.RetentionDays.ONE_WEEK
-        )
-        
-        # =====================================================================
-        # Reporter Lambda (unchanged)
-        # =====================================================================
-        
         reporter_lambda = lambda_.Function(
             self, "V4StatusReporter",
             function_name="V4StatusReporter",
@@ -214,26 +197,15 @@ class V4TradingStack(Stack):
             timeout=Duration.minutes(1),
             memory_size=256,
             environment={
-                "SYMBOLS": "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,PAXGUSDT,SPXUSDT,DAXUSDT,NDXUSDT,OILUSDT,EURUSDT,GBPUSDT,USDJPYUSDT,AVAXUSDT,LINKUSDT,ADAUSDT,DOTUSDT,POLMATUSDT",
-                "TRADING_MODE": "dry_run",
+                "SYMBOLS": "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT,PAXGUSDT,SPXUSDT,DAXUSDT,NDXUSDT,OILUSDT,EURUSDT,GBPUSDT,USDJPYUSDT,USDCUSDT,AVAXUSDT,LINKUSDT,ADAUSDT,DOTUSDT,MATICUSDT",
+                "TRADING_MODE": "live",
                 "HISTORY_TABLE": "EmpireTradesHistory",
                 "SNS_TOPIC_ARN": status_topic.topic_arn
             },
             log_retention=logs.RetentionDays.ONE_MONTH
         )
         
-        # =====================================================================
-        # DynamoDB Permissions
-        # =====================================================================
-        
-        for lam in [lambda1_scanner, lambda2_closer20, lambda3_closer40]:
-            state_table.grant_read_write_data(lam)
-            unified_trades_table.grant_read_write_data(lam)
-            skipped_table.grant_read_write_data(lam)
-            empire_crypto_table.grant_read_write_data(lam)
-            binance_secret.grant_read(lam)
-        
-        # Reporter permissions
+        # Reporter Permissions: Access to all relevant tables
         status_topic.grant_publish(reporter_lambda)
         unified_trades_table.grant_read_data(reporter_lambda)
         empire_crypto_table.grant_read_data(reporter_lambda)
@@ -241,85 +213,60 @@ class V4TradingStack(Stack):
         empire_indices_table.grant_read_data(reporter_lambda)
         empire_commodities_table.grant_read_data(reporter_lambda)
         
+        # Grant SES SendEmail Permission
         reporter_lambda.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
-                actions=["ses:SendEmail", "ses:SendRawEmail"],
+                actions=[
+                    "ses:SendEmail",
+                    "ses:SendRawEmail"
+                ],
                 resources=["*"]
             )
         )
         
         # =====================================================================
-        # Lambda Layer (shared dependencies)
+        # LAYERS (Dependencies)
         # =====================================================================
         
         dependency_layer = lambda_.LayerVersion(
             self, "V4DependencyLayer",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "layer")),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
-            description="CCXT, Pandas, Boto3"
+            description="Dependencies: ccxt, requests, ta-lib fallback"
         )
         
-        lambda1_scanner.add_layers(dependency_layer)
-        lambda2_closer20.add_layers(dependency_layer)
-        lambda3_closer40.add_layers(dependency_layer)
+        trading_lambda.add_layers(dependency_layer)
         reporter_lambda.add_layers(dependency_layer)
         
         # =====================================================================
-        # EventBridge Schedules
+        # EventBridge Rules (Timezone consideration: Crons are UTC)
         # =====================================================================
         
-        # Lambda 1: Every 1 minute (scan + open)
-        scanner_rule = events.Rule(
-            self, "ScannerSchedule",
-            rule_name="V4_Scanner_1min",
-            description="Scanner: Scan market + Open positions (1 min)",
-            schedule=events.Schedule.expression("cron(* * * * ? *)"),  # Every minute
-            enabled=True
-        )
-        scanner_rule.add_target(targets.LambdaFunction(lambda1_scanner))
-        
-        # Lambda 2: Every minute at :00, :20, :40 seconds
-        # EventBridge doesn't support sub-minute precision natively
-        # Workaround: Use Step Functions or custom logic
-        # For now: Run every minute, but add 20s delay logic in code
-        closer20_rule = events.Rule(
-            self, "Closer20Schedule",
-            rule_name="V4_Closer_20s",
-            description="Closer: Check positions every 20s",
+        # Global Heartbeat Rule (Every 1 minute)
+        # Monitors market, manages exits, and checks entry signals continuously.
+        # Note: News fetching is cached internally for 15 mins to save costs.
+        global_rule = events.Rule(
+            self, "EmpireGlobalMonitoring",
+            rule_name="EmpireGlobalMonitoring",
+            description="Global Heartbeat: 1 min interval",
             schedule=events.Schedule.expression("cron(* * * * ? *)"),
             enabled=True
         )
-        closer20_rule.add_target(targets.LambdaFunction(
-            lambda2_closer20,
-            retry_attempts=0  # No retry for time-sensitive closers
-        ))
+        global_rule.add_target(targets.LambdaFunction(trading_lambda))
         
-        # Lambda 3: Same as Lambda 2, but with 40s delay in code
-        closer40_rule = events.Rule(
-            self, "Closer40Schedule",
-            rule_name="V4_Closer_40s",
-            description="Closer: Check positions at 40s mark",
-            schedule=events.Schedule.expression("cron(* * * * ? *)"),
-            enabled=True
-        )
-        closer40_rule.add_target(targets.LambdaFunction(
-            lambda3_closer40,
-            retry_attempts=0
-        ))
-        
-        # Reporter: Every 30 minutes during trading hours
+        # Reporting Bot (Every 30 mins)
         reporting_rule = events.Rule(
-            self, "ReporterSchedule",
-            rule_name="V4_Reporter_30min",
-            description="Status report every 30 mins",
+            self, "V4ReportingSchedule",
+            rule_name="V4ReporterCron",
+            description="Trigger Status Report every 30 mins",
             schedule=events.Schedule.cron(minute="0/30", hour="9-21"),
             enabled=True
         )
         reporting_rule.add_target(targets.LambdaFunction(reporter_lambda))
         
         # =====================================================================
-        # Manual Trigger
+        # Manual Trigger Lambda
         # =====================================================================
         
         manual_trigger = lambda_.Function(
@@ -332,18 +279,8 @@ import json
 import boto3
 lambda_client = boto3.client('lambda')
 def lambda_handler(event, context):
-    target = event.get('target', 'scanner')  # scanner, closer20, closer40
-    
-    function_map = {{
-        'scanner': '{lambda1_scanner.function_name}',
-        'closer20': '{lambda2_closer20.function_name}',
-        'closer40': '{lambda3_closer40.function_name}'
-    }}
-    
-    function_name = function_map.get(target, '{lambda1_scanner.function_name}')
-    
     response = lambda_client.invoke(
-        FunctionName=function_name,
+        FunctionName='{trading_lambda.function_name}',
         InvocationType='RequestResponse',
         Payload=json.dumps({{'manual': True}})
     )
@@ -352,17 +289,13 @@ def lambda_handler(event, context):
             """),
             timeout=Duration.seconds(30)
         )
-        
-        lambda1_scanner.grant_invoke(manual_trigger)
-        lambda2_closer20.grant_invoke(manual_trigger)
-        lambda3_closer40.grant_invoke(manual_trigger)
+        trading_lambda.grant_invoke(manual_trigger)
         
         # =====================================================================
         # Outputs
         # =====================================================================
         
-        CfnOutput(self, "Lambda1ScannerArn", value=lambda1_scanner.function_arn)
-        CfnOutput(self, "Lambda2Closer20Arn", value=lambda2_closer20.function_arn)
-        CfnOutput(self, "Lambda3Closer40Arn", value=lambda3_closer40.function_arn)
+        CfnOutput(self, "TradingLambdaArn", value=trading_lambda.function_arn)
         CfnOutput(self, "StateTableName", value=state_table.table_name)
+        CfnOutput(self, "HistoryTableName", value=unified_trades_table.table_name)
         CfnOutput(self, "ManualTriggerArn", value=manual_trigger.function_arn)

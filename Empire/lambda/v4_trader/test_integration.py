@@ -209,11 +209,80 @@ class MockExchange:
         # Fallback if not generated (should not happen in valid test)
         return generate_ohlcv(BASE_PRICES.get(symbol, 10.0))
         
+    def get_all_tickers(self) -> Dict:
+        tickers = {}
+        for sym in self.markets:
+            quote_vol = 500_000.0 # Default low volume
+            change = 0.0
+            last = 100.0
+            
+            if sym in self.ohlcv_data:
+                candles = self.ohlcv_data[sym]
+                if candles and len(candles) >= 2:
+                    # Sum last 24h volume
+                    recent = candles[-24:]
+                    quote_vol = sum(c[5] * ((c[1]+c[4])/2) for c in recent)
+                    
+                    first = recent[0][4]
+                    last_c = recent[-1][4]
+                    if first > 0:
+                        change = ((last_c - first) / first) * 100
+                    last = last_c
+
+            tickers[sym] = {
+                'symbol': sym,
+                'quoteVolume': quote_vol,
+                'percentage': change,
+                'last': last
+            }
+        return tickers
+
     def fetch_tickers(self) -> Dict:
-        # Mock tickers if needed, although scan uses ohlcv
-        return {}
+        return self.get_all_tickers()
+
+    def fetch_ticker(self, symbol: str) -> Dict:
+        tickers = self.get_all_tickers()
+        return tickers.get(symbol, {})
+
+
+
+    # --- V15 Scanner Mocks ---
+    def fetch_order_book_analysis(self, symbol: str, limit: int = 100) -> Dict:
+        # Synthetic analysis based on last candle
+        imb = 0.0
+        if symbol in self.ohlcv_data:
+            candles = self.ohlcv_data[symbol]
+            if candles:
+                last_c = candles[-1]
+                # If BULLISH candle -> Buy pressure
+                if last_c[4] > last_c[1]: imb = 0.4 
+                else: imb = -0.4
+        
+        return {
+            'imbalance': imb,
+            'spread_pct': 0.01,
+            'bid_volume': 1000000,
+            'ask_volume': 1000000
+        }
+
+    def fetch_recent_trades_analysis(self, symbol: str, limit: int = 500) -> Dict:
+        aggr = 0.0
+        if symbol in self.ohlcv_data:
+            candles = self.ohlcv_data[symbol]
+            if candles:
+                last_c = candles[-1]
+                if last_c[4] > last_c[1]: aggr = 0.3
+                else: aggr = -0.3
+                
+        return {
+            'aggression': aggr,
+            'whale_trades_count': 5,
+            'buy_volume': 500000,
+            'sell_volume': 500000
+        }
 
 # ==================== MOCK NEWS FETCHER ====================
+
 
 class MockNewsFetcher:
     def __init__(self, sentiments: Dict[str, float] = None): self.sentiments = sentiments or {}

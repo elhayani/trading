@@ -28,16 +28,14 @@ from enum import Enum
 
 import boto3
 from botocore.exceptions import ClientError
-import pandas as pd
 
 # Absolute imports
 import models
 from models import MarketRegime, AssetClass
 import config
 from config import TradingConfig
-import concurrent.futures
 import market_analysis
-from market_analysis import analyze_market, classify_asset, calculate_rsi
+from market_analysis import analyze_market, classify_asset
 import news_fetcher
 from news_fetcher import NewsFetcher
 import exchange_connector
@@ -106,7 +104,7 @@ class PersistenceLayer:
     def __init__(self, aws: AWSClients):
         self.aws = aws
     
-    def log_trade_open(self, trade_id, symbol, asset_class, direction, entry_price, size, cost, tp_price, sl_price, leverage, reason=None, is_test=False):
+    def log_trade_open(self, trade_id, symbol, asset_class, direction, entry_price, size, cost, tp_price, sl_price, leverage, reason=None):
         try:
             timestamp = datetime.now(timezone.utc).isoformat()
             item = {
@@ -124,17 +122,16 @@ class PersistenceLayer:
                 'StopLoss': sl_price,
                 'Leverage': leverage,
                 'Timestamp': timestamp,
-                'Status': 'OPEN',
-                'is_test': is_test
+                'Status': 'OPEN'
             }
             if reason:
                 item['Reason'] = reason
             
             self.aws.trades_table.put_item(Item=to_decimal(item))
-            logger.info(f"[DB] OPEN logged: {symbol} {direction} x{leverage} {'(TEST)' if is_test else ''} | Entry=${entry_price:.4f} | TP=${tp_price:.4f} | SL=${sl_price:.4f}")
+            logger.info(f"[DB] OPEN logged: {symbol} {direction} x{leverage} | Entry=${entry_price:.4f} | TP=${tp_price:.4f} | SL=${sl_price:.4f}")
         except Exception as e: logger.error(f"[ERROR] Failed to log trade: {e}")
     
-    def log_trade_close(self, trade_id, exit_price, pnl, reason, is_test=False):
+    def log_trade_close(self, trade_id, exit_price, pnl, reason):
         try:
             # Query by partition key (trader_id = trade_id) - O(1) instead of full table scan
             response = self.aws.trades_table.query(
@@ -150,21 +147,20 @@ class PersistenceLayer:
                 
                 self.aws.trades_table.update_item(
                     Key={'trader_id': trader_id, 'timestamp': timestamp},
-                    UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at, is_test = :is_test',
+                    UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at',
                     ExpressionAttributeNames={'#st': 'Status'},
                     ExpressionAttributeValues=to_decimal({
                         ':status': 'CLOSED', ':price': exit_price, ':pnl': pnl, ':reason': reason,
-                        ':closed_at': datetime.now(timezone.utc).isoformat(),
-                        ':is_test': is_test
+                        ':closed_at': datetime.now(timezone.utc).isoformat()
                     })
                 )
-                logger.info(f"[INFO] Logged CLOSE for {trade_id}: PnL={pnl}, Reason={reason} {'(TEST)' if is_test else ''}")
+                logger.info(f"[INFO] Logged CLOSE for {trade_id}: PnL={pnl}, Reason={reason}")
             else:
                 logger.warning(f"[WARN] Trade {trade_id} not found for close update")
         except Exception as e: 
             logger.error(f"[ERROR] Failed to log close: {e}")
 
-    def log_skipped_trade(self, symbol, reason, asset_class, is_test=False):
+    def log_skipped_trade(self, symbol, reason, asset_class):
         try:
             trade_id = f"SKIP-{uuid.uuid4().hex[:8]}"
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -178,26 +174,23 @@ class PersistenceLayer:
                 'AssetClass': asset_class,
                 'Status': 'SKIPPED',
                 'Reason': reason,
-                'ttl': ttl,
-                'is_test': is_test
+                'ttl': ttl
             }))
-            logger.info(f"[INFO] Logged SKIP for {symbol}: {reason} {'(TEST)' if is_test else ''}")
+            logger.info(f"[INFO] Logged SKIP for {symbol}: {reason}")
         except Exception as e: 
             logger.error(f"[ERROR] Failed to log skip: {e}")
     
-    def save_position(self, symbol, position_data, is_test=False):
+    def save_position(self, symbol, position_data):
         try:
             # Sanitize symbol for DynamoDB keys
             safe_symbol = symbol.replace('/', '_').replace(':', '-')
             # We add a 'status' field for GSI (Audit #V11.5)
             position_data['status'] = 'OPEN'
-            position_data['is_test'] = is_test
             self.aws.state_table.put_item(Item=to_decimal({
                 'trader_id': f'POSITION#{safe_symbol}', 
                 'position': position_data,
                 'status': 'OPEN',
-                'timestamp': datetime.now(timezone.utc).isoformat(),
-                'is_test': is_test
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }))
         except Exception as e: logger.error(f"[ERROR] Failed to save position: {e}")
     
@@ -263,49 +256,6 @@ class PersistenceLayer:
             # We don't delete, we update status for GSI management or delete item
             self.aws.state_table.delete_item(Key={'trader_id': f'POSITION#{safe_symbol}'})
         except Exception as e: logger.error(f"[ERROR] Failed to delete position: {e}")
-
-    def get_history_context(self) -> Dict:
-        """
-        🏛️ EMPIRE V13.6: Memory of 20 Events
-        Fetches 10 last skipped trades and 10 last history trades.
-        Returns only: asset, time, reason, status.
-        """
-        try:
-            # 1. Fetch last 10 skipped (exclude is_test=True)
-            skipped_resp = self.aws.skipped_table.scan(Limit=50, FilterExpression='attribute_not_exists(is_test) OR is_test = :f', ExpressionAttributeValues={':f': False})
-            skipped_raw = sorted(skipped_resp.get('Items', []), key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
-            
-            skipped = []
-            for s in skipped_raw:
-                skipped.append({
-                    'asset': s.get('Symbol') or s.get('Pair'),
-                    'time': s.get('timestamp'),
-                    'reason': s.get('Reason'),
-                    'status': 'SKIPPED'
-                })
-
-            # 2. Fetch last 10 history (Open/Closed) (exclude is_test=True)
-            history_resp = self.aws.trades_table.scan(Limit=50, FilterExpression='attribute_not_exists(is_test) OR is_test = :f', ExpressionAttributeValues={':f': False})
-            history_raw = sorted(history_resp.get('Items', []), key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
-            
-            history = []
-            for h in history_raw:
-                status = h.get('Status', 'UNKNOWN').upper()
-                reason = h.get('ExitReason') if status == 'CLOSED' else h.get('Reason')
-                history.append({
-                    'asset': h.get('Symbol') or h.get('Pair'),
-                    'time': h.get('timestamp') or h.get('Timestamp'),
-                    'reason': reason,
-                    'status': status
-                })
-            
-            return {
-                'skipped': from_decimal(skipped),
-                'history': from_decimal(history)
-            }
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to fetch history context: {e}")
-            return {'skipped': [], 'history': []}
 
 # ==================== ENGINE ====================
 
@@ -409,7 +359,7 @@ class TradingEngine:
                 json.dump(cache, f)
         except Exception as e: logger.warning(f"[WARN] Failed to save OHLCV cache: {e}")
     
-    def run_cycle(self, symbol: str, btc_rsi: Optional[float] = None) -> Dict:
+    def run_cycle(self, symbol: str) -> Dict:
         # Resolve to canonical symbol early (Audit #V11.6.8)
         symbol = self.exchange.resolve_symbol(symbol)
         asset_class = classify_asset(symbol)  # Define early for logging
@@ -516,92 +466,20 @@ class TradingEngine:
             news_score = self.news_fetcher.get_news_sentiment_score(symbol)
             macro = macro_context.get_macro_context(state_table=self.aws.state_table)
             
-            direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
-            if ta_result.get('signal_type') == 'NEUTRAL':
-                # Build meaningful skip reason
-                rsi = ta_result.get('rsi', 50)
-                score = ta_result.get('score', 0)
-                
-                # EMPIRE V13.2: USDC/USDT low-priority entry logic (10 actifs prioritaires)
-                # Only enter USDC if it's forex AND all other priority assets are calm (<50 score)
-                if asset_class == 'forex' and 'USDC' in symbol:
-                    # Check if this is a calm market - scan priority assets (V13.2: 10 actifs)
-                    priority_symbols = [
-                        'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT',  # Leaders (5)
-                        'DOGE/USDT:USDT',  # Pump/News (1)
-                        'AVAX/USDT:USDT',  # Tech L1 (1)
-                        'LINK/USDT:USDT',  # Oracle (1)
-                        'PAXG/USDT:USDT',  # RWA/Commodities (1)
-                        'SPX/USDT:USDT'  # Indices (1)
-                    ]
-                    all_calm = True
-                    
-                    for priority_sym in priority_symbols:
-                        if priority_sym in positions:
-                            # Already have a priority position, don't enter USDC
-                            all_calm = False
-                            break
-                        
-                        try:
-                            priority_ohlcv = self._get_ohlcv_smart(priority_sym, '1h')
-                            priority_ta = analyze_market(priority_ohlcv, symbol=priority_sym, asset_class=classify_asset(priority_sym))
-                            priority_score = priority_ta.get('score', 0)
-                            
-                            if priority_score >= 50:  # Priority asset has opportunity
-                                all_calm = False
-                                logger.info(f"[USDC_SKIP] {priority_sym} has score {priority_score} >= 50, skipping USDC parking")
-                                break
-                        except:
-                            pass
-                    
-                    if not all_calm:
-                        reason = "Priority assets active (score >= 50), USDC parking not needed"
-                        self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                        return {'symbol': symbol, 'status': 'LOW_PRIORITY_BLOCKED', 'reason': reason}
-                    else:
-                        logger.info(f"[USDC_PARKING] All priority assets calm, allowing USDC entry as parking position")
-                        # Continue to decision engine - USDC can enter as parking position
-                else:
-                    # Not USDC or not neutral - normal skip logic
-                    reasons = []
-                    if rsi > 70:
-                        reasons.append(f"RSI > 70 (overbought: {rsi:.1f})")
-                    elif rsi < 30:
-                        reasons.append(f"RSI < 30 (oversold: {rsi:.1f})")
-                    else:
-                        reasons.append(f"RSI neutral ({rsi:.1f})")
-                    
-                    if score < 50:
-                        # 🏛️ EMPIRE V14.2: Detailed AI Reasoning for Score Failure
-                        rsi_val = ta_result['indicators']['rsi']
-                        vol_ratio = ta_result['indicators']['vol_ratio']
-                        context = ta_result.get('market_context', 'N/A')
-                        reasons.append(f"Low Score ({score}/100) -> RSI:{rsi_val:.1f} (Neutral), Vol:{vol_ratio:.1f}x, Ctx:{context}")
-                    
-                    # Check volume if available
-                    if 'volume_spike' in ta_result.get('market_context', ''):
-                        reasons.append("Low volume")
-                    
-                    # Check trend
-                    trend = ta_result.get('market_context', '')
-                    if 'Trend=' in trend:
-                        trend_val = trend.split('Trend=')[1].split('|')[0].strip()
-                        if trend_val == 'SIDEWAYS':
-                            reasons.append("Sideways trend")
-                    
-                    reason = " | ".join(reasons) if reasons else f"No clear signal (RSI={rsi:.1f})"
-                    self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                    return {'symbol': symbol, 'status': 'NO_SIGNAL', 'score': ta_result.get('score')}
-
-            # EMPIRE V13.6: Fetch Memory Context
-            history_context = self.persistence.get_history_context()
+            # FIX CRITICAL: Respect NEUTRAL signal from market_analysis blocks
+            signal_type = ta_result.get('signal_type', 'NEUTRAL')
+            if signal_type == 'NEUTRAL':
+                # market_analysis already blocked this trade
+                reason = ta_result.get('market_context', 'Blocked by market analysis')
+                self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                return {'symbol': symbol, 'status': 'BLOCKED_ANALYSIS', 'reason': reason}
+            
+            direction = 'SHORT' if signal_type == 'SHORT' else 'LONG'
 
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
                 capital=balance, direction=direction, asset_class=asset_class,
-                news_score=news_score, macro_regime=macro.get('regime', 'NORMAL'),
-                btc_rsi=btc_rsi,
-                history_context=history_context
+                news_score=news_score, macro_regime=macro.get('regime', 'NORMAL')
             )
             
             if not decision['proceed']:
@@ -612,19 +490,11 @@ class TradingEngine:
             # MAX_OPEN_TRADES enforcement (V13.4 - prevent position overflow)
             real_positions = self._get_real_binance_positions()
             open_count = max(len(positions), len(real_positions))
-            
             if open_count >= TradingConfig.MAX_OPEN_TRADES:
-                # 🏛️ EMPIRE V13.5: Early Exit for Opportunity (75% / Score+)
-                # Before skipping, check if we can free a slot by removing a stagnating trade
-                if self._evaluate_early_exit_for_opportunity(positions, symbol, ta_result, decision):
-                    # Successfully freed a slot!
-                    open_count -= 1
-                    logger.info(f"[EARLY_EXIT_SUCCESS] Slot freed for {symbol}")
-                else:
-                    reason = f"MAX_OPEN_TRADES reached ({open_count}/{TradingConfig.MAX_OPEN_TRADES})"
-                    logger.warning(f"[SLOT_FULL] {reason}")
-                    self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                    return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
+                reason = f"MAX_OPEN_TRADES reached ({open_count}/{TradingConfig.MAX_OPEN_TRADES})"
+                logger.warning(f"[SLOT_FULL] {reason}")
+                self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
             
             # TRIM & SWITCH: If we have a high-confidence signal but low capital, consider trimming positions
             if positions and balance < 500 and decision['confidence'] >= 0.75:
@@ -664,16 +534,7 @@ class TradingEngine:
             order = self.exchange.create_market_order(symbol, side, quantity, leverage=leverage)
             real_entry = float(order.get('average', ta_result['price']))
             real_size = float(order.get('filled', quantity))
-            
-            # 🏛️ TACTICAL ALERT: Slippage Check
-            theoretical_price = float(ta_result['price'])
-            slippage_pct = abs((real_entry - theoretical_price) / theoretical_price) * 100
-            
-            if slippage_pct > 0.1:
-                logger.warning(f"⚠️ [TACTICAL_ALERT] High Entry Slippage: {slippage_pct:.3f}% for {symbol}")
-            else:
-                logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Slippage: {slippage_pct:.3f}%)")
-                
+            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {leverage}x)")
         except Exception as e:
             logger.error(f"[ERROR] Order failed: {e}")
             return {'symbol': symbol, 'status': 'ORDER_FAILED', 'error': str(e)}
@@ -712,9 +573,6 @@ class TradingEngine:
         
         logger.info(f"[SCALP] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({sl_pct*100:.2f}%)")
         
-        # 🏛️ EMPIRE V13.9: Place GTC SL/TP orders immediately on Binance
-        self.exchange.create_sl_tp_orders(symbol, side, real_size, sl, tp)
-        
         # Build detailed reason with technical indicators
         reason_parts = []
         if 'rsi' in ta_result:
@@ -731,7 +589,7 @@ class TradingEngine:
         
         self.persistence.log_trade_open(
             trade_id, symbol, asset_class, direction, real_entry, real_size,
-            (real_size * real_entry) / leverage, tp, sl, leverage,
+            real_size * real_entry, tp, sl, leverage,
             reason=detailed_reason
         )
         
@@ -740,8 +598,6 @@ class TradingEngine:
             'direction': direction, 'stop_loss': sl, 'take_profit': tp,
             'asset_class': asset_class,
             'risk_dollars': decision['risk_dollars'],
-            'score': ta_result.get('score', 0),
-            'ai_score': int(decision.get('confidence', 0) * 100),
             'entry_time': datetime.now(timezone.utc).isoformat()
         }
         self.persistence.save_position(symbol, pos_data)
@@ -847,177 +703,40 @@ class TradingEngine:
             new_decision,
             current_balance
         )
-
-    def _evaluate_early_exit_for_opportunity(self, positions: Dict, new_symbol: str, new_ta: Dict, new_decision: Dict) -> bool:
-        """
-        🏛️ EMPIRE RULE: "Early Exit for Opportunity" (75% / Score+)
-        Allows closing a stagnating trade to free a slot for a much better one.
-        """
-        new_score = new_ta.get('score', 0)
-        new_ai_score = int(new_decision.get('confidence', 0) * 100)
-        
-        candidates = []
-        for symbol, pos in positions.items():
-            try:
-                # 1. Check Stagnation (PnL entre -0,15% et +0,15%)
-                ticker = self.exchange.fetch_ticker(symbol)
-                current_price = float(ticker['last'])
-                entry_price = float(pos.get('entry_price', 0))
-                direction = pos['direction']
-                
-                if direction == 'LONG':
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                else:
-                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                
-                if not (-0.15 <= pnl_pct <= 0.15):
-                    continue
-                
-                # 2. Check Time Threshold (75% du MAX_TIME_EXIT)
-                entry_time_str = pos.get('entry_time')
-                if not entry_time_str: continue
-                
-                entry_time = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
-                time_open_min = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
-                
-                asset_class = pos.get('asset_class', 'crypto')
-                threshold_map = {
-                    'crypto': 20,
-                    'indices': 30,
-                    'commodities': 90,
-                    'forex': 60
-                }
-                max_time = threshold_map.get(asset_class, 60)
-                time_trigger = max_time * 0.75
-                
-                if time_open_min < time_trigger:
-                    continue
-                
-                # 3. Check Score Delta (+10 points)
-                old_score = pos.get('score', 0)
-                old_ai_score = pos.get('ai_score', 0)
-                
-                score_better = (new_score >= old_score + 10)
-                ai_better = (new_ai_score >= old_ai_score + 10)
-                
-                if score_better or ai_better:
-                    candidates.append({
-                        'symbol': symbol,
-                        'pnl_pct': pnl_pct,
-                        'time_open': time_open_min,
-                        'delta_score': new_score - old_score,
-                        'delta_ai': new_ai_score - old_ai_score,
-                        'pos_data': pos
-                    })
-            except Exception as e:
-                logger.error(f"[EARLY_EXIT_ERR] Failed to evaluate {symbol}: {e}")
-                continue
-        
-        if not candidates:
-            return False
-            
-        candidates.sort(key=lambda x: x['time_open'], reverse=True)
-        winner = candidates[0]
-        
-        reason = f"EARLY_EXIT for {new_symbol}: {winner['symbol']} stagnating ({winner['time_open']:.0f}m, {winner['pnl_pct']:+.2f}%)"
-        logger.warning(f"🏛️ [EARLY_EXIT] {reason} | Score+{winner['delta_score']}, AI+{winner['delta_ai']}")
-        
-        return self._close_position(winner['symbol'], winner['pos_data'], reason)
-
-    def _close_position(self, symbol: str, pos: Dict, reason: str) -> bool:
-        """Unifie la logique de fermeture de position Binance + DynamoDB"""
-        try:
-            ticker = self.exchange.fetch_ticker(symbol)
-            current_price = float(ticker['last'])
-            
-            binance_detail = self._get_binance_position_detail(symbol)
-            if not binance_detail:
-                logger.error(f"[CLOSE_ERR] No position found on Binance for {symbol}")
-                self.persistence.delete_position(symbol)
-                return False
-                
-            real_qty = binance_detail['quantity']
-            direction = pos['direction']
-            exit_side = 'sell' if direction == 'LONG' else 'buy'
-            
-            exit_order = self.exchange.create_market_order(symbol, exit_side, real_qty)
-            exit_price = float(exit_order.get('average', current_price))
-            
-            self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))
-            pnl = self.risk_manager.close_trade(symbol, exit_price)
-            self.persistence.save_risk_state(self.risk_manager.get_state())
-            self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason, is_test=pos.get('is_test', False))
-            self.persistence.delete_position(symbol)
-            
-            # 🏛️ EMPIRE V13.9: Cleanup GTC orders
-            self.exchange.cancel_all_orders(symbol)
-            
-            logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f}")
-            return True
-        except Exception as e:
-            logger.error(f"[CLOSE_FAILED] {symbol}: {e}")
-            return False
     
     def _manage_positions(self, positions: Dict):
         logger.info(f"\n{'='*70}\n[INFO] POSITION MANAGEMENT\n{'='*70}")
         for symbol, pos in list(positions.items()):
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
-                if not ticker:
-                    logger.warning(f"[MANAGE] Could not fetch ticker for {symbol}")
-                    continue
-
-                # 🏛️ EMPIRE V14.2: Robust Price Fetching (Fix float(NoneType) error)
-                # Prioritize Mark Price, then Last Price, then Info values
-                raw_price = ticker.get('markPrice')
-                if raw_price is None:
-                    raw_price = ticker.get('last')
-                if raw_price is None and 'info' in ticker:
-                    # Fallback to provider-specific info field
-                    raw_price = ticker['info'].get('markPrice', ticker['info'].get('lastPrice'))
+                current_price = float(ticker['last'])
+                entry_price = float(pos.get('entry_price', 0))
+                direction = pos['direction']
                 
-                if raw_price is None:
-                    logger.warning(f"[MANAGE] No valid price found for {symbol}. Skipping.")
-                    continue
-                    
-                current_price = float(raw_price)
+                # Calculate current PnL % (ensure all values are float to avoid Decimal errors)
+                current_price = float(current_price)
+                entry_price = float(entry_price)
                 
-                # Safe Entry Price
-                entry_val = pos.get('entry_price')
-                if entry_val is None:
-                    logger.warning(f"[MANAGE] Missing entry_price for {symbol}")
-                    continue
-                entry_price = float(entry_val)
-                if entry_price == 0: continue 
-
-                direction = pos.get('direction', 'LONG')
-                
-                # Calculate current PnL %
                 if direction == 'LONG':
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
                 else:
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
                 
-                # Check traditional TP/SL - Safe Conversion
-                sl_val = pos.get('stop_loss')
-                tp_val = pos.get('take_profit')
+                # Check traditional TP/SL
+                stop_loss = float(pos['stop_loss'])
+                take_profit = float(pos['take_profit'])
+                hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
+                hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
                 
-                stop_loss = float(sl_val) if sl_val is not None else 0.0
-                take_profit = float(tp_val) if tp_val is not None else 0.0
-                
-                # Only check SL/TP if they are set (non-zero)
-                hit_sl = False
-                hit_tp = False
-                if stop_loss > 0:
-                    hit_sl = (current_price <= stop_loss) if direction == 'LONG' else (current_price >= stop_loss)
-                if take_profit > 0:
-                    hit_tp = (current_price >= take_profit) if direction == 'LONG' else (current_price <= take_profit)
-                
-                # EMPIRE V14.2: Dynamic Sniper Profit (Uses Config 0.40%)
-                threshold_pct = TradingConfig.SCALP_TP_MIN * 100
-                hit_profit_sniper = pnl_pct >= threshold_pct
-                if hit_profit_sniper:
-                    logger.info(f"🏛️ [SNIPER_PROFIT] {symbol} reached +{pnl_pct:.2f}% (Target: {threshold_pct:.2f}%) - securing profit!")
+                # EMPIRE V12.6: "NOUVELLE PAGE BLANCHE" - 1% PROFIT PROTECTION
+                # Philosophy: Ne pas transformer un trade en mariage
+                # Exit at 1% forces re-evaluation: "Would I buy this asset NOW at this price?"
+                # If signal remains strong after exit, bot can re-enter (no cooldown blocks it)
+                # This allows capturing multiple 1% moves on same asset during strong trends
+                # Security: Profit is REAL on account before any re-entry decision
+                hit_profit_1pct = pnl_pct >= 1.0
+                if hit_profit_1pct:
+                    logger.warning(f"[PROFIT_1PCT] {symbol} reached +{pnl_pct:.2f}% - securing profit! (Nouvelle Page Blanche)")
                 
                 # EMPIRE V12.3: Time-based exits
                 entry_time_str = pos.get('entry_time', '')
@@ -1055,11 +774,10 @@ class TradingEngine:
                             should_exit_time = True
                             logger.warning(f"[TIME_EXIT] {symbol} ({asset_class}) open {time_open_hours*60:.0f}min - auto-close (PnL: {pnl_pct:+.2f}%)")
                         
-                        # 🏛️ EMPIRE V13.7: FAST DISCARD (Momentum Required)
-                        # If after 10 minutes, PnL is stagnant near zero (-0.05% to +0.05%), release the slot.
-                        if time_open_minutes >= 10 and -0.05 <= pnl_pct <= 0.05:
+                        # FAST_DISCARD: >10min AND PnL < 0.10% (libérer capital si momentum absent)
+                        if time_open_minutes > 10 and pnl_pct < 0.10:
                             should_exit_fast_discard = True
-                            logger.warning(f"🏛️ [FAST_DISCARD] {symbol} stagnant at {pnl_pct:+.2f}% after 10m. Releasing slot.")
+                            logger.warning(f"[FAST_DISCARD] {symbol} open {time_open_minutes:.0f}min with only {pnl_pct:+.2f}% - no momentum")
                     except: pass
                 
                 # Optional: Claude analysis for exit decision
@@ -1095,14 +813,14 @@ class TradingEngine:
                         logger.warning(f"[CLAUDE] Exit analysis failed: {e}")
                 
                 # Exit if any condition is met
-                if hit_sl or hit_tp or hit_profit_sniper or should_exit_time or should_exit_fast_discard or should_exit_claude:
+                if hit_sl or hit_tp or hit_profit_1pct or should_exit_time or should_exit_fast_discard or should_exit_claude:
                     # Build detailed close reason
                     if hit_sl:
-                        reason = f"Stop Loss hit at ${current_price:.2f} (SL: ${stop_loss:.2f} Mark, PnL: {pnl_pct:+.2f}%)"
+                        reason = f"Stop Loss hit at ${current_price:.2f} (SL: ${stop_loss:.2f}, PnL: {pnl_pct:+.2f}%)"
                     elif hit_tp:
                         reason = f"Take Profit hit at ${current_price:.2f} (TP: ${take_profit:.2f}, PnL: {pnl_pct:+.2f}%)"
-                    elif hit_profit_sniper:
-                        reason = f"V13.9 Sniper Profit 0.5% (PnL: {pnl_pct:+.2f}%, Entry: ${entry_price:.2f})"
+                    elif hit_profit_1pct:
+                        reason = f"1% Profit Protection (PnL: {pnl_pct:+.2f}%, Entry: ${entry_price:.2f})"
                     elif should_exit_fast_discard:
                         duration_min = time_open_minutes if 'time_open_minutes' in locals() else 0
                         reason = f"Fast Discard after {duration_min:.0f}min (PnL: {pnl_pct:+.2f}%, no momentum)"
@@ -1114,140 +832,22 @@ class TradingEngine:
                         reason = f"Claude AI Exit (sentiment changed, PnL: {pnl_pct:+.2f}%)"
                     
                     logger.warning(f"[ALERT] EXIT: {symbol} - {reason}")
+                    exit_side = 'sell' if direction == 'LONG' else 'buy'
+                    exit_order = self.exchange.create_market_order(symbol, exit_side, pos['quantity'])
+                    exit_price = float(exit_order.get('average', current_price))
                     
-                    self._close_position(symbol, pos, reason)
+                    self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))
+                    
+                    pnl = self.risk_manager.close_trade(symbol, exit_price)
+                    self.persistence.save_risk_state(self.risk_manager.get_state())
+                    self.persistence.log_trade_close(pos['trade_id'], exit_price, pnl, reason)
+                    self.persistence.delete_position(symbol)
                     del positions[symbol]
+                    logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
                 else:
                     logger.info(f"[HOLD] {symbol} | PnL: {pnl_pct:+.2f}% | Time: {entry_time_str[:16] if entry_time_str else 'N/A'}")
 
             except Exception as e: logger.error(f"[ERROR] Manage failed for {symbol}: {e}")
-
-    def _safe_fetch_rsi_volume(self, symbol: str) -> Optional[Dict]:
-        """Helper for parallel fetch of RSI and Volume (Double Alpha) with Strict Sanitization (V14.1)"""
-        try:
-            # 1. Fetch OHLCV (Limit 50 for speed)
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
-            if not ohlcv or len(ohlcv) < 20: return None
-            
-            # 2. Get Volume (24h) & RSI with Zero-Tolerance Sanitization
-            try:
-                # Use mean volume of last 24 candles as a robust proxy for 24h volume/liquidity
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                
-                # Strict Type Conversion
-                df['close'] = pd.to_numeric(df['close'], errors='coerce')
-                df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-                
-                # Check for empty or invalid data (NaNs)
-                if df['close'].isnull().any() or df['volume'].isnull().any():
-                     # logger.warning(f"[SKIP] {symbol}: Corrupt OHLCV data found (NaNs).")
-                     return None
-                
-                rsi_series = calculate_rsi(df['close'], period=14)
-                
-                # Validation: RSI must be a valid float
-                rsi_val = rsi_series.iloc[-1]
-                if pd.isna(rsi_val): return None
-                rsi = float(rsi_val)
-                
-                # Validation: Volume must be valid
-                vol_val = df['volume'].iloc[-24:].sum()
-                if pd.isna(vol_val) or vol_val <= 0: return None
-                volume = float(vol_val)
-                
-                # Validation: Price must be valid
-                price_val = df['close'].iloc[-1]
-                if pd.isna(price_val) or price_val <= 0: return None
-                price = float(price_val)
-                
-                return {
-                    'symbol': symbol,
-                    'rsi': rsi,
-                    'volume': volume,
-                    'price': price
-                }
-            except Exception as e:
-                # logger.debug(f"[calc_error] {symbol}: {e}")
-                return None
-                
-        except Exception as e:
-            # logger.debug(f"Failed to fetch {symbol}: {e}")
-            return None
-
-    def scan_market_double_alpha(self) -> List[str]:
-        """
-        🏛️ EMPIRE V14.0: DOUBLE ALPHA SELECTION
-        1. Fetch all 415+ Futures (Dynamic API Call)
-        2. Short Hunter: Top 20 (RSI Desc -> Top 50 -> Vol Desc)
-        3. Long Sniper: Top 20 (RSI Asc -> Top 50 -> Vol Desc)
-        4. Merge & Return
-        """
-        logger.info(f"\n{'='*70}\n[INFO] STARTING DOUBLE ALPHA SCAN (V14.0)\n{'='*70}")
-        
-        # 1. Fetch All Symbols (Dynamic List from Binance API)
-        # Using the new robust method to avoid MATIC/POL issues
-        try:
-            all_symbols = self.exchange.get_all_futures_symbols()
-        except Exception as e:
-            logger.error(f"[SCAN_CRITICAL] Failed to get symbols: {e}")
-            all_symbols = []
-            
-        if not all_symbols:
-             logger.warning("[SCAN] Zero candidates found! Falling back to configured assets.")
-             return list(TradingConfig.EMPIRE_ASSETS.keys())
-
-        logger.info(f"[SCAN] Found {len(all_symbols)} active USDT perpetuals. Fetching data...")
-        
-        candidates = []
-        # Parallel fetch for speed (LIMIT 50 workers)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-            future_to_symbol = {executor.submit(self._safe_fetch_rsi_volume, sym): sym for sym in all_symbols}
-            
-            for future in concurrent.futures.as_completed(future_to_symbol):
-                res = future.result()
-                if res and res['volume'] > 0: # Basic filter
-                    candidates.append(res)
-        
-        logger.info(f"[SCAN] Successfully analyzed {len(candidates)} assets.")
-        
-        if not candidates:
-            return list(TradingConfig.EMPIRE_ASSETS.keys())
-
-        # 2. Double Alpha Logic
-        
-        # A. Short Hunter (RSI Descending)
-        # Sort by RSI DESC (High RSI first)
-        sorted_rsi_desc = sorted(candidates, key=lambda x: x['rsi'], reverse=True)
-        # Take Top 50
-        short_pool = sorted_rsi_desc[:50]
-        # Sort these 50 by Volume DESC (Big Volume first)
-        short_final = sorted(short_pool, key=lambda x: x['volume'], reverse=True)[:20]
-        
-        # B. Long Sniper (RSI Ascending)
-        # Sort by RSI ASC (Low RSI first)
-        sorted_rsi_asc = sorted(candidates, key=lambda x: x['rsi'], reverse=False)
-        # Take Top 50
-        long_pool = sorted_rsi_asc[:50]
-        # Sort these 50 by Volume DESC (Big Volume first)
-        long_final = sorted(long_pool, key=lambda x: x['volume'], reverse=True)[:20]
-        
-        # 3. Merge Lists
-        final_set = set()
-        
-        logger.info(f"\n--- SHORT HUNTER (Top 20) ---")
-        for i, c in enumerate(short_final):
-            logger.info(f"#{i+1:02d} SHORT: {c['symbol']:<15} | RSI: {c['rsi']:>5.1f} | Vol: {c['volume']:,.0f}")
-            final_set.add(c['symbol'])
-            
-        logger.info(f"\n--- LONG SNIPER (Top 20) ---")
-        for i, c in enumerate(long_final):
-            logger.info(f"#{i+1:02d} LONG : {c['symbol']:<15} | RSI: {c['rsi']:>5.1f} | Vol: {c['volume']:,.0f}")
-            final_set.add(c['symbol'])
-            
-        # Return unique symbols list
-        final_list = list(final_set)
-        logger.info(f"[SCAN] Final Selection: {len(final_list)} assets sent to Analysis Engine.")
-        return final_list
 
 # ==================== LAMBDA HANDLER ====================
 
@@ -1255,17 +855,12 @@ def lambda_handler(event, context):
     try:
         engine = TradingEngine()
         
-        # 🏛️ EMPIRE V14.0: DOUBLE ALPHA SELECTION
-        # Use event['symbols'] for manual override, otherwise run the scan
-        if event.get('symbols'):
-             symbols_str = event.get('symbols')
-             symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
-             logger.info(f"[INFO] Manual symbol override: {len(symbols)} assets")
-        else:
-             # Run the full V14.0 scan
-             symbols = engine.scan_market_double_alpha()
+        # Get symbols from event or environment variable (11 symbols - V13.2 Binance Validated)
+        # Pump/News (1): DOGE | Tech L1 (1): AVAX | Oracle (1): LINK | Leaders (5): BTC, ETH, SOL, XRP, BNB | RWA (1): PAXG | Indices (1): SPX | Parking (1): USDC
+        symbols_str = event.get('symbols') if event.get('symbols') else os.getenv('SYMBOLS', 'BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,DOGE/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,PAXG/USDT:USDT,SPX/USDT:USDT,USDC/USDT:USDT')
+        symbols = [s.strip() for s in symbols_str.split(',') if s.strip()]
         
-        logger.info(f"[INFO] Processing {len(symbols)} symbols: {', '.join(symbols)}")
+        logger.info(f"[INFO] Scanning {len(symbols)} symbols: {', '.join(symbols)}")
         
         risk_state = engine.persistence.load_risk_state()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -1276,26 +871,7 @@ def lambda_handler(event, context):
             new_state['last_reset_date'] = today
             engine.persistence.save_risk_state(new_state)
 
-        # 🏛️ EMPIRE V13.5: Fetch BTC RSI for the Bedrock Matrix Filter
-        btc_rsi = None
-        try:
-            # We use the smart cache to avoid wasting time/latency
-            btc_ohlcv = engine._get_ohlcv_smart('BTC/USDT:USDT', '1h')
-            # Fix: classify_asset identifies BTC/USDT:USDT as crypto
-            btc_ta = analyze_market(btc_ohlcv, symbol='BTC/USDT:USDT', asset_class=AssetClass.CRYPTO)
-            btc_rsi = btc_ta.get('rsi')
-            logger.info(f"[BEDROCK] BTC Context: RSI={btc_rsi:.1f}")
-        except Exception as e:
-            logger.warning(f"[BEDROCK] Failed to fetch BTC RSI context: {e}")
-
-        results = []
-        for s in symbols:
-            try:
-                res = engine.run_cycle(s, btc_rsi=btc_rsi)
-                results.append(res)
-            except Exception as e:
-                logger.error(f"[ERROR] Cycle failed for {s}: {e}")
-                results.append({'symbol': s, 'status': 'CYCLE_ERROR', 'error': str(e)})
+        results = [engine.run_cycle(s) for s in symbols]
         
         logger.info(f"[INFO] Scan complete: {len(results)} results")
         return {'statusCode': 200, 'body': json.dumps({'status': 'SUCCESS', 'results': results})}

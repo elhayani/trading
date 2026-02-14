@@ -148,6 +148,13 @@ class ExchangeConnector:
             'symbol': target
         }
 
+    def fetch_positions(self, symbols: Optional[List[str]] = None) -> List:
+        try:
+            return self.exchange.fetch_positions(symbols)
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch positions: {e}")
+            raise
+
     def fetch_balance(self) -> Dict:
         """Mode-aware balance fetch (Audit #V11.6.4)"""
         try:
@@ -183,26 +190,48 @@ class ExchangeConnector:
             logger.error(f"[ERROR] USDT balance fetch failed: {e}")
             raise
 
-    def create_market_order(self, symbol: str, side: str, amount: float, leverage: int = 1) -> Dict:
+    def create_market_order(self, symbol: str, side: str, amount: float, leverage: Optional[int] = None) -> Dict:
         try:
-            # Set leverage before placing order (Binance Futures requirement)
-            try:
-                self.exchange.set_leverage(leverage, symbol)
-                logger.info(f"[LEVERAGE] Set to {leverage}x for {symbol}")
-            except Exception as lev_err:
-                logger.warning(f"[WARN] Could not set leverage: {lev_err}")
+            # 🏛️ EMPIRE V14.2: Strict Leverage & Margin Enforcement
+            # Skip leverage if closing or not provided
+            is_closing = side.lower() == 'close' or leverage is None
             
-            logger.info(f"[INFO] Order: {side.upper()} {amount} {symbol} @ {leverage}x leverage")
+            if not is_closing:
+                # 1. Enforce ISOLATED Margin (Safe Mode)
+                try:
+                    self.exchange.set_margin_mode('ISOLATED', symbol)
+                except Exception:
+                    pass
+
+                # 2. Enforce Leverage (Critical) 
+                try:
+                    self.exchange.set_leverage(leverage, symbol)
+                    logger.info(f"[LEVERAGE] Set to {leverage}x for {symbol}")
+                except Exception as lev_err:
+                    # Ignore if reduction not supported while open (often means already set)
+                    if "code\":-4161" in str(lev_err) or "Leverage reduction is not supported" in str(lev_err):
+                        logger.warning(f"[LEVERAGE] Reduction blocked for {symbol} (likely already open), proceeding.")
+                    else:
+                        logger.error(f"[CRITICAL] Failed to set leverage {leverage}x for {symbol}: {lev_err}")
+                        raise ValueError(f"Leverage failure: {lev_err}")
+            
+            logger.info(f"[INFO] Order: {side.upper()} {amount} {symbol}")
             return self.exchange.create_order(
                 symbol=symbol,
                 type='market',
-                side=side.lower(),
+                side='sell' if side.lower() == 'sell' else 'buy',
                 amount=amount,
-                params={'reduceOnly': True} if side.lower() == 'close' else {}
+                params={'reduceOnly': True} if is_closing else {}
             )
         except Exception as e:
             logger.error(f"[ERROR] Order execution failed: {e}")
             raise
+
+    def close_position(self, symbol: str, side: str, quantity: float) -> Dict:
+        """Helper to close a position without worrying about leverage"""
+        logger.info(f"[CLOSE] Attempting to close {symbol} ({side.upper()} {quantity})")
+        return self.create_market_order(symbol, side=side, amount=quantity, leverage=None)
+
 
     def create_sl_tp_orders(self, symbol: str, side: str, amount: float, stop_loss: float, take_profit: float) -> Dict:
         """🏛️ EMPIRE V13.9: Create GTC Sniper orders (LIMIT for TP, STOP_MARKET for SL)"""
@@ -242,6 +271,67 @@ class ExchangeConnector:
             
         except Exception as e:
             logger.warning(f"[WARN] V13.9 Sniper orders failed: {e}")
+            
+        return results
+
+    def create_ladder_exit_orders(self, symbol: str, side: str, total_amount: float, stop_loss: float, 
+                                tp1_price: float, tp1_amount: float, 
+                                tp2_price: float, tp2_amount: float) -> Dict:
+        """🏛️ EMPIRE V13.10: Create Ladder Exit orders (2 TPs + 1 SL)"""
+        results = {}
+        close_side = 'sell' if side.lower() == 'buy' else 'buy'
+        
+        try:
+            # 1. Stop Loss (STOP_MARKET) - Full Position Protection
+            sl_order = self.exchange.create_order(
+                symbol=symbol,
+                type='STOP_MARKET',
+                side=close_side,
+                amount=total_amount,
+                params={
+                    'stopPrice': stop_loss,
+                    'reduceOnly': True,
+                    'workingType': 'MARK_PRICE'
+                }
+            )
+            results['sl'] = sl_order
+            logger.info(f"[LADDER_SL] STOP_MARKET at ${stop_loss} ({close_side.upper()} {total_amount})")
+            
+            # 2. TP1 (Quick Exit) - First Rung
+            tp1_order = self.exchange.create_order(
+                symbol=symbol,
+                type='LIMIT',
+                side=close_side,
+                amount=tp1_amount,
+                price=tp1_price,
+                params={
+                    'reduceOnly': True,
+                    'timeInForce': 'GTC'
+                }
+            )
+            results['tp1'] = tp1_order
+            logger.info(f"[LADDER_TP1] LIMIT at ${tp1_price} ({close_side.upper()} {tp1_amount})")
+            
+            # 3. TP2 (Final Exit) - Second Rung
+            tp2_order = self.exchange.create_order(
+                symbol=symbol,
+                type='LIMIT',
+                side=close_side,
+                amount=tp2_amount,
+                price=tp2_price,
+                params={
+                    'reduceOnly': True,
+                    'timeInForce': 'GTC'
+                }
+            )
+            results['tp2'] = tp2_order
+            logger.info(f"[LADDER_TP2] LIMIT at ${tp2_price} ({close_side.upper()} {tp2_amount})")
+            
+        except Exception as e:
+            logger.warning(f"[WARN] Ladder orders failed: {e}")
+            try:
+                for k in results: self.exchange.cancel_order(results[k]['id'], symbol)
+            except: pass
             
         return results
 
@@ -310,3 +400,148 @@ class ExchangeConnector:
         except Exception as e:
             logger.error(f"[ERROR] Fallback symbol fetch failed: {e}")
             return []
+
+    # --- EMPIRE V15: Binance Native Data Methods ---
+
+    def fetch_binance_ticker_stats(self, symbol: str) -> Dict:
+        """
+        Récupère les statistiques 24h de Binance
+        BEAUCOUP plus d'infos que fetch_ticker() standard
+        """
+        try:
+            ticker = self.exchange.fetch_ticker(symbol)
+            return {
+                'symbol': symbol,
+                'price': ticker['last'],
+                'volume_24h': ticker['quoteVolume'],  # Volume en USDT
+                'volume_base_24h': ticker['baseVolume'],  # Volume en crypto
+                'price_change_24h_pct': ticker['percentage'],
+                'high_24h': ticker['high'],
+                'low_24h': ticker['low'],
+                'trades_count_24h': ticker.get('info', {}).get('count', 0),
+                'bid': ticker['bid'],
+                'ask': ticker['ask'],
+                'bid_volume': ticker['bidVolume'],
+                'ask_volume': ticker['askVolume'],
+                'weighted_avg_price': float(ticker.get('info', {}).get('weightedAvgPrice', 0)),
+                'prev_close': float(ticker.get('info', {}).get('prevClosePrice', 0)),
+                'open_price': ticker['open']
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch ticker stats for {symbol}: {e}")
+            return {}
+
+    def fetch_order_book_analysis(self, symbol: str, limit: int = 100) -> Dict:
+        """
+        Analyse du carnet d'ordres (Order Book)
+        """
+        try:
+            orderbook = self.exchange.fetch_order_book(symbol, limit=limit)
+            bids = orderbook['bids']
+            asks = orderbook['asks']
+            
+            if not bids or not asks:
+                return {}
+
+            total_bid_volume = sum([bid[1] for bid in bids])
+            total_ask_volume = sum([ask[1] for ask in asks])
+            
+            # Prix pondérés
+            bid_weighted = sum([bid[0] * bid[1] for bid in bids]) / total_bid_volume if total_bid_volume > 0 else 0
+            ask_weighted = sum([ask[0] * ask[1] for ask in asks]) / total_ask_volume if total_ask_volume > 0 else 0
+            
+            # Spread
+            spread = (asks[0][0] - bids[0][0]) / bids[0][0] * 100
+            
+            # Déséquilibre (Buy pressure)
+            imbalance = (total_bid_volume - total_ask_volume) / (total_bid_volume + total_ask_volume) if (total_bid_volume + total_ask_volume) > 0 else 0
+            
+            # Détection de murs (Wall detection)
+            avg_bid_size = total_bid_volume / len(bids)
+            avg_ask_size = total_ask_volume / len(asks)
+            
+            buy_walls = [bid for bid in bids if bid[1] > avg_bid_size * 5]
+            sell_walls = [ask for ask in asks if ask[1] > avg_ask_size * 5]
+            
+            return {
+                'bid_volume': total_bid_volume,
+                'ask_volume': total_ask_volume,
+                'imbalance': imbalance,
+                'spread_pct': spread,
+                'bid_weighted_price': bid_weighted,
+                'ask_weighted_price': ask_weighted,
+                'buy_walls_count': len(buy_walls),
+                'sell_walls_count': len(sell_walls),
+                'biggest_buy_wall': max([w[1] for w in buy_walls], default=0),
+                'biggest_sell_wall': max([w[1] for w in sell_walls], default=0)
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch orderbook for {symbol}: {e}")
+            return {}
+
+    def fetch_recent_trades_analysis(self, symbol: str, limit: int = 500) -> Dict:
+        """
+        Analyse des trades récents
+        """
+        try:
+            trades = self.exchange.fetch_trades(symbol, limit=limit)
+            if not trades:
+                return {}
+            
+            buys = [t for t in trades if t['side'] == 'buy']
+            sells = [t for t in trades if t['side'] == 'sell']
+            
+            buy_volume = sum([t['amount'] * t['price'] for t in buys])
+            sell_volume = sum([t['amount'] * t['price'] for t in sells])
+            
+            aggression = (buy_volume - sell_volume) / (buy_volume + sell_volume) if (buy_volume + sell_volume) > 0 else 0
+            
+            avg_buy_size = buy_volume / len(buys) if buys else 0
+            avg_sell_size = sell_volume / len(sells) if sells else 0
+            
+            total_volume = buy_volume + sell_volume
+            avg_trade_size = total_volume / len(trades)
+            whale_trades = [t for t in trades if (t['amount'] * t['price']) > avg_trade_size * 10]
+            
+            return {
+                'buy_volume': buy_volume,
+                'sell_volume': sell_volume,
+                'aggression': aggression,
+                'avg_buy_size': avg_buy_size,
+                'avg_sell_size': avg_sell_size,
+                'whale_trades_count': len(whale_trades),
+                'whale_ratio': len(whale_trades) / len(trades)
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch recent trades for {symbol}: {e}")
+            return {}
+
+    def fetch_funding_rate(self, symbol: str) -> Dict:
+        """
+        Taux de financement (Futures)
+        """
+        try:
+            funding = self.exchange.fetch_funding_rate(symbol)
+            return {
+                'funding_rate': funding['fundingRate'],
+                'funding_timestamp': funding['fundingTimestamp'],
+                'next_funding_time': funding['info'].get('nextFundingTime'),
+                'sentiment': 'BULLISH' if funding['fundingRate'] > 0.0001 else 'BEARISH' if funding['fundingRate'] < -0.0001 else 'NEUTRAL'
+            }
+        except Exception as e:
+            # logger.warning(f"Funding rate not available for {symbol}: {e}")
+            return {}
+
+    def fetch_open_interest(self, symbol: str) -> Dict:
+        """
+        Open Interest
+        """
+        try:
+            oi = self.exchange.fetch_open_interest(symbol)
+            return {
+                'open_interest': oi['openInterest'],
+                'timestamp': oi['timestamp']
+            }
+        except Exception as e:
+            # logger.warning(f"OI not available for {symbol}: {e}")
+            return {}

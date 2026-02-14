@@ -1,88 +1,147 @@
 """
-⚙️ EMPIRE TRADING CONFIGURATION
-===============================
-Centralized settings for the Empire Trading Bot.
+⚙️ EMPIRE TRADING CONFIGURATION - 3-LAMBDA ARCHITECTURE
+========================================================
+Optimized for: +1% per day target with Quick Exit strategy
 """
 
 class TradingConfig:
     # --- Technical Analysis ---
     MIN_REQUIRED_CANDLES = 250
     
-    # --- Technical Score Thresholds ---
-    MIN_TECHNICAL_SCORE_CRYPTO = 80
-    MIN_TECHNICAL_SCORE_INDICES = 80
-    MIN_TECHNICAL_SCORE_FOREX = 80
-    MIN_TECHNICAL_SCORE_COMMODITIES = 80
+    # --- Technical Score Thresholds (Adjusted for high frequency) ---
+    MIN_TECHNICAL_SCORE_CRYPTO = 45  # Lowered for V15.7 Scalp Mode
+    MIN_TECHNICAL_SCORE_INDICES = 60
+    MIN_TECHNICAL_SCORE_FOREX = 60
+    MIN_TECHNICAL_SCORE_COMMODITIES = 60
+    
+    # Minimum 24H Volume in USDT for scalping eligibility
+    MIN_VOLUME_24H = 10_000_000  # $10M USDT/day
     
     # --- Risk Management ---
-    MAX_LOSS_PER_TRADE = 0.02   # 2% of capital
-    MAX_DAILY_LOSS_PCT = 0.05   # 5% of capital
-    MAX_PORTFOLIO_RISK_PCT = 0.20 # 20% of capital
-    COMMISSION_RATE = 0.001     # 0.1% per leg
-    SLIPPAGE_BUFFER = 0.001     # 0.1% buffer
+    MAX_LOSS_PER_TRADE = 0.02
+    MAX_DAILY_LOSS_PCT = 0.05
+    MAX_PORTFOLIO_RISK_PCT = 0.20
+    COMMISSION_RATE = 0.001  # 0.1% per leg
+    SLIPPAGE_BUFFER = 0.001  # 0.1% slippage
     
-    # --- Scalping Strategy (V14.2 Hyper-Velocity) ---
-    LEVERAGE = 3                # Levier x3 pour puissance de frappe Elite
-    SCALP_TP_MIN = 0.0035       # 0.35% profit target (Hyper-Velocity)
-    SCALP_TP_MAX = 0.0035       # 0.35% profit target (Fixed)
-    SCALP_SL = 0.0030           # 0.30% stop loss (Optimized R:R 1.17)
-    USE_LIMIT_ORDERS = True     # Use limit orders for better execution
-    MAX_OPEN_TRADES = 4         # Maximum 4 concurrent positions (slot management)
+    # ================================================================
+    # SCALPING STRATEGY - ELITE QUICK EXIT (3-LAMBDA OPTIMIZED)
+    # ================================================================
     
-    # --- PAXG Specific (Gold tokenisé - Levier x6) ---
-    PAXG_LEVERAGE = 6           # Levier x6 pour compenser la faible volatilité de l'or
-    PAXG_TP = 0.0035            # 0.35% profit target
-    PAXG_SL = 0.0030            # 0.30% stop loss
+    LEVERAGE = 5  # x5 leverage to amplify micro-movements
+    
+    # Progressive TP Ladder (Quick Exit Strategy)
+    # Lambda 2/3 will capture these TPs at 20s/40s intervals
+    TP_QUICK = 0.0025   # 0.25% → First exit target (70% position)
+    TP_FINAL = 0.0050   # 0.50% → Second exit target (30% position)
+    
+    # Stop Loss (tight for quick scalping)
+    SL = 0.0020         # 0.20% stop loss
+    
+    # Backward compatibility (used by risk_manager.py)
+    SCALP_TP_MIN = TP_QUICK
+    SCALP_TP_MAX = TP_FINAL
+    SCALP_SL = SL
+    SCALP_SL_SHORT = SL
+    
+    # Quick Exit Settings
+    USE_PROGRESSIVE_EXIT = True  # Enable TP ladder
+    QUICK_EXIT_PERCENTAGE = 0.70  # 70% exit at TP_QUICK
+    FINAL_EXIT_PERCENTAGE = 0.30  # 30% exit at TP_FINAL
+    
+    # Multi-Lambda Coordination
+    MAX_OPEN_TRADES = 4  # Limited as requested by user
+    USE_LIMIT_ORDERS = True
+    
+    # --- PAXG Specific (unchanged) ---
+    PAXG_LEVERAGE = 6
+    PAXG_TP = 0.0040
+    PAXG_SL = 0.0030
+
+    # --- Indices / Forex Specific (unchanged) ---
+    INDICES_TP = 0.0030
+    INDICES_SL = 0.0020
+    FOREX_TP = 0.0030
+    FOREX_SL = 0.0020
     
     # --- Confidence / Sizing ---
-    MIN_CONFIDENCE = 0.7        # Raised to 70% for scalping (high-probability only)
+    MIN_CONFIDENCE = 0.65  # Lowered from 0.70 for more opportunities
     MAX_CONFIDENCE = 1.0
     
-    # --- News Sentiment ---
-    NEWS_FRESHNESS_MULTIPLIER = 1.5
-    NEWS_SENTIMENT_THRESHOLD = 0.1 # Absolute value
+    # --- News Sentiment (disabled for speed) ---
+    NEWS_FRESHNESS_MULTIPLIER = 1.0  # Disabled
+    NEWS_SENTIMENT_THRESHOLD = 0.5    # Very high threshold = disabled
     
     # --- Macro Regime Adjustments ---
-    RISK_OFF_HURDLE = 7         # +7 to min technical score
-    CRASH_HURDLE = 15           # +15 to min technical score
+    RISK_OFF_HURDLE = 5
+    CRASH_HURDLE = 12
     
     # --- Cache settings ---
-    MACRO_CACHE_TTL_SECONDS = 3600 # 1 hour
+    MACRO_CACHE_TTL_SECONDS = 3600
     
     # --- Exchange Configuration ---
-    LIVE_MODE = False  # Set to True for Real Trading, False for Demo/Testnet
+    LIVE_MODE = False  # Set to True for production
 
-    # --- 🏛️ EMPIRE ASSET CONFIGURATION (12 Assets) ---
-    # Format: Symbol -> (Leverage, Asset Class, Trading Hours/Notes)
-    EMPIRE_ASSETS = {
-        # === CRYPTO (11 assets) ===
-        "BTC/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "Leader", "notes": "Global 24/7"},
-        "ETH/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "Major Altcoin", "notes": "Global 24/7"},
-        "SOL/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "High Volatility", "notes": "Global 24/7"},
-        "AVAX/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "V13.8 Elite", "notes": "Ecosystem Hub"},
-        "LINK/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "V13.8 Elite", "notes": "Oracle Backbone"},
-        "ADA/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "V13.8 Elite", "notes": "Research Based"},
-        "DOT/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "V13.8 Elite", "notes": "Interoperability"},
-        "POL/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "V13.8 Elite", "notes": "L2 Alpha"},
-        "XRP/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "News/Asia", "notes": "Night (Asia)"},
-        "BNB/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "Binance Eco", "notes": "Global 24/7"},
-        "DOGE/USDT:USDT": {"leverage": 3, "class": "crypto", "role": "Retail Sentiment", "notes": "Random"},
-        
-        # === COMMODITIES (2 assets) ===
-        "PAXG/USDT:USDT": {"leverage": 6, "class": "commodities", "role": "Gold Shield", "notes": "Safe Haven"},
-        "OIL/USDT:USDT": {"leverage": 3, "class": "commodities", "role": "WTI Crude", "notes": "Geopolitical"},
-        
-        # === INDICES (3 assets) ===
-        "SPX/USDT:USDT": {"leverage": 3, "class": "indices", "role": "S&P 500", "notes": "15:30 (USA)"},
-        "DAX/USDT:USDT": {"leverage": 3, "class": "indices", "role": "GER40", "notes": "09:00 (Europe)"},
-        "NDX/USDT:USDT": {"leverage": 3, "class": "indices", "role": "NASDAQ 100", "notes": "V13.8 Elite High-Growth"},
-        
-        # === FOREX (3 assets) ===
-        "EUR/USD:USDT": {"leverage": 3, "class": "forex", "role": "Major Pair", "notes": "24/7"},
-        "GBP/USD:USDT": {"leverage": 3, "class": "forex", "role": "V13.8 Elite Sterling", "notes": "Volatile Forex"},
-        "USD/JPY:USDT": {"leverage": 3, "class": "forex", "role": "V13.8 Elite Yen", "notes": "Safe Haven FX"},
-        
-        # === STABLE (1 asset) ===
-        "USDC/USDT:USDT": {"leverage": 3, "class": "stable", "role": "Parking", "notes": "Stability"},
+    # ================================================================
+    # VWAP Filters (Relaxed for micro-cap opportunities)
+    # ================================================================
+    VWAP_LONG_MIN_DIST = -8.0   # Can enter LONG up to -8% below VWAP
+    VWAP_SHORT_MAX_DIST = 8.0   # Can enter SHORT up to +8% above VWAP
+    
+    # ================================================================
+    # ADX Filters (Relaxed to capture more setups)
+    # ================================================================
+    ADX_MIN_TREND = 15.0        # Lowered from 20 (accept moderate trends)
+    ADX_STRONG_TREND = 25.0
+    
+    # ================================================================
+    # ATR Filters
+    # ================================================================
+    ATR_SL_MULTIPLIER = 1.5
+    ATR_MAX_SL_MULTIPLIER = 2.5  # Cap SL at 2.5x base (prevents huge SLs)
+    
+    ATR_MAX_VOLATILITY = {
+        'crypto': 5.0,
+        'forex': 1.0,
+        'indices': 2.0,
+        'commodities': 3.0
     }
 
+    # ================================================================
+    # PERFORMANCE TARGETS (for monitoring)
+    # ================================================================
+    TARGET_DAILY_RETURN = 0.01      # +1% per day
+    TARGET_TRADES_PER_DAY = 12      # 12 trades/day
+    TARGET_WIN_RATE = 0.58          # 58% win rate
+    
+    # Expected performance per trade (with levier x5)
+    EXPECTED_WIN_NET = 0.0128       # +1.28% net per win
+    EXPECTED_LOSS_NET = -0.0140     # -1.40% net per loss
+    
+    # Breakeven win rate
+    BREAKEVEN_WIN_RATE = 0.52       # 52% needed for profitability
+
+    # ================================================================
+    # EMPIRE ASSET CONFIGURATION (unchanged)
+    # ================================================================
+    EMPIRE_ASSETS = {
+        "BTC/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Leader", "notes": "Global 24/7"},
+        "ETH/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Major Altcoin", "notes": "Global 24/7"},
+        "SOL/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "High Volatility", "notes": "Global 24/7"},
+        "AVAX/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Ecosystem Hub"},
+        "LINK/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Oracle Backbone"},
+        "ADA/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Research Based"},
+        "DOT/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "Interoperability"},
+        "POL/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "V13.8 Elite", "notes": "L2 Alpha"},
+        "XRP/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "News/Asia", "notes": "Night (Asia)"},
+        "BNB/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Binance Eco", "notes": "Global 24/7"},
+        "DOGE/USDT:USDT": {"leverage": 5, "class": "crypto", "role": "Retail Sentiment", "notes": "Random"},
+        "PAXG/USDT:USDT": {"leverage": 6, "class": "commodities", "role": "Gold Shield", "notes": "Safe Haven"},
+        "OIL/USDT:USDT": {"leverage": 5, "class": "commodities", "role": "WTI Crude", "notes": "Geopolitical"},
+        "SPX/USDT:USDT": {"leverage": 5, "class": "indices", "role": "S&P 500", "notes": "15:30 (USA)"},
+        "DAX/USDT:USDT": {"leverage": 5, "class": "indices", "role": "GER40", "notes": "09:00 (Europe)"},
+        "NDX/USDT:USDT": {"leverage": 5, "class": "indices", "role": "NASDAQ 100", "notes": "V13.8 Elite High-Growth"},
+        "EUR/USD:USDT": {"leverage": 5, "class": "forex", "role": "Major Pair", "notes": "24/7"},
+        "GBP/USD:USDT": {"leverage": 5, "class": "forex", "role": "V13.8 Elite Sterling", "notes": "Volatile Forex"},
+        "USD/JPY:USDT": {"leverage": 5, "class": "forex", "role": "V13.8 Elite Yen", "notes": "Safe Haven FX"},
+    }

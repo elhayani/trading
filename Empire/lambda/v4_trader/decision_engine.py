@@ -29,7 +29,8 @@ class DecisionEngine:
         news_score: float = 0.0,
         macro_regime: str = "NORMAL",
         btc_rsi: Optional[float] = None,
-        history_context: Optional[Dict] = None
+        history_context: Optional[Dict] = None,
+        intended_direction: Optional[str] = None
     ) -> Tuple[bool, str, float]:
         if not context.get('can_trade', True):
             return False, "MACRO_STOP", 0.0
@@ -38,21 +39,33 @@ class DecisionEngine:
         if history_context:
             logger.info(f"[HISTORY_CONTEXT] Injected {len(history_context.get('skipped', []))} skipped and {len(history_context.get('history', []))} history events for analysis.")
         
-        # 🏛️ EMPIRE V13.7: Volume Elite Filter (Volume Surge Requirement)
-        vol_ratio = ta_result.get('vol_ratio', 1.0)
-        if vol_ratio < 1.3:
-            return False, f"Low Volume Momentum (Ratio: {vol_ratio:.1f}x < 1.3x)", 0.0
+        # 🏛️ EMPIRE V15.8: Absolute 24H Volume Filter
+        volume_24h = ta_result.get('volume_24h_usdt', 0)
+        min_vol = TradingConfig.MIN_VOLUME_24H
+        
+        if volume_24h > 0 and volume_24h < min_vol:
+            logger.warning(f"⚠️ {symbol} - Low 24H Volume: ${volume_24h/1e6:.1f}M < ${min_vol/1e6:.0f}M")
+            return False, f"Low 24H Volume (${volume_24h/1e6:.1f}M < ${min_vol/1e6:.0f}M)", 0.0
         
         # 🏛️ EMPIRE V13.5: The Bedrock Matrix (BTC Unified Filter)
+        # FIX: Use intended_direction (from RSI override in v4_hybrid_lambda.py line 574) 
+        # instead of ta_result signal_type to prevent bypass when score < 60 sets signal to NEUTRAL
         if asset_class == AssetClass.CRYPTO and btc_rsi is not None and "BTC" not in symbol:
-            direction = 'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
+            direction = intended_direction if intended_direction else (
+                'SHORT' if ta_result.get('signal_type') == 'SHORT' else 'LONG'
+            )
             
-            if btc_rsi > 70:
+            # Relaxed Bedrock: Only block if BTC is truly pumping (>75) and asset is not an elite short (>80)
+            if btc_rsi > 75:
+                # If BTC is super pumped, only allow Elite Shorts (Score > 80)
                 if direction == 'SHORT':
-                    return False, f"BEDROCK_BLOCK_SHORT (BTC_RSI={btc_rsi:.1f} > 70)", 0.0
-            elif btc_rsi < 30:
+                    if ta_result.get('score', 0) < 80:
+                        return False, f"BEDROCK_BLOCK_SHORT (BTC_RSI={btc_rsi:.1f} > 75 & Score < 80)", 0.0
+            elif btc_rsi < 25:
+                # If BTC is super dumped, only allow Elite Longs
                 if direction == 'LONG':
-                    return False, f"BEDROCK_BLOCK_LONG (BTC_RSI={btc_rsi:.1f} < 30)", 0.0
+                    if ta_result.get('score', 0) < 80:
+                         return False, f"BEDROCK_BLOCK_LONG (BTC_RSI={btc_rsi:.1f} < 25 & Score < 80)", 0.0
 
         base_thresholds = {
             AssetClass.CRYPTO: TradingConfig.MIN_TECHNICAL_SCORE_CRYPTO,
@@ -101,7 +114,8 @@ class DecisionEngine:
             news_score=news_score,
             macro_regime=macro_regime,
             btc_rsi=btc_rsi,
-            history_context=history_context
+            history_context=history_context,
+            intended_direction=direction
         )
         
         if not proceed:
