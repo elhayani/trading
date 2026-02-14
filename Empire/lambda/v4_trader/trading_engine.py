@@ -582,15 +582,26 @@ class TradingEngine:
         min_amount = market_info.get('min_amount', 0)
         if quantity < min_amount: quantity = min_amount
 
-        # PAXG-specific: leverage x4 for low-volatility gold token
+        # Utiliser le levier adaptatif depuis decision engine
+        adaptive_leverage = decision.get('leverage', TradingConfig.LEVERAGE)
+        
+        # PAXG-specific: override si applicable
         is_paxg = TradingConfig.is_paxg(symbol)
-        leverage = TradingConfig.PAXG_LEVERAGE if is_paxg else TradingConfig.LEVERAGE
+        if is_paxg:
+            adaptive_leverage = TradingConfig.PAXG_LEVERAGE
+        
+        # Appliquer le levier sur Binance avant l'ordre
+        try:
+            self.exchange.set_leverage(symbol, adaptive_leverage)
+            logger.info(f"[LEVERAGE_SET] {symbol} → x{adaptive_leverage}")
+        except Exception as e:
+            logger.warning(f"[WARNING] Failed to set leverage for {symbol}: {e}")
         
         try:
-            order = self.exchange.create_market_order(symbol, side, quantity, leverage=leverage)
+            order = self.exchange.create_market_order(symbol, side, quantity, leverage=adaptive_leverage)
             real_entry = float(order.get('average', ta_result['price']))
             real_size = float(order.get('filled', quantity))
-            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {leverage}x)")
+            logger.info(f"[OK] {direction} filled: {real_size} @ ${real_entry:.2f} (Leverage: {adaptive_leverage}x)")
         except Exception as e:
             logger.error(f"[ERROR] Order failed: {e}")
             return {'symbol': symbol, 'status': 'ORDER_FAILED', 'error': str(e)}
@@ -634,13 +645,13 @@ class TradingEngine:
             reason_parts.append(f"AI={decision['confidence']*100:.0f}%")
         if 'score' in ta_result:
             reason_parts.append(f"Score={ta_result['score']}")
-        reason_parts.append(f"Lev={leverage}x")
+        reason_parts.append(f"Lev={adaptive_leverage}x")
         
         detailed_reason = " | ".join(reason_parts) if reason_parts else decision.get('reason', 'Signal detected')
         
         self.persistence.log_trade_open(
             trade_id, symbol, asset_class, direction, real_entry, real_size,
-            real_size * real_entry, tp, sl, leverage,
+            real_size * real_entry, tp, sl, adaptive_leverage,
             reason=detailed_reason
         )
         
@@ -649,6 +660,7 @@ class TradingEngine:
             'direction': direction, 'stop_loss': sl, 'take_profit': tp,
             'asset_class': asset_class,
             'risk_dollars': decision['risk_dollars'],
+            'leverage': adaptive_leverage,
             'entry_time': datetime.now(timezone.utc).isoformat()
         }
         self.persistence.save_position(symbol, pos_data)

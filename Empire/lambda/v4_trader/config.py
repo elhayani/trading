@@ -23,6 +23,7 @@ class TradingConfig:
     MAX_LOSS_PER_TRADE = 0.02
     MAX_DAILY_LOSS_PCT = 0.05
     MAX_PORTFOLIO_RISK_PCT = 0.20
+    MAX_LOSS_PER_TRADE_PCT = 2.0  # Jamais plus de 2% du capital sur un seul trade
     COMMISSION_RATE = 0.001  # 0.1% per leg
     SLIPPAGE_BUFFER = 0.001  # 0.1% slippage
     

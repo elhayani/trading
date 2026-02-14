@@ -105,7 +105,8 @@ class DecisionEngine:
             confidence=confidence,
             atr=atr,
             direction=direction,
-            compound_capital=compound_capital
+            compound_capital=compound_capital,
+            signal_score=ta_result.get('score', 60)
         )
 
         if sizing["blocked"]:
@@ -116,8 +117,7 @@ class DecisionEngine:
             "reason": "PROCEED",
             "quantity": sizing["quantity"],
             "stop_loss": stop_loss,
-            "risk_dollars": sizing["risk_dollars"],
-            "estimated_commission": sizing["estimated_commission"],
+            "risk_dollars": sizing["risk"],
             "confidence": confidence,
-            "direction": direction,
+            "leverage": sizing.get("adaptive_leverage", TradingConfig.LEVERAGE)
         }

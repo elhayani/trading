@@ -22,6 +22,22 @@ class RiskManager:
     def set_current_volume_24h(self, volume_24h: float):
         """Définir le volume 24h pour la protection liquidité"""
         self._current_volume_24h = volume_24h
+    
+    def get_adaptive_leverage(self, score: int, base_leverage: int = 5) -> int:
+        """
+        Retourne le levier adapté au score de conviction.
+        Le levier de base (config) sert de plafond.
+        """
+        if score >= 90:
+            leverage = min(7, base_leverage + 2)   # Élite → max
+        elif score >= 80:
+            leverage = base_leverage               # Fort  → standard
+        elif score >= 70:
+            leverage = max(3, base_leverage - 2)   # Bon   → réduit
+        else:
+            leverage = max(2, base_leverage - 3)   # Limit → minimal
+        
+        return leverage
 
     def calculate_position_size(
         self,
@@ -32,7 +48,8 @@ class RiskManager:
         atr: float = 0.0,
         direction: str = "LONG",
         leverage: float = None,
-        compound_capital: float = None
+        compound_capital: float = None,
+        signal_score: int = 60
     ) -> Dict[str, Union[float, bool, str]]:
         # Convert all inputs to float to prevent Decimal/float arithmetic errors
         entry_price = float(entry_price)
@@ -46,9 +63,10 @@ class RiskManager:
         else:
             capital_to_use = capital
         
-        # Force leverage to 1 for scalping safety (or use config default)
-        leverage = leverage or TradingConfig.LEVERAGE
-        logger.info(f"[SCALPING] Using leverage: {leverage}x")
+        # Appliquer le levier adaptatif selon le score
+        base_leverage = leverage or TradingConfig.LEVERAGE
+        leverage = self.get_adaptive_leverage(signal_score, base_leverage)
+        logger.info(f"[LEVERAGE] Score {signal_score} → Leverage x{leverage} (base: x{base_leverage})")
         
         if entry_price <= 0: return self._blocked("INVALID_ENTRY_PRICE", stop_loss_price)
 
@@ -87,13 +105,26 @@ class RiskManager:
 
         # 4. Safety Cap: Do not exceed MAX_LOSS_PER_TRADE
         risk_budget = capital * TradingConfig.MAX_LOSS_PER_TRADE * confidence
-        risk_quantity = risk_budget / price_risk
+        if price_risk > 0 and (margin_per_slot * leverage * price_risk) > risk_budget:
+            return self._blocked("RISK_BUDGET_EXCEEDED", stop_loss_price)
         
-        if quantity > risk_quantity:
-            logger.warning(f"[RISK] Throttling quantity from {quantity:.4f} to {risk_quantity:.4f} (Risk Cap 2%)")
-            quantity = risk_quantity
+        # 5. Garde-fou perte max par trade (2% du capital)
+        max_loss_usd = capital * (TradingConfig.MAX_LOSS_PER_TRADE_PCT / 100)
+        sl_distance_pct = abs(entry_price - stop_loss_price) / entry_price
+        max_notional = max_loss_usd / sl_distance_pct if sl_distance_pct > 0 else float('inf')
+        actual_notional = margin_per_slot * leverage
+        
+        if actual_notional > max_notional:
+            # Réduire le levier pour respecter la limite de perte max
+            new_leverage = int(max_notional / margin_per_slot)
+            new_leverage = max(1, new_leverage)
+            logger.warning(f"[RISK_CAP] Leverage reduced x{leverage} → x{new_leverage} (max loss: {max_loss_usd:.0f})")
+            leverage = new_leverage
+            # Recalculer avec le nouveau levier
+            target_notional = margin_per_slot * leverage
+            quantity = target_notional / entry_price
 
-        # 5. Portfolio cap
+        # 6. Portfolio cap
         total_risk = sum(t["risk"] for t in self.active_trades.values())
         available_risk = (capital * TradingConfig.MAX_PORTFOLIO_RISK_PCT) - total_risk
         
@@ -105,11 +136,13 @@ class RiskManager:
             current_risk = quantity * price_risk
 
         return {
-            "quantity": round(quantity, 8),
-            "risk_dollars": round(current_risk, 2),
-            "stop_loss": stop_loss_price,
-            "estimated_commission": round(quantity * entry_price * self.commission_rate * 2, 2),
-            "blocked": False, "reason": "OK", "direction": direction
+            "quantity": quantity,
+            "leverage": leverage,
+            "adaptive_leverage": leverage,  # Levier adaptatif final
+            "risk": current_risk,
+            "confidence": confidence,
+            "blocked": False,
+            "reason": "PROCEED"
         }
 
     @staticmethod
