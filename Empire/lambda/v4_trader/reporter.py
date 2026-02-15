@@ -28,7 +28,7 @@ DEFAULT_TABLES = f"{MAIN_TABLE},EmpireCryptoV4,EmpireForexHistory,EmpireIndicesH
 TABLES_TO_SCAN = os.environ.get('REPORTER_TABLES', DEFAULT_TABLES).split(',')
 RECIPIENT = os.environ.get('RECIPIENT_EMAIL', 'zelhayani@gmail.com')
 INITIAL_BUDGET = float(os.environ.get('INITIAL_BUDGET', '20000.0'))
-SES_REGION = os.environ.get('AWS_REGION', 'eu-west-3')
+SES_REGION = os.environ.get('AWS_REGION', 'ap-northeast-1')
 ses = boto3.client('ses', region_name=SES_REGION)
 
 def get_yahoo_ticker(symbol):
@@ -151,6 +151,24 @@ def get_all_trades():
         except Exception as e:
             logger.error(f"❌ Error scanning table {table_name}: {e}")
     return all_items
+
+def format_reason_text(reason):
+    """Sniper-style formatting for trade reasons (Compact & Icons)"""
+    if not reason: return ""
+    r = str(reason).upper()
+    
+    if "GHOST" in r: return "🧹 GHOST"
+    if "SYNC" in r: return "🧹 SYNC"
+    if "POSITION" in r and "RÉELLE" in r: return "🟢 ACTIVE"
+    if "TAKE_PROFIT" in r or "TP_HIT" in r or "TP" == r: return "✅ TAKE PROFIT"
+    if "STOP_LOSS" in r or "SL_HIT" in r or "SL" == r: return "🛑 STOP LOSS"
+    if "TIMEOUT" in r or "MAX_HOLD" in r: return "⏱️ TIMEOUT"
+    if "PROFIT_1PCT" in r: return "💰 TARGET HIT"
+    if "ANTI_TREND" in r: return "🛡️ RESCUE"
+    
+    # Generic cleanup
+    r = r.replace("EXIT: ", "").replace("CLOSED: ", "").replace("_", " ")
+    return r[:20]
 
 def lambda_handler(event, context):
     logger.info("📊 Generating Global Empire Report")
@@ -396,16 +414,16 @@ def lambda_handler(event, context):
                 status = ev['status']
                 tipo = ev['side']
                 
+                clean_reason = format_reason_text(ev.get('exit_reason', ''))
+
                 if status == 'OPEN':
                     event_desc = f"🟢 <b>OPEN {html.escape(tipo)}</b>"
                     row_bg = "#f0fdf4"
                 elif 'CLOSED' in status or status in ['TP', 'SL']:
-                    reason = ev['exit_reason'] or 'EXIT'
-                    event_desc = f"🔴 <b>CLOSED ({html.escape(reason)})</b>"
+                    event_desc = f"🔴 <b>CLOSED</b> <span style='color:#64748b;font-size:10px'>| {html.escape(clean_reason)}</span>"
                     row_bg = "#fef2f2"
                 elif status == 'SKIPPED':
-                    reason = ev['exit_reason'] or 'SKIPPED'
-                    event_desc = f"⚪ <i>Skipped: {html.escape(reason)}</i>"
+                    event_desc = f"⚪ <i>SKIP</i> <span style='color:#94a3b8;font-size:10px'>| {html.escape(clean_reason)}</span>"
                     row_bg = "#ffffff"
                 else:
                     event_desc = f"{html.escape(status)}"
@@ -493,14 +511,19 @@ def lambda_handler(event, context):
                     pnl_pct = 0.0
                 
                 # Format status badge
+                # Format status badge (Sniper Style)
+                reason_clean = format_reason_text(exit_reason) if exit_reason else status
+                
                 if status == 'OPEN':
-                    status_badge = '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:4px;font-size:10px;">OPEN</span>'
-                elif exit_reason == 'STOP_LOSS' or status == 'SL':
-                    status_badge = '<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-size:10px;">SL</span>'
-                elif exit_reason == 'TAKE_PROFIT' or status == 'TP':
-                    status_badge = '<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:4px;font-size:10px;">TP</span>'
+                    status_badge = '<span style="background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:4px;font-size:10px;">🟢 OPEN</span>'
+                elif exit_reason and "STOP_LOSS" in str(exit_reason) or status == 'SL':
+                    status_badge = '<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-size:10px;">🛑 SL</span>'
+                elif exit_reason and "TAKE_PROFIT" in str(exit_reason) or status == 'TP':
+                    status_badge = '<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:4px;font-size:10px;">✅ TP</span>'
                 else:
-                    status_badge = f'<span style="background:#e2e8f0;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;">{html.escape(status[:6])}</span>'
+                    # Generic (Ghost, Timeout, Sync...)
+                    text = reason_clean if reason_clean else status[:8]
+                    status_badge = f'<span style="background:#f1f5f9;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;">{html.escape(text)}</span>'
                 
                 color = '#16a34a' if pnl_eur >= 0 else '#dc2626'
                 pnl_pct_str = f'<span style="color:{color};font-weight:bold;">{pnl_pct:+.2f}%</span>'

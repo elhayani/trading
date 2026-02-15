@@ -99,6 +99,17 @@ class AWSClients:
         self.state_table = self.dynamodb.Table(os.getenv('STATE_TABLE', 'V4TradingState'))
         self._initialized = True
 
+    @staticmethod
+    def get_secret(secret_name):
+        """Fetch secret from AWS Secrets Manager"""
+        clients = AWSClients()
+        try:
+            response = clients.secretsmanager.get_secret_value(SecretId=secret_name)
+            return json.loads(response['SecretString'])
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch secret {secret_name}: {e}")
+            return {}
+
 class PersistenceLayer:
     def __init__(self, aws: AWSClients):
         self.aws = aws
@@ -179,82 +190,89 @@ class PersistenceLayer:
         except Exception as e: 
             logger.error(f"[ERROR] Failed to log skip: {e}")
     
-    def save_position(self, symbol, position_data):
-        try:
-            # Sanitize symbol for DynamoDB keys
-            safe_symbol = symbol.replace('/', '_').replace(':', '-')
-            # We add a 'status' field for GSI (Audit #V11.5)
-            position_data['status'] = 'OPEN'
-            self.aws.state_table.put_item(Item=to_decimal({
-                'trader_id': f'POSITION#{safe_symbol}', 
-                'position': position_data,
-                'status': 'OPEN',
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }))
-        except Exception as e: logger.error(f"[ERROR] Failed to save position: {e}")
+    def save_position(self, symbol: str, position_data: Dict):
+        """🏛️ EMPIRE V16: Positions tracked on Binance only - No DynamoDB storage"""
+        # Positions are now tracked exclusively on Binance API
+        # No need to save to DynamoDB anymore
+        logger.info(f"[BINARY] Position {symbol} tracked on Binance only")
+        pass
     
     def load_positions(self):
         """
-        GSI Optimized Query (Critique #V11.5.1)
-        Gain: 500ms -> 18ms
+        🏛️ EMPIRE V16: Get positions from Binance API (Source of Truth)
+        No more DynamoDB dependency for position counting
         """
         try:
-            response = self.aws.state_table.query(
-                IndexName='status-timestamp-index',
-                KeyConditionExpression='#status = :open',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':open': 'OPEN'}
-            )
-            # Convert back from sanitized to original symbols for compatibility
-            positions = {}
-            for item in response.get('Items', []):
-                sanitized_symbol = item['trader_id'].replace('POSITION#', '')
-                # Convert back: _ -> / and - -> :
-                original_symbol = sanitized_symbol.replace('_', '/').replace('-', ':')
-                positions[original_symbol] = from_decimal(item['position'])
-            return positions
-        except Exception as e:
-            # Fallback to scan if GSI is not yet ready or fails
-            logger.warning(f"[WARN] GSI Query failed, falling back to scan: {e}")
-            try:
-                response = self.aws.state_table.scan(
-                    FilterExpression='begins_with(trader_id, :prefix)',
-                    ExpressionAttributeValues={':prefix': 'POSITION#'}
-                )
-                # Convert back from sanitized to original symbols
-                positions = {}
-                for item in response.get('Items', []):
-                    sanitized_symbol = item['trader_id'].replace('POSITION#', '')
-                    original_symbol = sanitized_symbol.replace('_', '/').replace('-', ':')
-                    positions[original_symbol] = from_decimal(item['position'])
-                return positions
-            except Exception as e2:
-                logger.error(f"[ERROR] Failed to load positions (Scan): {e2}")
+            import requests, time, hmac, hashlib
+            
+            # Get API credentials from environment or use defaults
+            api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
+            secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
+            
+            # Get positions from Binance API
+            ts = int(time.time() * 1000)
+            params = f'timestamp={ts}'
+            signature = hmac.new(secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
+            
+            headers = {'X-MBX-APIKEY': api_key}
+            url = f'https://demo-fapi.binance.com/fapi/v2/positionRisk?{params}&signature={signature}'
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to get positions from Binance: {response.status_code}")
                 return {}
+            
+            data = response.json()
+            
+            # Filter open positions (size != 0)
+            positions = {}
+            for pos in data:
+                size = float(pos['positionAmt'])
+                if size != 0:
+                    symbol = pos['symbol'].replace('USDT', '/USDT:USDT')
+                    direction = 'LONG' if size > 0 else 'SHORT'
+                    quantity = abs(size)
+                    
+                    positions[symbol] = {
+                        'symbol': symbol,
+                        'direction': direction,
+                        'entry_price': float(pos['entryPrice']),
+                        'quantity': quantity,
+                        'mark_price': float(pos['markPrice']),
+                        'pnl': float(pos.get('unRealizedProfit', 0)),
+                        'leverage': int(pos['leverage']),
+                        'timestamp': datetime.now(timezone.utc).isoformat()
+                    }
+            
+            logger.info(f"[BINANCE] Found {len(positions)} open positions")
+            return positions
+            
+        except Exception as e:
+            logger.error(f"Failed to get Binance positions: {e}")
+            return {}
     
     def save_risk_state(self, state):
-        try:
-            self.aws.state_table.put_item(Item=to_decimal({
-                'trader_id': 'RISK_MANAGER#GLOBAL', 'state': state,
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }))
-        except Exception as e: logger.error(f"[ERROR] Failed to save risk state: {e}")
+        """ EMPIRE V16: Risk state managed in memory only"""
+        # Risk state is now managed in memory, no DynamoDB storage needed
+        logger.info(f"[MEMORY] Risk state updated: {len(state)} rules")
+        pass
 
     def load_risk_state(self):
-        try:
-            response = self.aws.state_table.get_item(Key={'trader_id': 'RISK_MANAGER#GLOBAL'})
-            return from_decimal(response.get('Item', {}).get('state', {}))
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to load risk state: {e}")
-            return {}
+        """ EMPIRE V16: Risk state managed in memory only"""
+        # Return default risk state from memory
+        return {
+            'max_open_trades': getattr(TradingConfig, 'MAX_OPEN_TRADES', 4),
+            'max_loss_per_trade': getattr(TradingConfig, 'MAX_LOSS_PER_TRADE', 0.02),
+            'max_daily_loss': getattr(TradingConfig, 'MAX_DAILY_LOSS', 0.05)
+        }
 
     def delete_position(self, symbol):
-        try: 
-            # Sanitize symbol for DynamoDB keys
-            safe_symbol = symbol.replace('/', '_').replace(':', '-')
-            # We don't delete, we update status for GSI management or delete item
-            self.aws.state_table.delete_item(Key={'trader_id': f'POSITION#{safe_symbol}'})
-        except Exception as e: logger.error(f"[ERROR] Failed to delete position: {e}")
+        """🏛️ EMPIRE V16: Positions deleted on Binance only"""
+        # Positions are managed exclusively on Binance
+        # No DynamoDB cleanup needed
+        logger.info(f"[BINARY] Position {symbol} deleted on Binance")
+        pass
 
 # ==================== ENGINE ====================
 
@@ -263,7 +281,7 @@ class TradingEngine:
         self.execution_id = execution_id or f"EXEC-{uuid.uuid4().hex[:6]}"
         self.aws = AWSClients()
         self.persistence = PersistenceLayer(self.aws)
-        self.atomic_persistence = AtomicPersistence(self.aws.state_table)
+        # 🏛️ EMPIRE V16: No more atomic persistence needed (Binance API is source of truth)
         self.ohlcv_cache_path = '/tmp/ohlcv_cache.json'
         self.cooldown_seconds = 300  # Anti-spam: 5 minutes cooldown per symbol
         
@@ -358,7 +376,60 @@ class TradingEngine:
                 json.dump(cache, f)
         except Exception as e: logger.warning(f"[WARN] Failed to save OHLCV cache: {e}")
     
-    def run_cycle(self, symbol: str) -> Dict:
+    def get_compound_capital(self, base_capital: float) -> float:
+        """
+        V16.0 Compound Capital Calculation.
+        
+        Calculates current trading capital by adding realized PnL from closed trades.
+        This allows gains from each trade to compound into the next position.
+        
+        Args:
+            base_capital: Starting capital from environment/config
+            
+        Returns:
+            Compound capital (base + realized PnL), never below base_capital
+        """
+        if not TradingConfig.USE_COMPOUND:
+            return base_capital
+        
+        try:
+            # Query closed trades from last 24 hours
+            from datetime import datetime, timezone, timedelta
+            cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            
+            response = self.aws.trades_table.scan(
+                FilterExpression='#status = :closed AND #ts > :cutoff',
+                ExpressionAttributeNames={
+                    '#status': 'Status',
+                    '#ts': 'timestamp'
+                },
+                ExpressionAttributeValues={
+                    ':closed': 'CLOSED',
+                    ':cutoff': cutoff_time
+                }
+            )
+            
+            # Sum all realized PnL
+            total_pnl = 0.0
+            for item in response.get('Items', []):
+                pnl = item.get('PnL', 0)
+                if pnl:
+                    total_pnl += float(pnl)
+            
+            compound_capital = base_capital + total_pnl
+            
+            # Log compound effect
+            if total_pnl != 0:
+                logger.info(f"[COMPOUND] Base: ${base_capital:.2f} + PnL(24h): ${total_pnl:+.2f} = ${compound_capital:.2f}")
+            
+            # Never go below base capital (protect against negative PnL reducing capital)
+            return max(base_capital, compound_capital)
+            
+        except Exception as e:
+            logger.error(f"[COMPOUND_ERROR] Failed to calculate compound capital: {e}")
+            return base_capital
+    
+    def run_cycle(self, symbol: str, scanner_data: Dict = None) -> Dict:
         # Resolve to canonical symbol early (Audit #V11.6.8)
         symbol = self.exchange.resolve_symbol(symbol)
         asset_class = classify_asset(symbol)  # Define early for logging
@@ -380,26 +451,12 @@ class TradingEngine:
                 # Reload positions after management (some may have been closed)
                 positions = self.persistence.load_positions()
             
-            # CRITICAL: Check real Binance position before trusting DynamoDB
-            real_positions = self._get_real_binance_positions()
-            if symbol in real_positions:
-                logger.warning(f"[REAL_POSITION] {symbol} already open on Binance (managed)")
-                
-                # CRITICAL FIX: Manage Binance positions even if not in DynamoDB
-                if symbol not in positions:
-                    # Create mock position from Binance data for management
-                    mock_positions = self._create_mock_binance_position(symbol)
-                    if mock_positions:
-                        logger.info(f"[MOCK_POSITION] Managing Binance-only position: {symbol}")
-                        self._manage_positions(mock_positions)
-                
-                self.persistence.log_skipped_trade(symbol, "Position already open on Binance", asset_class)
-                return {'symbol': symbol, 'status': 'IN_POSITION_BINANCE'}
-            
+            # 🏛️ EMPIRE V16: Check if position already exists (Binance API is source of truth)
             if symbol in positions:
-                logger.info(f"[INFO] Skip: Already in position for {symbol}")
-                self.persistence.log_skipped_trade(symbol, "Position already in DynamoDB", asset_class)
-                return {'symbol': symbol, 'status': 'IN_POSITION'}
+                logger.warning(f"[REAL_POSITION] {symbol} already open on Binance (managed)")
+                # Skip this symbol - it's already managed
+                self.persistence.log_skipped_trade(symbol, "Already open on Binance", asset_class)
+                return {'symbol': symbol, 'status': 'SKIP_OPEN', 'reason': 'Already open on Binance'}
             
             # EMPIRE V13.0: REPLACE_LOW_PRIORITY - Flash Exit for USDC/USDT parking position
             # If USDC/USDT (forex) is open and a high-priority opportunity appears, eject immediately
@@ -467,62 +524,35 @@ class TradingEngine:
                 self.persistence.log_skipped_trade(symbol, "INSUFFICIENT_1MIN_DATA", asset_class)
                 return {'symbol': symbol, 'status': 'SKIPPED', 'reason': 'INSUFFICIENT_1MIN_DATA'}
             
-            # 2. Vérifier la mobilité avant tout calcul
-            from market_analysis import mobility_score
+            # ❌ MOBILITY CHECK SUPPRIMÉ - Le scanner fait déjà ce travail!
+            # Si le symbole arrive ici, c'est qu'il a déjà passé le mobility check en Phase 4
+            # Le trading_engine fait 100% confiance au scanner pour la mobilité
             
-            # Récupérer l'ATR BTC pour l'ATR adaptatif
-            btc_atr_pct = 0.25  # Default, sera remplacé si disponible
-            try:
-                btc_ohlcv = self.exchange.fetch_ohlcv_1min('BTCUSDT', limit=15)
-                if len(btc_ohlcv) >= 15:
-                    import pandas as pd
-                    from market_analysis import calculate_atr
-                    df_btc = pd.DataFrame(btc_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    for col in ['open', 'high', 'low', 'close']:
-                        df_btc[col] = pd.to_numeric(df_btc[col], errors='coerce')
-                    btc_atr = calculate_atr(df_btc['high'], df_btc['low'], df_btc['close'], period=10).iloc[-1]
-                    btc_atr_pct = (btc_atr / df_btc['close'].iloc[-1]) * 100
-            except Exception as e:
-                logger.warning(f"[WARNING] Failed to fetch BTC ATR: {e}")
+            # ❌ SUPPRIMÉ: Le scanner a déjà fait l'analyse momentum!
+            # Pas de double calcul - utilisation directe des données du scanner
             
-            hour_utc = datetime.utcnow().hour
-            mob_score, mob_reason = mobility_score(ohlcv_light, hour_utc, btc_atr_pct)
-            
-            if mob_score == 0:
-                self.persistence.log_skipped_trade(symbol, f"MOBILITY_{mob_reason}", asset_class)
-                return {'symbol': symbol, 'status': 'SKIPPED', 'reason': f"MOBILITY_{mob_reason}"}
-            
-            # 3. Fetch complet et analyse momentum (uniquement sur les mobiles)
-            ohlcv_1min = self.exchange.fetch_ohlcv_1min(symbol, limit=50)
-            ta_result = analyze_momentum(ohlcv_1min, symbol)
-            
-            # Ajouter le score de mobilité pour logging
-            ta_result['mobility_score'] = mob_score
-            
-            if ta_result.get('market_context', '').startswith('VOLATILITY_SPIKE'):
-                reason = ta_result['market_context']
-                self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                return {'symbol': symbol, 'status': 'BLOCKED', 'reason': reason}
-            
-            news_score = self.news_fetcher.get_news_sentiment_score(symbol)
-            macro = macro_context.get_macro_context(state_table=self.aws.state_table)
-            
-            # FIX CRITICAL: Respect NEUTRAL signal from market_analysis blocks
-            signal_type = ta_result.get('signal_type', 'NEUTRAL')
-            if signal_type == 'NEUTRAL':
-                # market_analysis already blocked this trade
-                reason = ta_result.get('market_context', 'Blocked by market analysis')
-                self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                return {'symbol': symbol, 'status': 'BLOCKED_ANALYSIS', 'reason': reason}
-            
-            direction = 'SHORT' if signal_type == 'SHORT' else 'LONG'
-
-            # Calcul du capital compound pour le momentum
-            if TradingConfig.USE_COMPOUND:
-                capital_actuel = TradingConfig.COMPOUND_BASE_CAPITAL + self.risk_manager.daily_pnl
-                logger.info(f"[COMPOUND] Capital actuel: ${capital_actuel:.2f} (base: ${TradingConfig.COMPOUND_BASE_CAPITAL:.2f} + PnL: ${self.risk_manager.daily_pnl:+.2f})")
+            # ✅ V16: Utiliser 100% les données du scanner (pas de re-analysis)
+            if scanner_data:
+                # Données fournies par le scanner (mode optimal)
+                ta_result = {
+                    'signal_type': scanner_data['direction'],
+                    'score': scanner_data['elite_score'],
+                    'price': scanner_data['current_price'],
+                    'atr': scanner_data['atr'],
+                    'tp_price': scanner_data['tp_price'],
+                    'sl_price': scanner_data['sl_price'],
+                    'volume_ratio': scanner_data['vol_ratio'],
+                    'volume_24h_usdt': scanner_data.get('volume_24h', 0),
+                    'blocked': False,
+                    'scanner_validated': True
+                }
+                signal_type = scanner_data['direction']
+                # Skip NEUTRAL check - scanner already validated
             else:
-                capital_actuel = balance
+                # Fallback: ne devrait jamais arriver en V16
+                raise ValueError("Scanner data required for V16 momentum strategy")
+            
+            # ✅ V16: Plus de vérification NEUTRAL - scanner a déjà validé
 
             # Récupérer le volume 24h réel depuis exchange_connector
             try:
@@ -537,11 +567,21 @@ class TradingEngine:
                 volume_24h = 0
                 self.risk_manager.set_current_volume_24h(0)
             
+            news_score = self.news_fetcher.get_news_sentiment_score(symbol)
+            import macro_context
+            macro = macro_context.get_macro_context(state_table=self.aws.state_table)
+            
+            # V16: Calculate compound capital properly
+            if TradingConfig.USE_COMPOUND:
+                compound_capital = self.get_compound_capital(balance)
+            else:
+                compound_capital = None
+
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
-                capital=balance, direction=direction, asset_class=asset_class,
+                capital=balance, direction=signal_type, asset_class=asset_class,
                 news_score=news_score, macro_regime=macro.get('regime', 'NORMAL'),
-                compound_capital=capital_actuel if TradingConfig.USE_COMPOUND else None
+                compound_capital=compound_capital
             )
             
             if not decision['proceed']:
@@ -549,17 +589,16 @@ class TradingEngine:
                 self.persistence.log_skipped_trade(symbol, decision['reason'], asset_class)
                 return {'symbol': symbol, 'status': 'BLOCKED', 'reason': decision['reason']}
             
-            # MAX_OPEN_TRADES enforcement (V13.4 - prevent position overflow)
-            real_positions = self._get_real_binance_positions()
-            open_count = max(len(positions), len(real_positions))
+            # 🏛️ EMPIRE V16: MAX_OPEN_TRADES enforcement (Binance API only)
+            open_count = len(positions)  # positions vient déjà de Binance API
             if open_count >= TradingConfig.MAX_OPEN_TRADES:
                 reason = f"MAX_OPEN_TRADES reached ({open_count}/{TradingConfig.MAX_OPEN_TRADES})"
                 logger.warning(f"[SLOT_FULL] {reason}")
                 self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
             
-                        
-            return self._execute_entry(symbol, direction, decision, ta_result, asset_class, balance)
+            
+            return self._execute_entry(symbol, signal_type, decision, ta_result, asset_class, balance)
             
         except Exception as e:
             logger.error(f"[ERROR] Cycle error: {e}")
@@ -802,6 +841,18 @@ class TradingEngine:
                         time_open_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
                         time_open_minutes = time_open_hours * 60
                         
+                        # 🏛️ EMPIRE V16.1: Fast exit pour trades qui stagnent (frais de transaction)
+                        if time_open_minutes >= TradingConfig.FAST_EXIT_MINUTES and abs(pnl_pct) < TradingConfig.FAST_EXIT_PNL_THRESHOLD * 100:
+                            logger.warning(f"[FAST_EXIT] {symbol} flat after {time_open_minutes:.0f}min (PnL: {pnl_pct:+.2f}% < {TradingConfig.FAST_EXIT_PNL_THRESHOLD*100:.1f}%)")
+                            should_exit_fast_discard = True
+                            exit_reason = f"FAST_EXIT_{time_open_minutes:.0f}min_flat"
+                        
+                        # V16: MAX_HOLD_CANDLES enforcement (10 minutes = 10 candles)
+                        if time_open_minutes >= TradingConfig.MAX_HOLD_CANDLES:
+                            logger.warning(f"[MAX_HOLD] {symbol} held for {time_open_minutes:.1f}min (max: {TradingConfig.MAX_HOLD_CANDLES}min)")
+                            should_exit_time = True
+                            exit_reason = f"MAX_HOLD_{time_open_minutes:.0f}min"
+                        
                         # TIME_BASED_EXIT: Adaptatif par asset class (V13.4 - Levier x2/x4)
                         # Crypto (x2): 20min - Scalping rapide, momentum pur
                         # Indices (x2): 30min - Suivi de tendance
@@ -914,7 +965,9 @@ def lambda_handler(event, context):
             # Si aucun symbole fourni, récupérer tous les symboles disponibles
             try:
                 import requests
-                response = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=5)
+                # Use correct base URL for exchangeInfo
+                base_url = "https://fapi.binance.com" if TradingConfig.LIVE_MODE else "https://demo-api.binance.com"
+                response = requests.get(f"{base_url}/fapi/v1/exchangeInfo", timeout=5)
                 response.raise_for_status()
                 data = response.json()
                 

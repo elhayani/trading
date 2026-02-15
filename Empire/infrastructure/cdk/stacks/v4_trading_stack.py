@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-CDK Stack: V4 HYBRID 3-Lambda Architecture
-==========================================
-Lambda 1: Scanner/Opener (1 minute)
-Lambda 2: Quick Closer (20 seconds)
-Lambda 3: Quick Closer (40 seconds)
+CDK Stack: V16.0 MOMENTUM SCALPING ARCHITECTURE
+================================================
+High-Frequency Position Management (4 checks/minute)
+
+Timeline:
+- 00s: Scanner (scan + open positions, ~20s duration)
+- 15s: Closer #1 (TP/SL/MAX_HOLD check)
+- 30s: Closer #2 (TP/SL/MAX_HOLD check)
+- 45s: Closer #3 (TP/SL/MAX_HOLD check)
+
+Strategy: 1-minute momentum scalping with 15s check intervals
+Target: 40-70 trades/day @ 2-10min holding time
 """
 
 import os
+import json
 from aws_cdk import (
     Stack,
     Duration,
@@ -137,72 +145,93 @@ class V4TradingStack(Stack):
             "SKIPPED_TABLE": "EmpireSkippedTrades",
             "SECRET_NAME": "trading/binance",
             "EXCHANGE": "binance",
+            "TRADING_MODE": "LIVE",  # Force LIVE Trading (V16)
         }
         
         # =====================================================================
-        # Lambda 1: SCANNER / OPENER (1 minute)
+        # Lambda 1: SCANNER / OPENER (Every minute at 00s)
         # =====================================================================
         
         lambda1_scanner = lambda_.Function(
             self, "Lambda1Scanner",
-            function_name="V4_Lambda1_Scanner",
+            function_name="V16_Scanner_00s",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda1_scanner.lambda_handler",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(90),  # Extended timeout for Claude analysis
-            memory_size=1024,  # Optimized memory for Claude processing
+            timeout=Duration.seconds(90),  # Extended for 415 symbols scan
+            memory_size=1536,  # Optimized for parallel processing
             ephemeral_storage_size=Size.mebibytes(1024),
             environment={
                 **common_env,
                 "TRADING_MODE": "dry_run",
                 "CAPITAL": "1000",
-                "SYMBOLS": "",  # Empty to force dynamic loading from Binance API
-                "MAX_SYMBOLS_PER_SCAN": "100",  # Reduced for Claude analysis performance
-                "USE_CLAUDE_ANALYSIS": "true",  # Enabled for advanced sentiment analysis
-                "LOG_LEVEL": "WARNING",  # Production: reduce CloudWatch costs
-                "LAMBDA_ROLE": "SCANNER"  # Identifies role
+                "SYMBOLS": "",  # Dynamic loading from Binance
+                "MAX_SYMBOLS_PER_SCAN": "150",  # Top 150 by volume
+                "LOG_LEVEL": "WARNING",
+                "LAMBDA_ROLE": "SCANNER"
             },
             log_retention=logs.RetentionDays.ONE_WEEK
         )
         
         # =====================================================================
-        # Lambda 2: QUICK CLOSER (20 seconds)
+        # Lambda 2: CLOSER #1 (15s after scanner)
         # =====================================================================
         
-        lambda2_closer20 = lambda_.Function(
-            self, "Lambda2Closer20s",
-            function_name="V4_Lambda2_Closer20s",
+        lambda2_closer15 = lambda_.Function(
+            self, "Lambda2Closer15s",
+            function_name="V16_Closer_15s",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda2_closer.lambda_handler",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(18),  # 18s (marge 2s)
+            timeout=Duration.seconds(12),  # 12s (marge 3s)
             memory_size=256,  # Minimal - just price checks
             environment={
                 **common_env,
                 "TRADING_MODE": "dry_run",
-                "LAMBDA_ROLE": "CLOSER_20S",
-                "LOG_LEVEL": "WARNING"  # Production: reduce CloudWatch costs
+                "LAMBDA_ROLE": "CLOSER_15S",
+                "LOG_LEVEL": "WARNING"
             },
             log_retention=logs.RetentionDays.ONE_WEEK
         )
         
         # =====================================================================
-        # Lambda 3: QUICK CLOSER (40 seconds)
+        # Lambda 3: CLOSER #2 (30s after scanner)
         # =====================================================================
         
-        lambda3_closer40 = lambda_.Function(
-            self, "Lambda3Closer40s",
-            function_name="V4_Lambda3_Closer40s",
+        lambda3_closer30 = lambda_.Function(
+            self, "Lambda3Closer30s",
+            function_name="V16_Closer_30s",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="lambda2_closer.lambda_handler",  # Same handler
+            handler="lambda2_closer.lambda_handler",
             code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(18),
+            timeout=Duration.seconds(12),
             memory_size=256,
             environment={
                 **common_env,
                 "TRADING_MODE": "dry_run",
-                "LAMBDA_ROLE": "CLOSER_40S",
-                "LOG_LEVEL": "WARNING"  # Production: reduce CloudWatch costs
+                "LAMBDA_ROLE": "CLOSER_30S",
+                "LOG_LEVEL": "WARNING"
+            },
+            log_retention=logs.RetentionDays.ONE_WEEK
+        )
+        
+        # =====================================================================
+        # Lambda 4: CLOSER #3 (45s after scanner)
+        # =====================================================================
+        
+        lambda4_closer45 = lambda_.Function(
+            self, "Lambda4Closer45s",
+            function_name="V16_Closer_45s",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="lambda2_closer.lambda_handler",
+            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            timeout=Duration.seconds(12),
+            memory_size=256,
+            environment={
+                **common_env,
+                "TRADING_MODE": "dry_run",
+                "LAMBDA_ROLE": "CLOSER_45S",
+                "LOG_LEVEL": "WARNING"
             },
             log_retention=logs.RetentionDays.ONE_WEEK
         )
@@ -235,7 +264,7 @@ class V4TradingStack(Stack):
         # DynamoDB Permissions
         # =====================================================================
         
-        for lam in [lambda1_scanner, lambda2_closer20, lambda3_closer40]:
+        for lam in [lambda1_scanner, lambda2_closer15, lambda3_closer30, lambda4_closer45]:
             state_table.grant_read_write_data(lam)
             unified_trades_table.grant_read_write_data(lam)
             skipped_table.grant_read_write_data(lam)
@@ -270,111 +299,76 @@ class V4TradingStack(Stack):
         )
         
         lambda1_scanner.add_layers(dependency_layer)
-        lambda2_closer20.add_layers(dependency_layer)
-        lambda3_closer40.add_layers(dependency_layer)
-        
-        # Lambda 4: Closer 30s (nouveau pour momentum 1min)
-        lambda4_closer30 = lambda_.Function(
-            self, "Lambda4Closer30",
-            function_name="V4_Closer_30s",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="lambda2_closer.lambda_handler",
-            code=lambda_.Code.from_asset("lambda/v4_trader"),
-            timeout=Duration.seconds(30),
-            memory_size=Size.mebibytes(256),
-            environment={
-                "LAMBDA_ROLE": "CLOSER_30S",
-                "STATE_TABLE": dynamodb_table.table_name,
-                "AWS_REGION": self.region,
-                "LOG_LEVEL": "WARNING"
-            }
-        )
-        
-        lambda4_closer30.add_layers(dependency_layer)
+        lambda2_closer15.add_layers(dependency_layer)
+        lambda3_closer30.add_layers(dependency_layer)
+        lambda4_closer45.add_layers(dependency_layer)
         reporter_lambda.add_layers(dependency_layer)
         
         # =====================================================================
-        # EventBridge Schedules
+        # EventBridge Schedules - V16.0 Momentum Scalping
         # =====================================================================
         
-        # Lambda 1: Every 1 minute (scan + open)
+        # Scanner: Every minute at 00s
         scanner_rule = events.Rule(
             self, "ScannerSchedule",
-            rule_name="V4_Scanner_1min",
-            description="Scanner: Scan market + Open positions (1 min)",
+            rule_name="V16_Scanner_00s",
+            description="V16 Scanner: Scan 415 symbols + Open positions (00s every minute)",
             schedule=events.Schedule.expression("cron(* * * * ? *)"),  # Every minute
             enabled=True
         )
         scanner_rule.add_target(targets.LambdaFunction(lambda1_scanner))
         
-        # EventBridge Scheduler for precise timing (replaces blocking sleep)
-        # Create IAM role for EventBridge Scheduler
+        # EventBridge Scheduler for precise timing
         scheduler_role = iam.Role(
             self, "SchedulerRole",
             assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
-            description="Role for EventBridge Scheduler to invoke Lambda functions"
+            description="Role for EventBridge Scheduler to invoke Lambda closers"
         )
-        lambda2_closer20.grant_invoke(scheduler_role)
-        lambda3_closer40.grant_invoke(scheduler_role)
-        lambda4_closer30.grant_invoke(scheduler_role)
+        lambda2_closer15.grant_invoke(scheduler_role)
+        lambda3_closer30.grant_invoke(scheduler_role)
+        lambda4_closer45.grant_invoke(scheduler_role)
 
-        # Schedule 1: Immediate execution (0s delay)
+        # Closer #1: 15s after each minute
         scheduler.CfnSchedule(
-            self, "Closer0sSchedule",
-            name="V4_Closer_0s",
+            self, "Closer15sSchedule",
+            name="V16_Closer_15s",
+            description="V16 Closer #1: Check TP/SL/MAX_HOLD at 15s",
             schedule_expression="cron(* * * * ? *)",
             flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
             target=scheduler.CfnSchedule.TargetProperty(
-                arn=lambda2_closer20.function_arn,
+                arn=lambda2_closer15.function_arn,
                 role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 0})
-            )
-        )
-
-        # Schedule 2: 10s delay (Lambda 2)
-        scheduler.CfnSchedule(
-            self, "Closer10sSchedule",
-            name="V4_Closer_10s",
-            schedule_expression="rate(10 seconds)",
-            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
-            target=scheduler.CfnSchedule.TargetProperty(
-                arn=lambda2_closer20.function_arn,
-                role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 10}),
+                input=json.dumps({"delay_seconds": 15}),
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
             )
         )
 
-        # Schedule 3: 20s delay (Lambda 3)
-        scheduler.CfnSchedule(
-            self, "Closer20sSchedule",
-            name="V4_Closer_20s",
-            schedule_expression="rate(20 seconds)",
-            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
-                mode="FLEXIBLE",
-                maximum_window_in_minutes=1
-            ),
-            target=scheduler.CfnSchedule.TargetProperty(
-                arn=lambda3_closer40.function_arn,
-                role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 20}),
-                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
-            )
-        )
-
-        # Schedule 4: 30s delay (Lambda 4)
+        # Closer #2: 30s after each minute
         scheduler.CfnSchedule(
             self, "Closer30sSchedule",
-            name="V4_Closer_30s",
-            schedule_expression="rate(30 seconds)",
-            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
-                mode="FLEXIBLE",
-                maximum_window_in_minutes=1
-            ),
+            name="V16_Closer_30s",
+            description="V16 Closer #2: Check TP/SL/MAX_HOLD at 30s",
+            schedule_expression="cron(* * * * ? *)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
             target=scheduler.CfnSchedule.TargetProperty(
-                arn=lambda4_closer30.function_arn,
+                arn=lambda3_closer30.function_arn,
                 role_arn=scheduler_role.role_arn,
                 input=json.dumps({"delay_seconds": 30}),
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
+            )
+        )
+
+        # Closer #3: 45s after each minute
+        scheduler.CfnSchedule(
+            self, "Closer45sSchedule",
+            name="V16_Closer_45s",
+            description="V16 Closer #3: Check TP/SL/MAX_HOLD at 45s",
+            schedule_expression="cron(* * * * ? *)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=lambda4_closer45.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input=json.dumps({"delay_seconds": 45}),
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
             )
         )
@@ -394,8 +388,8 @@ class V4TradingStack(Stack):
         # =====================================================================
         
         manual_trigger = lambda_.Function(
-            self, "V4ManualTrigger",
-            function_name="V4ManualTrigger",
+            self, "V16ManualTrigger",
+            function_name="V16ManualTrigger",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="index.lambda_handler",
             code=lambda_.Code.from_inline(f"""
@@ -403,12 +397,13 @@ import json
 import boto3
 lambda_client = boto3.client('lambda')
 def lambda_handler(event, context):
-    target = event.get('target', 'scanner')  # scanner, closer20, closer40
+    target = event.get('target', 'scanner')  # scanner, closer15, closer30, closer45
     
     function_map = {{
         'scanner': '{lambda1_scanner.function_name}',
-        'closer20': '{lambda2_closer20.function_name}',
-        'closer40': '{lambda3_closer40.function_name}'
+        'closer15': '{lambda2_closer15.function_name}',
+        'closer30': '{lambda3_closer30.function_name}',
+        'closer45': '{lambda4_closer45.function_name}'
     }}
     
     function_name = function_map.get(target, '{lambda1_scanner.function_name}')
@@ -425,15 +420,17 @@ def lambda_handler(event, context):
         )
         
         lambda1_scanner.grant_invoke(manual_trigger)
-        lambda2_closer20.grant_invoke(manual_trigger)
-        lambda3_closer40.grant_invoke(manual_trigger)
+        lambda2_closer15.grant_invoke(manual_trigger)
+        lambda3_closer30.grant_invoke(manual_trigger)
+        lambda4_closer45.grant_invoke(manual_trigger)
         
         # =====================================================================
         # Outputs
         # =====================================================================
         
-        CfnOutput(self, "Lambda1ScannerArn", value=lambda1_scanner.function_arn)
-        CfnOutput(self, "Lambda2Closer20Arn", value=lambda2_closer20.function_arn)
-        CfnOutput(self, "Lambda3Closer40Arn", value=lambda3_closer40.function_arn)
-        CfnOutput(self, "StateTableName", value=state_table.table_name)
-        CfnOutput(self, "ManualTriggerArn", value=manual_trigger.function_arn)
+        CfnOutput(self, "Lambda1ScannerArn", value=lambda1_scanner.function_arn, description="V16 Scanner (00s)")
+        CfnOutput(self, "Lambda2Closer15Arn", value=lambda2_closer15.function_arn, description="V16 Closer #1 (15s)")
+        CfnOutput(self, "Lambda3Closer30Arn", value=lambda3_closer30.function_arn, description="V16 Closer #2 (30s)")
+        CfnOutput(self, "Lambda4Closer45Arn", value=lambda4_closer45.function_arn, description="V16 Closer #3 (45s)")
+        CfnOutput(self, "StateTableName", value=state_table.table_name, description="DynamoDB State Table")
+        CfnOutput(self, "ManualTriggerArn", value=manual_trigger.function_arn, description="Manual Trigger Function")

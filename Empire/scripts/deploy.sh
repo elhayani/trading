@@ -19,7 +19,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 STACK_NAME="V4TradingStack"
-REGION="eu-west-3"
+REGION="ap-northeast-1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CDK_DIR="$SCRIPT_DIR/../infrastructure/cdk"
 

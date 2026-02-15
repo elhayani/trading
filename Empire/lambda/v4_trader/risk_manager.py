@@ -23,21 +23,26 @@ class RiskManager:
         """Définir le volume 24h pour la protection liquidité"""
         self._current_volume_24h = volume_24h
     
-    def get_adaptive_leverage(self, score: int, base_leverage: int = 5) -> int:
+    def get_adaptive_leverage(self, score: int, base_leverage: int = None) -> int:
         """
-        Retourne le levier adapté au score de conviction.
-        Le levier de base (config) sert de plafond.
+        V16.0 Adaptive Leverage (independent of base config).
+        
+        Returns leverage based purely on signal score:
+        - Score 90+: x7 (Elite signals - highest conviction)
+        - Score 80+: x5 (Strong signals - standard)
+        - Score 70+: x3 (Good signals - reduced risk)
+        - Score 60+: x2 (Limit signals - minimal exposure)
+        
+        base_leverage parameter is ignored (kept for compatibility).
         """
         if score >= 90:
-            leverage = min(7, base_leverage + 2)   # Élite → max
+            return 7  # Elite
         elif score >= 80:
-            leverage = base_leverage               # Fort  → standard
+            return 5  # Strong
         elif score >= 70:
-            leverage = max(3, base_leverage - 2)   # Bon   → réduit
+            return 3  # Good
         else:
-            leverage = max(2, base_leverage - 3)   # Limit → minimal
-        
-        return leverage
+            return 2  # Limit
 
     def calculate_position_size(
         self,

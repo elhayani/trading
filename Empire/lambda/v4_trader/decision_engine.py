@@ -113,6 +113,28 @@ class DecisionEngine:
         if sizing["blocked"]:
             return {"proceed": False, "reason": f"RISK_BLOCKED_{sizing['reason']}", "quantity": 0}
 
+        # 🏛️ EMPIRE V16.1: Filtre rentabilité minimum (frais de transaction)
+        quantity = sizing["quantity"]
+        notional_value = quantity * entry_price
+        
+        # Frais round-trip = notional × 0.001 × 2 = 0.2%
+        estimated_fees = notional_value * 0.002
+        
+        # Profit minimum = frais + 1% de notional
+        min_profit_needed = estimated_fees + (notional_value * 0.01)
+        
+        # TP attendu avec ATR
+        tp_pct = atr * TradingConfig.TP_MULTIPLIER / entry_price
+        tp_pct = max(tp_pct, TradingConfig.MIN_TP_PCT)  # Minimum 1.5%
+        
+        expected_profit = (entry_price * tp_pct) * quantity
+        
+        if notional_value < TradingConfig.MIN_NOTIONAL_VALUE:
+            return {"proceed": False, "reason": f"MIN_NOTIONAL: ${notional_value:.0f} < ${TradingConfig.MIN_NOTIONAL_VALUE}", "quantity": 0}
+        
+        if expected_profit < min_profit_needed:
+            return {"proceed": False, "reason": f"MIN_PROFIT: Expected ${expected_profit:.2f} < Needed ${min_profit_needed:.2f} (fees + target)", "quantity": 0}
+
         return {
             "proceed": True,
             "reason": "PROCEED",

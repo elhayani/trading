@@ -419,7 +419,7 @@ def mobility_score(ohlcv_1min: List, hour_utc: int = None, btc_atr_pct: float = 
     
     return score, 'OK'
 
-def analyze_momentum(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
+def analyze_market(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
     """
     Momentum scanner sur bougies 1 minute.
     Signal LONG  : EMA5 croise au-dessus EMA13 + volume surge + prix en hausse
@@ -545,13 +545,13 @@ def analyze_momentum(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
             'blocked': False
         }
     
-    # 7. Calculer TP et SL
+    # 7. Calculer TP et SL (V16: ATR-based)
     if signal == 'LONG':
-        tp_price = close_current * (1 + atr_pct/100 * TradingConfig.TP_MULTIPLIER)
-        sl_price = close_current * (1 - atr_pct/100 * TradingConfig.SL_MULTIPLIER)
+        tp_price = close_current + (atr_current * TradingConfig.TP_MULTIPLIER)
+        sl_price = close_current - (atr_current * TradingConfig.SL_MULTIPLIER)
     else:  # SHORT
-        tp_price = close_current * (1 - atr_pct/100 * TradingConfig.TP_MULTIPLIER)
-        sl_price = close_current * (1 + atr_pct/100 * TradingConfig.SL_MULTIPLIER)
+        tp_price = close_current - (atr_current * TradingConfig.TP_MULTIPLIER)
+        sl_price = close_current + (atr_current * TradingConfig.SL_MULTIPLIER)
     
     # 8. Retourner le résultat
     return {

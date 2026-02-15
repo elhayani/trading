@@ -1,10 +1,11 @@
 """
-Lambda 2 & 3: QUICK CLOSER
-===========================
-Fréquence: 20s et 40s (2 lambdas avec le même code)
-Rôle: Check positions + Close si TP/SL hit
+Lambda 2: CLOSER - V16.1 Schedule Optimisé
+==========================================
+Fréquence: Toutes les 10 minutes (xx:00, xx:10, xx:20, xx:30, xx:40, xx:50)
+Rôle: Check positions + Close si TP/SL hit + Fast Exit
 NE SCAN PAS le market
 N'OUVRE JAMAIS de positions
+🏛️ EMPIRE V16.1: Optimisé pour réduire les frais de transaction
 """
 
 import json
@@ -17,6 +18,7 @@ from decimal import Decimal
 
 import boto3
 from exchange_connector import ExchangeConnector
+from atomic_persistence import AtomicPersistence  # Added missing import
 
 # Configure log level based on environment
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -35,43 +37,60 @@ def get_persistence():
     return AtomicPersistence(table)
 
 # AWS Clients (lightweight)
-dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'eu-west-3'))
-secretsmanager = boto3.client('secretsmanager', region_name=os.getenv('AWS_REGION', 'eu-west-3'))
+dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
+secretsmanager = boto3.client('secretsmanager', region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
 
 
-def load_open_positions() -> Dict:
+def get_binance_open_positions() -> Dict:
     """
-    Load OPEN positions from DynamoDB (optimized query)
-    Uses GSI status-timestamp-index for fast retrieval
+    🏛️ EMPIRE V16: Get OPEN positions directly from Binance API
+    Bypass DynamoDB - Source of truth is Binance
     """
-    table_name = os.getenv('STATE_TABLE', 'V4TradingState')
-    table = dynamodb.Table(table_name)
-    
     try:
-        response = table.query(
-            IndexName='status-timestamp-index',
-            KeyConditionExpression='#status = :open',
-            ExpressionAttributeNames={'#status': 'status'},
-            ExpressionAttributeValues={':open': 'OPEN'},
-            ScanIndexForward=False,  # Most recent first
-            Limit=20  # Max 20 concurrent positions
-        )
+        import requests, time, hmac, hashlib
         
+        # API credentials
+        api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
+        secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
+        
+        # Get positions from Binance API
+        ts = int(time.time() * 1000)
+        params = f'timestamp={ts}'
+        signature = hmac.new(secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        headers = {'X-MBX-APIKEY': api_key}
+        url = f'https://demo-fapi.binance.com/fapi/v2/positionRisk?{params}&signature={signature}'
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to get positions from Binance: {response.status_code}")
+            return {}
+        
+        data = response.json()
+        
+        # Filter open positions (size != 0)
         positions = {}
-        for item in response.get('Items', []):
-            symbol = item.get('symbol')
-            if symbol:
+        for pos in data:
+            size = float(pos['positionAmt'])
+            if size != 0:
+                symbol = pos['symbol'].replace('USDT', '/USDT:USDT')
+                direction = 'LONG' if size > 0 else 'SHORT'
+                quantity = abs(size)
+                
                 positions[symbol] = {
                     'symbol': symbol,
-                    'direction': item.get('direction'),
-                    'entry_price': float(item.get('entry_price', 0)),
-                    'quantity': float(item.get('quantity', 0)),
-                    'stop_loss': float(item.get('stop_loss', 0)),
-                    'take_profit': float(item.get('take_profit', 0)),
-                    'timestamp': item.get('timestamp'),
-                    'leverage': int(item.get('leverage', 3))
+                    'direction': direction,
+                    'entry_price': float(pos['entryPrice']),
+                    'quantity': quantity,
+                    'mark_price': float(pos['markPrice']),
+                    'pnl': float(pos.get('unRealizedProfit', 0)),
+                    'pnl_pct': 0.0,  # Percentage non disponible
+                    'leverage': int(pos['leverage']),
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 }
         
+        logger.info(f"[BINANCE] Found {len(positions)} open positions")
         return positions
         
     except Exception as e:
@@ -88,9 +107,19 @@ def check_and_close_position(
     Returns: Dict with action info or None
     """
     try:
-        # Fetch current price (ultra-fast ticker request)
-        ticker = exchange.fetch_ticker(symbol)
-        current_price = float(ticker['last'])
+        # V16: FETCH REAL PRICE FROM EXCHANGE (Ticker)
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            current_price = float(ticker['last'])
+            logger.debug(f"[PRICE] {symbol} current: ${current_price:.4f}")
+        except Exception as ticker_err:
+            logger.error(f"[ERROR] Failed to fetch ticker for {symbol}: {ticker_err}")
+            # Fallback to DynamoDB price (last known) if available
+            current_price = float(position.get('mark_price', position.get('entry_price', 0)))
+        
+        if current_price == 0:
+            logger.error(f"[ERROR] No price available for {symbol}")
+            return None
         
         entry_price = float(position['entry_price'])
         direction = position['direction']
@@ -99,22 +128,27 @@ def check_and_close_position(
         
         # TIMEOUT: Calculer l'âge de la position
         from datetime import datetime, timezone
-        entry_time = datetime.fromisoformat(position['timestamp'])
+        ts = position.get('timestamp')
+        if not ts:
+            logger.warning(f"[WARN] No timestamp for {symbol}, using now as fallback")
+            ts = datetime.now(timezone.utc).isoformat()
+        
+        entry_time = datetime.fromisoformat(ts.replace('Z', '+00:00'))
         age_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
         
-        # Si age_minutes > (TradingConfig.MAX_HOLD_CANDLES * 1) : 10 minutes max
-        if age_minutes > TradingConfig.MAX_HOLD_CANDLES:
-            logger.warning(f"⏰ TIMEOUT close for {symbol} after {age_minutes:.0f}min")
-            # Fermer la position au prix actuel (market order)
-            exit_reason = 'TIMEOUT'
+        # Max hold from config (V16 Momentum: 10 minutes)
+        max_hold = getattr(TradingConfig, 'MAX_HOLD_CANDLES', 10)
+        
+        if age_minutes >= max_hold:
+            logger.warning(f"⏰ TIMEOUT close for {symbol} after {age_minutes:.1f}min (max: {max_hold}min)")
+            exit_reason = f'TIMEOUT_{int(age_minutes)}min'
             
             try:
-                # Market order pour fermer
                 side = 'sell' if direction == 'LONG' else 'buy'
                 quantity = float(position['quantity'])
                 
                 close_result = exchange.close_position(symbol, side, quantity)
-                if close_result and close_result.get('status') == 'closed':
+                if close_result:
                     # Calculate PnL
                     if direction == 'LONG':
                         pnl_pct = ((current_price - entry_price) / entry_price) * 100
@@ -127,11 +161,12 @@ def check_and_close_position(
                     # Remove from atomic risk
                     try:
                         persistence = get_persistence()
-                        risk_dollars = (entry_price * quantity) / float(position.get('leverage', 5))
+                        leverage = float(position.get('leverage', 5))
+                        risk_dollars = (entry_price * quantity) / leverage
                         persistence.atomic_remove_risk(symbol, risk_dollars)
                         logger.info(f"🧹 {symbol} - Atomic risk removed: ${risk_dollars:.2f}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to remove atomic risk for {symbol}: {e}")
+                    except Exception as atomic_err:
+                        logger.error(f"❌ Failed to remove atomic risk for {symbol}: {atomic_err}")
                     
                     return {
                         'action': 'CLOSED',
@@ -190,12 +225,16 @@ def check_and_close_position(
             
             logger.info(f"🎯 {symbol} - {exit_reason} at ${current_price:.4f} ({pnl_pct:+.2f}%)")
             
-            # Execute close order
-            close_result = exchange.close_position(
-                symbol=symbol,
-                side='sell' if direction == 'LONG' else 'buy',
-                quantity=position['quantity']
-            )
+            # Execute close order using exchange directly (FAST)
+            try:
+                # Direct market order execution
+                if direction == 'LONG':
+                    close_result = exchange.create_market_order(symbol, 'sell', position['quantity'])
+                else:
+                    close_result = exchange.create_market_order(symbol, 'buy', position['quantity'])
+            except Exception as e:
+                logger.error(f"[ERROR] Order execution failed: {e}")
+                raise
             
             if close_result and close_result.get('status') == 'closed':
                 # Calculate risk to remove
@@ -239,13 +278,17 @@ def update_position_status(
     table = dynamodb.Table(table_name)
     
     try:
-        # Find the position item using scan (GSI doesn't support symbol query)
-        response = table.scan(
-            FilterExpression='#status = :open AND symbol = :symbol',
+        # 🏛️ EMPIRE V16: Optimize with Query instead of Scan
+        safe_symbol = symbol.replace('/', '_').replace(':', '-')
+        trader_id = f'POSITION#{safe_symbol}'
+        
+        response = table.query(
+            KeyConditionExpression='trader_id = :tid',
+            FilterExpression='#status = :open',
             ExpressionAttributeNames={'#status': 'status'},
             ExpressionAttributeValues={
                 ':open': 'OPEN',
-                ':symbol': symbol
+                ':tid': trader_id
             },
             Limit=1
         )
@@ -279,21 +322,12 @@ def update_position_status(
 
 def lambda_handler(event, context):
     """
-    Lambda 2/3 Handler: Quick Closer
-    
-    Workflow:
-    1. Load open positions from DynamoDB (GSI query)
-    2. For each position:
-       - Fetch current price (ticker only)
-       - Check if TP or SL hit
-       - Close if hit
-    3. Return summary
-    
-    NO scanning, NO opening positions
+    CLOSER LAMBDA - TP/SL/Timeout Logic
+    PURE CLOSING - NO scanning, NO opening positions
     """
     
     # Identify which lambda this is (20s or 40s)
-    lambda_role = os.getenv('LAMBDA_ROLE', 'CLOSER_UNKNOWN')
+    lambda_role = 'CLOSER_30S'  # Fixed value to avoid os import issue
     
     # ⏱️ STAGGER LOGIC (Architecture 3-Lambda)
     # EventBridge Scheduler handles the timing delay before Lambda invocation
@@ -309,32 +343,42 @@ def lambda_handler(event, context):
     logger.info("=" * 60)
     
     try:
-        # Initialize exchange connector (uses env vars directly)
+        # 🏛️ EMPIRE V16: FAST INIT - Direct credentials
+        import os
+        api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
+        secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
+        
+        # Initialize exchange connector - DEMO mode forced
         exchange = ExchangeConnector(
-            live_mode=TradingConfig.LIVE_MODE
+            api_key=api_key,
+            secret=secret,
+            live_mode=False  # Force DEMO
         )
+        
+        # Log pour debug
+        logger.info(f"[CLOSER] Exchange initialized in {'LIVE' if exchange.live_mode else 'DEMO'} mode")
         
         # Add jitter to avoid simultaneous DynamoDB reads
         import random
         jitter = random.uniform(0, 2)  # 0 to 2 seconds of jitter
         time.sleep(jitter)
         
-        # Load open positions
-        positions = load_open_positions()
+        # Load open positions from Binance API
+        open_positions = get_binance_open_positions()
         
-        if not positions:
+        if not open_positions:
             logger.info("  No open positions to check")
             return {
                 'statusCode': 200,
                 'body': json.dumps({'message': 'No open positions', 'positions_checked': 0})
             }
         
-        logger.info(f" Checking {len(positions)} open positions...")
+        logger.info(f" Checking {len(open_positions)} open positions...")
         
         # Check each position
         closed_positions = []
         
-        for symbol, position in positions.items():
+        for symbol, position in open_positions.items():
             result = check_and_close_position(exchange, symbol, position)
             
             if result:
@@ -347,7 +391,7 @@ def lambda_handler(event, context):
             'lambda': lambda_role,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'duration_seconds': round(duration, 2),
-            'positions_checked': len(positions),
+            'positions_checked': len(open_positions),
             'positions_closed': len(closed_positions),
             'closed_details': closed_positions
         }

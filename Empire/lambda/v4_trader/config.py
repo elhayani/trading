@@ -7,17 +7,38 @@ Optimized for: 1-minute momentum scalping with compound effect
 import os
 
 class TradingConfig:
-    # --- Technical Analysis ---
+    # --- V16.0 Momentum Scalping Configuration ---
+    
+    # Momentum Strategy (1-minute pure momentum)
+    LEVERAGE_BASE = 5              # Base leverage (adaptive 2-7)
+    MAX_OPEN_TRADES = 5
+    MIN_VOLUME_24H = 5_000_000     # $5M minimum
+    
+    # 🏛️ EMPIRE V16.1: Filtres anti-pertes (frais de transaction)
+    MIN_NOTIONAL_VALUE = 1000      # $1000 minimum par trade (rentabilité)
+    MIN_TP_PCT = 0.015             # TP minimum 1.5% (vs 1% avant)
+    FAST_EXIT_MINUTES = 3          # Exit rapide après 3min si flat
+    FAST_EXIT_PNL_THRESHOLD = 0.003 # 0.3% PnL max pour fast exit
+    
+    # TP/SL Dynamic (ATR-based)
+    TP_MULTIPLIER = 2.0            # TP = 2 × ATR_1min
+    SL_MULTIPLIER = 1.0            # SL = 1 × ATR_1min
+    MAX_HOLD_CANDLES = 10          # Force exit after 10 minutes
+    MAX_HOLD_MINUTES = 10          # Explicit time limit
+    FORCE_EXIT_AFTER_CANDLES = 10  # Same as MAX_HOLD_CANDLES
+    
+    # Momentum Indicators
+    EMA_FAST = 5
+    EMA_SLOW = 13
+    VOLUME_SURGE_RATIO = 1.5
+    MIN_MOMENTUM_SCORE = 60
+    MIN_ATR_PCT_1MIN = 0.25
+    
+    # Session Boost
+    SESSION_BOOST_MULTIPLIER = 2.0  # Max boost
+    
+    # Technical Analysis
     MIN_REQUIRED_CANDLES = 250
-    
-    # --- Technical Score Thresholds (Adjusted for high frequency) ---
-    MIN_TECHNICAL_SCORE_CRYPTO = 45  # Lowered for V15.7 Scalp Mode
-    MIN_TECHNICAL_SCORE_INDICES = 60
-    MIN_TECHNICAL_SCORE_FOREX = 60
-    MIN_TECHNICAL_SCORE_COMMODITIES = 60
-    
-    # Minimum 24H Volume in USDT for scalping eligibility
-    # Note: MIN_VOLUME_24H is defined below in momentum section
     
     # --- Risk Management ---
     MAX_LOSS_PER_TRADE = 0.02
@@ -28,23 +49,8 @@ class TradingConfig:
     SLIPPAGE_BUFFER = 0.001  # 0.1% slippage
     
     # ================================================================
-    # MOMENTUM SCALPING STRATEGY - 1 MINUTE PURE MOMENTUM
+    # V16.0 MOMENTUM SCALPING - 1 MINUTE PURE MOMENTUM
     # ================================================================
-    
-    LEVERAGE = 5
-    MAX_OPEN_TRADES = 3
-    MIN_VOLUME_24H = 5_000_000      # $5M minimum
-    
-    # Momentum TP/SL (basés sur ATR 1 min)
-    TP_MULTIPLIER = 2.0             # TP = 2 × ATR_1min
-    SL_MULTIPLIER = 1.0             # SL = 1 × ATR_1min
-    MAX_HOLD_CANDLES = 10           # Fermer de force après 10 bougies 1min
-    
-    # Momentum signal
-    EMA_FAST = 5                    # EMA rapide sur bougies 1min
-    EMA_SLOW = 13                   # EMA lente sur bougies 1min
-    VOLUME_SURGE_RATIO = 1.5        # Volume doit être 1.5x la moyenne des 20 dernières bougies
-    MIN_MOMENTUM_SCORE = 60         # Score minimum pour ouvrir
     
     # Compound
     USE_COMPOUND = True             # Le gain de chaque trade s'ajoute au capital
@@ -90,35 +96,23 @@ class TradingConfig:
     
     # --- Exchange Configuration ---
     LIVE_MODE = False  # Set to True for production
+    SECRET_NAME = "trading/binance"
 
     # ================================================================
-    # VWAP Filters (Relaxed for micro-cap opportunities)
+    # V16.0: Legacy parameters removed (not used in momentum strategy)
+    # - VWAP, ADX, ATR_SL_MULTIPLIER (replaced by TP/SL_MULTIPLIERS)
     # ================================================================
-    VWAP_LONG_MIN_DIST = -8.0   # Can enter LONG up to -8% below VWAP
-    VWAP_SHORT_MAX_DIST = 8.0   # Can enter SHORT up to +8% above VWAP
-    
-    # ================================================================
-    # ADX Filters (Relaxed to capture more setups)
-    # ================================================================
-    ADX_MIN_TREND = 15.0        # Lowered from 20 (accept moderate trends)
-    ADX_STRONG_TREND = 25.0
-    
-    # ================================================================
-    # ATR Filters
-    # ================================================================
-    ATR_SL_MULTIPLIER = 1.5
-    ATR_MAX_SL_MULTIPLIER = 2.5
 
     # ================================================================
-    # PERFORMANCE TARGETS (for monitoring)
+    # V16.0 MOMENTUM SCALPING TARGETS
     # ================================================================
     TARGET_DAILY_RETURN = 0.01      # +1% per day
-    TARGET_TRADES_PER_DAY = 12      # 12 trades/day
+    TARGET_TRADES_PER_DAY = 50      # 40-70 range (median)
     TARGET_WIN_RATE = 0.58          # 58% win rate
+    TARGET_AVG_HOLD_TIME = 5        # 5 minutes average
     
-    # Expected performance per trade (with levier x5)
-    EXPECTED_WIN_NET = 0.0128       # +1.28% net per win
-    EXPECTED_LOSS_NET = -0.0140     # -1.40% net per loss
+    # Legacy compatibility
+    LEVERAGE = LEVERAGE_BASE         # Alias for existing code
     
     # Breakeven win rate
     BREAKEVEN_WIN_RATE = 0.52       # 52% needed for profitability

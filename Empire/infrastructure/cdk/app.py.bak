@@ -12,10 +12,10 @@ app = cdk.App()
 V4TradingStack(
     app, "V4TradingStack",
     env=cdk.Environment(
-        account="946179054632",  # Replace with your AWS account
-        region="eu-west-3"
+        account="946179054632",
+        region="ap-northeast-1"  # Tokyo Region (Binance HFT Latency Optimized)
     ),
-    description="V4 HYBRID Live Trading System"
+    description="V16.0 Momentum Scalping System (Tokyo Optimized)"
 )
 
 app.synth()

@@ -20,6 +20,12 @@ class ExchangeConnector:
     def __init__(self, api_key: str = None, secret: str = None, live_mode: bool = False):
         global _EXCHANGE_INSTANCE, _MARKETS_CACHE
         
+        # 🆕 FORCE RESET en mode demo
+        if not live_mode:
+            _EXCHANGE_INSTANCE = None
+            _MARKETS_CACHE = None
+            logger.info("[DEMO] Forcing fresh CCXT instance for demo mode")
+        
         # Singleton pattern
         if _EXCHANGE_INSTANCE is None:
             logger.info(f"[COLD START] Initializing Binance Connector (Live={live_mode})")
@@ -28,59 +34,91 @@ class ExchangeConnector:
             api_key = api_key.strip() if api_key else os.getenv('BINANCE_API_KEY')
             secret = secret.strip() if secret else os.getenv('BINANCE_SECRET_KEY')
 
-            # Initialize CCXT
-            _EXCHANGE_INSTANCE = ccxt.binance({
+            # Configure CCXT - Use specialized USDM class for Futures
+            _EXCHANGE_INSTANCE = ccxt.binanceusdm({
                 'apiKey': api_key,
                 'secret': secret,
                 'enableRateLimit': True,
                 'options': {
-                    'defaultType': 'future',
                     'adjustForTimeDifference': True,
-                    'fetchConfig': False,
-                    'warnOnFetchAccountInfo': False
+                    'fetchConfig': False,  # Disable SAPI config calls
                 }
             })
-
-            # FORCE 2: Disable SAPI/Spot calls (Audit #V11.6.7)
-            _EXCHANGE_INSTANCE.has['fetchBalance'] = True
-            # FORCE 2: Disable SAPI/Spot metadata calls (Audit #V11.6.7)
-            _EXCHANGE_INSTANCE.has['fetchAccountStatus'] = False
-            _EXCHANGE_INSTANCE.has['fetchBalance'] = True
-            _EXCHANGE_INSTANCE.has['fetchMyTrades'] = True
-
-            if not live_mode:
-                logger.info("[INFO] Applying Elite Sniper Fix for Demo URLs (Audit #V11.6.7)")
-                
-                # Force sandbox mode first
-                _EXCHANGE_INSTANCE.set_sandbox_mode(True)
-                
-                # Elite Sniper Fix - preserve path structure, replace only domains
-                demo_domain = "demo-fapi.binance.com"
-                
-                for collection in ['test', 'api']:
-                    if collection in _EXCHANGE_INSTANCE.urls:
-                        for key in _EXCHANGE_INSTANCE.urls[collection]:
-                            if isinstance(_EXCHANGE_INSTANCE.urls[collection][key], str):
-                                url = _EXCHANGE_INSTANCE.urls[collection][key]
-                                # Replace only problematic domains, preserve exact paths
-                                url = url.replace("fapi.binance.com", demo_domain)
-                                url = url.replace("testnet.binancefuture.com", demo_domain)
-                                url = url.replace("api.binance.com", demo_domain)
-                                # Clean double prefixes
-                                url = url.replace("demo-fdemo-fapi.binance.com", demo_domain)
-                                _EXCHANGE_INSTANCE.urls[collection][key] = url
-                
-                # Disable SAPI config check
-                _EXCHANGE_INSTANCE.options['fetchConfig'] = False
             
-            logger.info("[COLD START] Pre-loading markets...")
-            _MARKETS_CACHE = _EXCHANGE_INSTANCE.load_markets()
-            logger.info(f"[OK] {len(_MARKETS_CACHE)} markets cached")
+            # Disable ALL API calls in demo mode (not available)
+            if not live_mode:
+                _EXCHANGE_INSTANCE.has['fetchBalance'] = False
+                _EXCHANGE_INSTANCE.has['fetchAccountStatus'] = False
+                _EXCHANGE_INSTANCE.has['fetchMyTrades'] = False
+                _EXCHANGE_INSTANCE.has['fetchMarkets'] = False
+                _EXCHANGE_INSTANCE.has['fetchTicker'] = True 
+                _EXCHANGE_INSTANCE.has['loadMarkets'] = False
+                # Désactiver aussi les appels internes qui causent le 404
+                _EXCHANGE_INSTANCE.has['fetchCurrencies'] = False
+                _EXCHANGE_INSTANCE.has['fetchTradingLimits'] = False
+            else:
+                _EXCHANGE_INSTANCE.has['fetchBalance'] = True
+                _EXCHANGE_INSTANCE.has['fetchAccountStatus'] = False
+                _EXCHANGE_INSTANCE.has['fetchMyTrades'] = True
+            
+            # FORCE DEMO ENDPOINTS (COMPLET)
+            # 🆕 FORCE DEMO ENDPOINTS (COMPLET)
+            if not live_mode:
+                # 🏛️ EMPIRE V16: Use explicit Demo Training endpoints
+                # Note: CCXT set_sandbox_mode is deprecated for Binance Futures
+                demo_fapi = "https://demo-fapi.binance.com"
+                
+                # IMPORTANT: Hostname must match for signature validation
+                _EXCHANGE_INSTANCE.hostname = "demo-fapi.binance.com"
+                
+                # Replace all relevant URLs in the instance
+                if hasattr(_EXCHANGE_INSTANCE, 'urls'):
+                    # FAPI endpoints (Private & Public) - All versions
+                    for v in ['fapiPublic', 'fapiPublicV2', 'fapiPublicV3', 'fapiPrivate', 'fapiPrivateV2', 'fapiPrivateV3']:
+                        if v in _EXCHANGE_INSTANCE.urls['api']:
+                            version = 'v1'
+                            if 'V2' in v: version = 'v2'
+                            elif 'V3' in v: version = 'v3'
+                            _EXCHANGE_INSTANCE.urls['api'][v] = f"{demo_fapi}/fapi/{version}"
+                    
+                    # Spot / SAPI endpoints (Redirect to demo-api)
+                    demo_api = "https://demo-api.binance.com/api"
+                    demo_sapi = "https://demo-api.binance.com/sapi"
+                    _EXCHANGE_INSTANCE.urls['api']['public'] = f"{demo_api}/v3"
+                    _EXCHANGE_INSTANCE.urls['api']['private'] = f"{demo_api}/v3"
+                    _EXCHANGE_INSTANCE.urls['api']['v1'] = f"{demo_api}/v1"
+                    _EXCHANGE_INSTANCE.urls['api']['sapi'] = f"{demo_sapi}/v1"
+                    _EXCHANGE_INSTANCE.urls['api']['sapiV2'] = f"{demo_sapi}/v2"
+                    _EXCHANGE_INSTANCE.urls['api']['sapiV3'] = f"{demo_sapi}/v3"
+                
+                    # Point SAPI to FAPI to trick CCXT into not complaining about missing sandbox URLs
+                    # even if it tries to call them
+                    _EXCHANGE_INSTANCE.urls['api']['sapi'] = f"{demo_fapi}/fapi/v1"
+                    _EXCHANGE_INSTANCE.urls['api']['sapiV2'] = f"{demo_fapi}/fapi/v1"
+                    _EXCHANGE_INSTANCE.urls['api']['sapiV3'] = f"{demo_fapi}/fapi/v1"
+                
+                # Disable selective features that trigger live SAPI
+                _EXCHANGE_INSTANCE.options['fetchConfig'] = False
+                _EXCHANGE_INSTANCE.options['warnOnFetchConfigFailure'] = False
+                
+                logger.info(f"[DEMO] Manual overrides applied for {demo_fapi}")
+            
+            # Warm cache (skip in demo mode to avoid 403 errors)
+            if not live_mode:
+                logger.info("[DEMO] Skipping market load (demo endpoints limited)")
+                _MARKETS_CACHE = {}
+            else:
+                try:
+                    _MARKETS_CACHE = _EXCHANGE_INSTANCE.load_markets()
+                    logger.info(f"[OK] Markets loaded: {len(_MARKETS_CACHE)} symbols")
+                except Exception as e:
+                    logger.warning(f"[WARN] Market load failed: {e}")
         else:
             logger.info("[WARM START] Reusing existing CCXT instance")
 
         self.exchange = _EXCHANGE_INSTANCE
         self.markets = _MARKETS_CACHE
+        self.live_mode = live_mode
 
     def _verify_testnet_mode(self, exchange):
         """Robust Testnet verification."""
@@ -216,6 +254,35 @@ class ExchangeConnector:
                         raise ValueError(f"Leverage failure: {lev_err}")
             
             logger.info(f"[INFO] Order: {side.upper()} {amount} {symbol}")
+            
+            # 🏛️ EMPIRE V16: Direct API Fallback for Demo Mode (CCXT SAPI issue)
+            if not self.live_mode:
+                try:
+                    import requests, time, hmac, hashlib
+                    base_url = "https://demo-fapi.binance.com/fapi/v1/order"
+                    ts = int(time.time() * 1000)
+                    clean_symbol = symbol.replace('/', '').split(':')[0]
+                    side_val = 'SELL' if side.lower() == 'sell' or side.lower() == 'close' else 'BUY'
+                    # Side adjustment: If side is 'close' but quantity > 0, we need to know the original side.
+                    # Standard logic: if side is 'sell', it's a SELL order.
+                    
+                    params = f"symbol={clean_symbol}&side={side_val}&type=MARKET&quantity={amount}&timestamp={ts}"
+                    if is_closing:
+                        params += "&reduceOnly=true"
+                    
+                    signature = hmac.new(self.exchange.secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
+                    headers = {'X-MBX-APIKEY': self.exchange.apiKey}
+                    
+                    logger.info(f"[DEMO] Executing direct signed order for {clean_symbol}")
+                    resp = requests.post(f"{base_url}?{params}&signature={signature}", headers=headers)
+                    
+                    if resp.status_code == 200:
+                        return resp.json()
+                    else:
+                        logger.error(f"[DEMO] Direct order failed ({resp.status_code}): {resp.text}")
+                except Exception as direct_err:
+                    logger.error(f"[DEMO] Direct fallback error: {direct_err}")
+
             return self.exchange.create_order(
                 symbol=symbol,
                 type='market',
@@ -228,13 +295,47 @@ class ExchangeConnector:
             raise
 
     def close_position(self, symbol: str, side: str, quantity: float) -> Dict:
-        """Helper to close a position without worrying about leverage"""
-        logger.info(f"[CLOSE] Attempting to close {symbol} ({side.upper()} {quantity})")
-        return self.create_market_order(symbol, side=side, amount=quantity, leverage=None)
-
+        """
+        Close position with market order - API DIRECT (no CCXT)
+        """
+        try:
+            # 🏛️ EMPIRE V16: API DIRECT pour contourner CCXT
+            import requests, time, hmac, hashlib
+            
+            # Nettoyer le symbole pour Binance
+            clean_symbol = symbol.replace('/', '').replace(':USDT', '')
+            side_val = 'SELL' if side.lower() in ['sell', 'close'] else 'BUY'
+            
+            # Timestamp et signature
+            ts = int(time.time() * 1000)
+            params = f"symbol={clean_symbol}&side={side_val}&type=MARKET&quantity={quantity}&timestamp={ts}&reduceOnly=true"
+            signature = hmac.new(self.exchange.secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
+            
+            # URL selon mode
+            if self.live_mode:
+                url = f"https://fapi.binance.com/fapi/v1/order?{params}&signature={signature}"
+            else:
+                url = f"https://demo-fapi.binance.com/fapi/v1/order?{params}&signature={signature}"
+            
+            headers = {'X-MBX-APIKEY': self.exchange.apiKey}
+            
+            logger.info(f"[DIRECT] Closing {clean_symbol} {side_val} {quantity}")
+            response = requests.post(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"✅ Position closed via API: {clean_symbol}")
+                return result
+            else:
+                logger.error(f"❌ API Order failed ({response.status_code}): {response.text}")
+                raise Exception(f"API Error: {response.text}")
+                
+        except Exception as e:
+            logger.error(f"❌ Direct API execution failed: {e}")
+            raise
 
     def create_sl_tp_orders(self, symbol: str, side: str, amount: float, stop_loss: float, take_profit: float) -> Dict:
-        """🏛️ EMPIRE V13.9: Create GTC Sniper orders (LIMIT for TP, STOP_MARKET for SL)"""
+        """ EMPIRE V13.9: Create GTC Sniper orders (LIMIT for TP, STOP_MARKET for SL)"""
         results = {}
         close_side = 'sell' if side.lower() == 'buy' else 'buy'
         
@@ -248,7 +349,7 @@ class ExchangeConnector:
                 params={
                     'stopPrice': stop_loss,
                     'reduceOnly': True,
-                    'workingType': 'MARK_PRICE' # 🏛️ Safety against wicks
+                    'workingType': 'MARK_PRICE' # EMPIRE V16: Safety against wicks
                 }
             )
             results['sl'] = sl_order
@@ -435,6 +536,7 @@ class ExchangeConnector:
         """
         Récupère les dernières `limit` bougies 1 minute pour un symbole.
         Utilise l'API Binance Futures directement via requests (plus rapide que ccxt).
+        Respecte le mode LIVE/DEMO.
         """
         import requests
         
@@ -442,8 +544,10 @@ class ExchangeConnector:
             # Convertir le symbole du format interne vers format Binance
             binance_symbol = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
             
-            # URL API Binance Futures
-            url = f"https://fapi.binance.com/fapi/v1/klines"
+            # 🏛️ EMPIRE V16: Base URL dynamique selon le mode
+            base_url = "https://fapi.binance.com" if self.live_mode else "https://demo-fapi.binance.com"
+            url = f"{base_url}/fapi/v1/klines"
+            
             params = {
                 'symbol': binance_symbol,
                 'interval': '1m',
