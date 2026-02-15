@@ -11,14 +11,14 @@ class TradingConfig:
     
     # Momentum Strategy (1-minute pure momentum)
     LEVERAGE_BASE = 5              # Base leverage (adaptive 2-7)
-    MAX_OPEN_TRADES = 5
+    MAX_OPEN_TRADES = 3
     MIN_VOLUME_24H = 5_000_000     # $5M minimum
     
     # 🏛️ EMPIRE V16.1: Filtres anti-pertes (frais de transaction)
-    MIN_NOTIONAL_VALUE = 1000      # $1000 minimum par trade (rentabilité)
-    MIN_TP_PCT = 0.015             # TP minimum 1.5% (vs 1% avant)
-    FAST_EXIT_MINUTES = 3          # Exit rapide après 3min si flat
-    FAST_EXIT_PNL_THRESHOLD = 0.003 # 0.3% PnL max pour fast exit
+    MIN_NOTIONAL_VALUE = 300      # $300 minimum par trade (Optimisé pour la balance réelle)
+    MIN_TP_PCT = 0.0025            # TP minimum 0.25% (Objectif net)
+    FAST_EXIT_MINUTES = 3          # 3 minutes (Délai de stagnation)
+    FAST_EXIT_PNL_THRESHOLD = 0.0002 # Sortie si stagnant au-dessus de +0.02% (couvre frais BNB)
     
     # TP/SL Dynamic (ATR-based)
     TP_MULTIPLIER = 2.0            # TP = 2 × ATR_1min
@@ -54,10 +54,10 @@ class TradingConfig:
     
     # Compound
     USE_COMPOUND = True             # Le gain de chaque trade s'ajoute au capital
-    COMPOUND_BASE_CAPITAL = float(os.getenv('CAPITAL', '10000'))
+    COMPOUND_BASE_CAPITAL = float(os.getenv('CAPITAL', '0')) # 0 = Utilise la balance réelle au démarrage
     
-    # Capital scaling et protection liquidité
-    MIN_ATR_PCT_1MIN = 0.25          # Rentable dès ce niveau avec $10K
+    # Capital scaling et protection liquidité (Dynamique selon balance réelle)
+    MIN_ATR_PCT_1MIN = 0.25          # Seuil de rentabilité
     MAX_NOTIONAL_PCT_OF_VOLUME = 0.005  # 0.5% max du volume 24h par trade
     
     # Session optimization

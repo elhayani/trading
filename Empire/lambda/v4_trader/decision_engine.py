@@ -120,12 +120,12 @@ class DecisionEngine:
         # Frais round-trip = notional × 0.001 × 2 = 0.2%
         estimated_fees = notional_value * 0.002
         
-        # Profit minimum = frais + 1% de notional
-        min_profit_needed = estimated_fees + (notional_value * 0.01)
+        # Profit minimum = frais + petite marge (0.05% de notional)
+        min_profit_needed = estimated_fees + (notional_value * 0.0005)
         
         # TP attendu avec ATR
         tp_pct = atr * TradingConfig.TP_MULTIPLIER / entry_price
-        tp_pct = max(tp_pct, TradingConfig.MIN_TP_PCT)  # Minimum 1.5%
+        tp_pct = max(tp_pct, TradingConfig.MIN_TP_PCT)  # Minimum 0.25% floor
         
         expected_profit = (entry_price * tp_pct) * quantity
         

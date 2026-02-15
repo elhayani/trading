@@ -525,8 +525,8 @@ def sync_ghost_trades_fast(engine) -> int:
                 # Remove from risk manager
                 engine.risk_manager.close_trade(symbol, entry_price)
                 
-                # Remove from atomic risk (CRITICAL!)
-                engine.atomic_persistence.atomic_remove_risk(symbol, risk_dollars)
+                # Risk manager cleanup already done above
+                # No more atomic_persistence needed in V16
                 
                 ghost_cleaned += 1
                 logger.info(f"🧹 Ghost {symbol} cleaned - Risk removed: ${risk_dollars:.2f}")
@@ -659,14 +659,16 @@ def lambda_handler(event, context):
     
     try:
         # ========== PHASE 1: INIT (0-1s) ==========
-        capital = float(os.getenv('CAPITAL', '1000'))
         engine = TradingEngine()
         engine.risk_manager.load_state(engine.persistence.load_risk_state())
+        
+        # Récupérer le capital réel depuis Binance
+        capital = engine.exchange.get_balance_usdt()
         
         ghost_count = sync_ghost_trades_fast(engine)
         existing_count = len(engine.persistence.load_positions())
         
-        logger.info(f"💰 Capital: ${capital:.2f} | Open: {existing_count}/{TradingConfig.MAX_OPEN_TRADES}")
+        logger.info(f"💰 Capital (Binance Real): ${capital:.2f} | Open: {existing_count}/{TradingConfig.MAX_OPEN_TRADES}")
         
         if existing_count >= TradingConfig.MAX_OPEN_TRADES:
             logger.info("� Max trades reached")
@@ -763,9 +765,14 @@ def lambda_handler(event, context):
         opened_count = 0
         skipped_count = 0
         
+        # 🚀 OPTIMIZATION V16: Fetch positions ONCE outside loop
+        all_positions = engine.persistence.load_positions()
+        current_open_count = len(all_positions)
+        logger.info(f"📊 Processing {len(top_50)} elites. Current open: {current_open_count}/{TradingConfig.MAX_OPEN_TRADES}")
+
         for symbol, score, direction in top_50:
-            current_open = len(engine.persistence.load_positions())
-            if current_open >= TradingConfig.MAX_OPEN_TRADES:
+            if current_open_count >= TradingConfig.MAX_OPEN_TRADES:
+                logger.info("🛑 Max trades reached (Local Counter)")
                 break
             
             try:
@@ -788,9 +795,15 @@ def lambda_handler(event, context):
                     true_ranges.append(tr)
                 atr = sum(true_ranges) / len(true_ranges)
                 
-                # TP/SL basés sur ATR
-                tp_price = current_price * (1.02 if direction == 'LONG' else 0.98)  # 2% TP
-                sl_price = current_price * (0.99 if direction == 'LONG' else 1.01)  # 1% SL
+                # TP/SL basés sur ATR (V16) + MIN_TP_PCT floor
+                tp_dist = max(atr * TradingConfig.TP_MULTIPLIER, current_price * TradingConfig.MIN_TP_PCT)
+                
+                if direction == 'LONG':
+                    tp_price = current_price + tp_dist
+                    sl_price = current_price - (atr * TradingConfig.SL_MULTIPLIER)
+                else:
+                    tp_price = current_price - tp_dist
+                    sl_price = current_price + (atr * TradingConfig.SL_MULTIPLIER)
                 
                 # Volume ratio
                 volumes = [c[5] for c in ohlcv]
@@ -808,11 +821,12 @@ def lambda_handler(event, context):
                     'vol_ratio': vol_ratio
                 }
                 
-                result = engine.run_cycle(symbol, scanner_data)
+                result = engine.run_cycle(symbol, scanner_data, positions=all_positions)
                 status = result.get('status', '')
                 
                 if 'OPEN' in status:
                     opened_count += 1
+                    current_open_count += 1
                     logger.info(f"✅ OPENED {symbol} (score: {score:.0f}, {direction})")
                 else:
                     skipped_count += 1

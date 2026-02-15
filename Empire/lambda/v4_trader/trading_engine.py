@@ -111,16 +111,19 @@ class AWSClients:
             return {}
 
 class PersistenceLayer:
-    def __init__(self, aws: AWSClients):
+    def __init__(self, aws: AWSClients, api_key: str = None, secret: str = None):
         self.aws = aws
+        self.api_key = api_key
+        self.secret = secret
     
     def log_trade_open(self, trade_id, symbol, asset_class, direction, entry_price, size, cost, tp_price, sl_price, leverage, reason=None):
         try:
-            timestamp = datetime.now(timezone.utc).isoformat()
+            ts_ms = int(time.time() * 1000)
+            iso_ts = datetime.now(timezone.utc).isoformat()
             item = {
-                'trader_id': trade_id,
-                'timestamp': timestamp,
-                'TradeId': trade_id,
+                'trade_id': trade_id,        # FIX: Partition Key (HASH)
+                'timestamp': ts_ms,          # FIX: RANGE Key (Number/N)
+                'trader_id': trade_id,        # Legacy compatibility
                 'Symbol': symbol,
                 'Pair': symbol,
                 'AssetClass': asset_class,
@@ -131,7 +134,7 @@ class PersistenceLayer:
                 'TakeProfit': tp_price,
                 'StopLoss': sl_price,
                 'Leverage': leverage,
-                'Timestamp': timestamp,
+                'iso_timestamp': iso_ts,
                 'Status': 'OPEN'
             }
             if reason:
@@ -143,20 +146,20 @@ class PersistenceLayer:
     
     def log_trade_close(self, trade_id, exit_price, pnl, reason):
         try:
-            # Query by partition key (trader_id = trade_id) - O(1) instead of full table scan
+            # Query by partition key (trade_id) - O(1)
             response = self.aws.trades_table.query(
-                KeyConditionExpression='trader_id = :tid',
+                KeyConditionExpression='trade_id = :tid',
                 ExpressionAttributeValues={':tid': trade_id},
                 Limit=1
             )
             
             if response.get('Items'):
                 item = response['Items'][0]
-                trader_id = item['trader_id']
-                timestamp = item['timestamp']
+                tid = item['trade_id']
+                ts = item['timestamp']
                 
                 self.aws.trades_table.update_item(
-                    Key={'trader_id': trader_id, 'timestamp': timestamp},
+                    Key={'trade_id': tid, 'timestamp': ts},
                     UpdateExpression='SET #st = :status, ExitPrice = :price, PnL = :pnl, ExitReason = :reason, ClosedAt = :closed_at',
                     ExpressionAttributeNames={'#st': 'Status'},
                     ExpressionAttributeValues=to_decimal({
@@ -173,18 +176,23 @@ class PersistenceLayer:
     def log_skipped_trade(self, symbol, reason, asset_class):
         try:
             trade_id = f"SKIP-{uuid.uuid4().hex[:8]}"
-            timestamp = datetime.now(timezone.utc).isoformat()
+            ts_ms = int(time.time() * 1000)
+            iso_ts = datetime.now(timezone.utc).isoformat()
+            
             # TTL: auto-delete after 7 days (epoch seconds)
             ttl = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+            
             self.aws.skipped_table.put_item(Item=to_decimal({
-                'trader_id': trade_id,
-                'timestamp': timestamp,
+                'trade_id': trade_id,        # FIX: Partition Key (HASH)
+                'timestamp': ts_ms,          # FIX: RANGE Key (Number/N)
+                'trader_id': trade_id,        # Legacy compatibility
                 'Symbol': symbol,
                 'Pair': symbol,
                 'AssetClass': asset_class,
                 'Status': 'SKIPPED',
                 'Reason': reason,
-                'ttl': ttl
+                'ttl': ttl,
+                'iso_timestamp': iso_ts       # ISO string for dashboard time rendering
             }))
             logger.info(f"[INFO] Logged SKIP for {symbol}: {reason}")
         except Exception as e: 
@@ -205,22 +213,30 @@ class PersistenceLayer:
         try:
             import requests, time, hmac, hashlib
             
-            # Get API credentials from environment or use defaults
-            api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
-            secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
+            # Use credentials from persistence layer or fallback to environment
+            api_key = self.api_key or os.getenv('BINANCE_API_KEY')
+            secret = self.secret or os.getenv('BINANCE_SECRET_KEY')
             
+            if not api_key or not secret:
+                logger.error("No API credentials provided for position loading")
+                return {}
+
             # Get positions from Binance API
             ts = int(time.time() * 1000)
             params = f'timestamp={ts}'
             signature = hmac.new(secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
             
             headers = {'X-MBX-APIKEY': api_key}
-            url = f'https://demo-fapi.binance.com/fapi/v2/positionRisk?{params}&signature={signature}'
+            
+            # Respect TradingConfig.LIVE_MODE
+            is_live = getattr(TradingConfig, 'LIVE_MODE', False)
+            base_url = "https://fapi.binance.com" if is_live else "https://demo-fapi.binance.com"
+            url = f'{base_url}/fapi/v2/positionRisk?{params}&signature={signature}'
             
             response = requests.get(url, headers=headers, timeout=10)
             
             if response.status_code != 200:
-                logger.error(f"Failed to get positions from Binance: {response.status_code}")
+                logger.error(f"Failed to get positions from Binance ({response.status_code}): {response.text}")
                 return {}
             
             data = response.json()
@@ -302,6 +318,10 @@ class TradingEngine:
         
         if api_key: api_key = api_key.strip()
         if secret: secret = secret.strip()
+
+        # Update persistence with real credentials early
+        self.persistence.api_key = api_key
+        self.persistence.secret = secret
 
         # Optimized Connector (Singleton/Warm)
         # Fix -2008: Clear separation between Live and Demo (Audit #V11.6.6)
@@ -393,12 +413,13 @@ class TradingEngine:
             return base_capital
         
         try:
-            # Query closed trades from last 24 hours
+            # Query closed trades from last 24 hours using index
             from datetime import datetime, timezone, timedelta
-            cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            cutoff_time = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp() * 1000)
             
-            response = self.aws.trades_table.scan(
-                FilterExpression='#status = :closed AND #ts > :cutoff',
+            response = self.aws.trades_table.query(
+                IndexName='status-timestamp-index',
+                KeyConditionExpression='#status = :closed AND #ts > :cutoff',
                 ExpressionAttributeNames={
                     '#status': 'Status',
                     '#ts': 'timestamp'
@@ -406,7 +427,9 @@ class TradingEngine:
                 ExpressionAttributeValues={
                     ':closed': 'CLOSED',
                     ':cutoff': cutoff_time
-                }
+                },
+                ScanIndexForward=False,
+                Limit=100
             )
             
             # Sum all realized PnL
@@ -429,7 +452,7 @@ class TradingEngine:
             logger.error(f"[COMPOUND_ERROR] Failed to calculate compound capital: {e}")
             return base_capital
     
-    def run_cycle(self, symbol: str, scanner_data: Dict = None) -> Dict:
+    def run_cycle(self, symbol: str, scanner_data: Dict = None, positions: Dict = None) -> Dict:
         # Resolve to canonical symbol early (Audit #V11.6.8)
         symbol = self.exchange.resolve_symbol(symbol)
         asset_class = classify_asset(symbol)  # Define early for logging
@@ -444,19 +467,27 @@ class TradingEngine:
             # 3. CAPITAL VELOCITY: Capture multiple 1% moves on same asset during trends
             # Philosophy: Don't marry a trade - force re-evaluation after each exit
             
-            # Load positions and manage them (check SL/TP/exits)
-            positions = self.persistence.load_positions()
-            if positions: 
-                self._manage_positions(positions)
-                # Reload positions after management (some may have been closed)
+            # 🏛️ EMPIRE V16: Gestion intelligente des positions (Optimisation Vitesse)
+            manage_done = False
+            if positions is None:
                 positions = self.persistence.load_positions()
+                if positions: 
+                    self._manage_positions(positions)
+                    positions = self.persistence.load_positions()
+                manage_done = True
             
-            # 🏛️ EMPIRE V16: Check if position already exists (Binance API is source of truth)
+            # Si le symbole est déjà ouvert, on le gère spécifiquement s'il n'a pas été géré plus haut
             if symbol in positions:
-                logger.warning(f"[REAL_POSITION] {symbol} already open on Binance (managed)")
-                # Skip this symbol - it's already managed
-                self.persistence.log_skipped_trade(symbol, "Already open on Binance", asset_class)
-                return {'symbol': symbol, 'status': 'SKIP_OPEN', 'reason': 'Already open on Binance'}
+                if not manage_done:
+                    # Gérer uniquement cette position pour gagner du temps
+                    self._manage_positions({symbol: positions[symbol]})
+                    # Vérification rapide si elle est toujours là
+                    if self._get_binance_position_detail(symbol):
+                        logger.warning(f"[REAL_POSITION] {symbol} already open/managed")
+                        return {'symbol': symbol, 'status': 'SKIP_OPEN', 'reason': 'Already open'}
+                    else:
+                        # Clôturée par management ! On peut ré-entrer (Nouvelle Page Blanche)
+                        del positions[symbol]
             
             # EMPIRE V13.0: REPLACE_LOW_PRIORITY - Flash Exit for USDC/USDT parking position
             # If USDC/USDT (forex) is open and a high-priority opportunity appears, eject immediately
@@ -492,7 +523,6 @@ class TradingEngine:
                             reason = f"Flash Exit for priority {symbol} (score: {quick_score}, USDC PnL: {pnl_pct:+.2f}%)"
                             self.persistence.log_trade_close(usdc_position['trade_id'], exit_price, pnl, reason)
                             self.persistence.delete_position('USDC/USDT:USDT')
-                            self.atomic_persistence.atomic_remove_risk('USDC/USDT:USDT', float(usdc_position.get('risk_dollars', 0)))
                             
                             del positions['USDC/USDT:USDT']
                             balance = self.exchange.get_balance_usdt()  # Refresh balance
@@ -554,28 +584,30 @@ class TradingEngine:
             
             # ✅ V16: Plus de vérification NEUTRAL - scanner a déjà validé
 
-            # Récupérer le volume 24h réel depuis exchange_connector
-            try:
-                ticker_stats = self.exchange.fetch_binance_ticker_stats(symbol)
-                volume_24h = ticker_stats.get('volume_24h', 0)
+            # 🚀 OPTIMIZATION: Utiliser le volume du scanner si disponible (évite 1 API call)
+            if scanner_data and scanner_data.get('volume_24h_usdt'):
+                volume_24h = scanner_data['volume_24h_usdt']
                 self.risk_manager.set_current_volume_24h(volume_24h)
-                
-                # Ajouter le volume 24h à ta_result pour logging
                 ta_result['volume_24h_usdt'] = volume_24h
-            except Exception as e:
-                logger.warning(f"[WARNING] Failed to fetch volume 24h for {symbol}: {e}")
-                volume_24h = 0
-                self.risk_manager.set_current_volume_24h(0)
+            else:
+                # Fallback API seulement si nécessaire
+                try:
+                    ticker_stats = self.exchange.fetch_binance_ticker_stats(symbol)
+                    volume_24h = ticker_stats.get('volume_24h', 0)
+                    self.risk_manager.set_current_volume_24h(volume_24h)
+                    ta_result['volume_24h_usdt'] = volume_24h
+                except:
+                    volume_24h = 0
             
-            news_score = self.news_fetcher.get_news_sentiment_score(symbol)
+            # 🚀 OPTIMIZATION V16: Disable news fetching for speed
+            # news_score = self.news_fetcher.get_news_sentiment_score(symbol) 
+            news_score = 0
+            
             import macro_context
             macro = macro_context.get_macro_context(state_table=self.aws.state_table)
             
             # V16: Calculate compound capital properly
-            if TradingConfig.USE_COMPOUND:
-                compound_capital = self.get_compound_capital(balance)
-            else:
-                compound_capital = None
+            compound_capital = self.get_compound_capital(balance) if TradingConfig.USE_COMPOUND else None
 
             decision = self.decision_engine.evaluate_with_risk(
                 context=macro, ta_result=ta_result, symbol=symbol,
@@ -596,7 +628,6 @@ class TradingEngine:
                 logger.warning(f"[SLOT_FULL] {reason}")
                 self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
-            
             
             return self._execute_entry(symbol, signal_type, decision, ta_result, asset_class, balance)
             
@@ -624,18 +655,7 @@ class TradingEngine:
         # Utiliser le levier adaptatif depuis decision engine
         adaptive_leverage = decision.get('leverage', TradingConfig.LEVERAGE)
         
-        # PAXG-specific: override si applicable
-        is_paxg = TradingConfig.is_paxg(symbol)
-        if is_paxg:
-            adaptive_leverage = TradingConfig.PAXG_LEVERAGE
-        
-        # Appliquer le levier sur Binance avant l'ordre
-        try:
-            self.exchange.set_leverage(symbol, adaptive_leverage)
-            logger.info(f"[LEVERAGE_SET] {symbol} → x{adaptive_leverage}")
-        except Exception as e:
-            logger.warning(f"[WARNING] Failed to set leverage for {symbol}: {e}")
-        
+        # 🏛️ EMPIRE V16: Levier et mode marge gérés directement par create_market_order
         try:
             order = self.exchange.create_market_order(symbol, side, quantity, leverage=adaptive_leverage)
             real_entry = float(order.get('average', ta_result['price']))
@@ -645,34 +665,41 @@ class TradingEngine:
             logger.error(f"[ERROR] Order failed: {e}")
             return {'symbol': symbol, 'status': 'ORDER_FAILED', 'error': str(e)}
         
-        success, reason = self.atomic_persistence.atomic_check_and_add_risk(
-            symbol=symbol,
-            risk_dollars=decision['risk_dollars'],
-            capital=balance,
-            entry_price=real_entry,
-            quantity=real_size,
-            direction=direction
-        )
-        
-        if not success:
-            logger.error(f"[ALERT] Atomic risk check failed: {reason}. Attempting order rollback...")
-            try:
-                rollback_side = 'sell' if direction == 'LONG' else 'buy'
-                self.exchange.create_market_order(symbol, rollback_side, real_size, leverage=leverage)
-                logger.info(f"[OK] Emergency rollback executed for {symbol}")
-            except Exception as rollback_err:
-                logger.error(f"[CRITICAL] ROLLBACK FAILED: {rollback_err}")
-            self.persistence.log_skipped_trade(symbol, reason, asset_class)
-            return {'symbol': symbol, 'status': 'BLOCKED_ATOMIC', 'reason': reason}
+        # Risk dollars calculation (simuler ce que faisait atomic_persistence)
+        risk_dollars = decision.get('risk_dollars', 0.0)
         
         # Utiliser les TP/SL de analyze_momentum
-        tp = ta_result.get('tp_price', real_entry * 1.01)  # Fallback 1% si non fourni
-        sl = ta_result.get('sl_price', real_entry * 0.99)  # Fallback -1% si non fourni
+        # 🏛️ EMPIRE V16: Recalculer TP/SL basés sur le VRAI prix d'entrée (Anti-Short-Circuit)
+        # On utilise le pourcentage calculé par le scanner (ou 0.25% par défaut)
+        tp_pct = abs(float(ta_result.get('tp_pct', TradingConfig.MIN_TP_PCT * 100))) / 100
+        tp_pct = max(tp_pct, TradingConfig.MIN_TP_PCT) 
+        sl_pct = abs(float(ta_result.get('sl_pct', TradingConfig.SL_MULTIPLIER * 1.5 * (ta_result.get('atr', 0) / real_entry * 100 if real_entry > 0 else 0.5)))) / 100
         
-        tp_pct = abs(tp - real_entry) / real_entry
-        sl_pct = abs(sl - real_entry) / real_entry
+        # Arrondi selon la précision du marché (Hardware Rules)
+        market = self.exchange.get_market_info(symbol)
+        # 🛡️ SECURITE: Utiliser tickSize si disponible, sinon fallback precision
+        tick_size = market.get('precision', {}).get('price')
         
-        logger.info(f"[MOMENTUM] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct*100:.2f}%) | SL: ${sl:.4f} ({sl_pct*100:.2f}%)")
+        def round_step(price, step):
+            if not step: return round(price, 8)
+            if step >= 1: return round(price / step) * step
+            return round(price / step) * step
+
+        if direction == 'LONG':
+            tp = round_step(real_entry * (1 + tp_pct), tick_size)
+            sl = round_step(real_entry * (1 - sl_pct), tick_size)
+        else:
+            tp = round_step(real_entry * (1 - tp_pct), tick_size)
+            sl = round_step(real_entry * (1 + sl_pct), tick_size)
+
+        # Sécurité ultime: ne jamais avoir un prix <= 0
+        tp = max(tp, 0.00000001)
+        sl = max(sl, 0.00000001)
+
+        # Logging avec pourcentages réels post-arrondi
+        tp_pct_final = abs(tp - real_entry) / real_entry
+        sl_pct_final = abs(sl - real_entry) / real_entry
+        logger.info(f"[MOMENTUM] Entry: ${real_entry:.4f} | TP: ${tp:.4f} ({tp_pct_final*100:.2f}%) | SL: ${sl:.4f} ({sl_pct_final*100:.2f}%) | TickSize: {tick_size}")
         
         # Build detailed reason with technical indicators
         reason_parts = []
@@ -708,11 +735,21 @@ class TradingEngine:
         self.risk_manager.register_trade(symbol, real_entry, real_size, decision['risk_dollars'], decision['stop_loss'], direction)
         self.persistence.save_risk_state(self.risk_manager.get_state())
         
-        # Record trade timestamp for cooldown
-        self._record_trade_timestamp(symbol)
-        
-        logger.info(f"[OK] Position opened atomically: {direction} {symbol}")
-        return {'symbol': symbol, 'status': f'{direction}_OPEN', 'trade_id': trade_id}
+        # 🏛️ EMPIRE V16: Placement immédiat des ordres GTC (Hardware Safety)
+        try:
+            self.exchange.create_sl_tp_orders(symbol, direction, real_size, sl, tp)
+            logger.info(f"[GTC] SL/TP orders placed for {symbol}")
+        except Exception as gtc_err:
+            logger.error(f"[GTC_ERROR] Failed to place SL/TP for {symbol}: {gtc_err}")
+
+        logger.info(f"[OK] Position opened and secured: {direction} {symbol}")
+        return {
+            'symbol': symbol, 
+            'status': f'{direction}_OPEN', 
+            'trade_id': trade_id,
+            'tp_price': tp,
+            'sl_price': sl
+        }
     
     def _is_in_cooldown(self, symbol: str) -> bool:
         """Check if symbol is in cooldown period (anti-spam protection)"""
@@ -939,8 +976,6 @@ class TradingEngine:
                     exit_side = 'sell' if direction == 'LONG' else 'buy'
                     exit_order = self.exchange.create_market_order(symbol, exit_side, pos['quantity'])
                     exit_price = float(exit_order.get('average', current_price))
-                    
-                    self.atomic_persistence.atomic_remove_risk(symbol, float(pos.get('risk_dollars', 0)))
                     
                     pnl = self.risk_manager.close_trade(symbol, exit_price)
                     self.persistence.save_risk_state(self.risk_manager.get_state())

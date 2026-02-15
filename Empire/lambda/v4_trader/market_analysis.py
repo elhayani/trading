@@ -131,7 +131,7 @@ def detect_volatility_spike(ohlcv: List, atr_current: float, atr_avg: float, ass
     if atr_ratio > cfg['atr']: return True, f"ATR_SPIKE_{atr_ratio:.1f}x"
     return False, "OK"
 
-def analyze_market(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = AssetClass.CRYPTO, scanner_score: int = 0, volume_24h_usdt: float = 0) -> Dict:
+def analyze_market_legacy(ohlcv: List, symbol: str = "TEST", asset_class: AssetClass = AssetClass.CRYPTO, scanner_score: int = 0, volume_24h_usdt: float = 0) -> Dict:
     if not ohlcv or len(ohlcv) < TradingConfig.MIN_REQUIRED_CANDLES:
         logger.error(f"[ERROR] INSUFFICIENT DATA for {symbol}")
         raise ValueError(f"Need {TradingConfig.MIN_REQUIRED_CANDLES} candles.")
@@ -419,7 +419,7 @@ def mobility_score(ohlcv_1min: List, hour_utc: int = None, btc_atr_pct: float = 
     
     return score, 'OK'
 
-def analyze_market(ohlcv_1min: List, symbol: str = "TEST") -> Dict:
+def analyze_market(ohlcv_1min: List, symbol: str = "TEST", asset_class: AssetClass = AssetClass.CRYPTO, **kwargs) -> Dict:
     """
     Momentum scanner sur bougies 1 minute.
     Signal LONG  : EMA5 croise au-dessus EMA13 + volume surge + prix en hausse
