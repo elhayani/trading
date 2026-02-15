@@ -199,73 +199,52 @@ class PersistenceLayer:
             logger.error(f"[ERROR] Failed to log skip: {e}")
     
     def save_position(self, symbol: str, position_data: Dict):
-        """🏛️ EMPIRE V16: Positions tracked on Binance only - No DynamoDB storage"""
-        # Positions are now tracked exclusively on Binance API
-        # No need to save to DynamoDB anymore
-        logger.info(f"[BINARY] Position {symbol} tracked on Binance only")
-        pass
+        """🏛️ EMPIRE V16.3: Positions saved to DynamoDB (Memory)"""
+        try:
+            safe_symbol = symbol.replace('/', '_').replace(':', '-')
+            trader_id = f'POSITION#{safe_symbol}'
+            
+            item = {
+                'trader_id': trader_id,
+                'symbol': symbol,
+                'status': 'OPEN',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                **position_data
+            }
+            # Handle decimals for DynamoDB
+            self.aws.state_table.put_item(Item=to_decimal(item))
+            logger.info(f"[DB] Position {symbol} saved to DynamoDB memory")
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to save position to DB: {e}")
     
     def load_positions(self):
         """
-        🏛️ EMPIRE V16: Get positions from Binance API (Source of Truth)
-        No more DynamoDB dependency for position counting
+        🏛️ EMPIRE V16.3: Load positions from DynamoDB (Memory)
+        Source of truth for bot state to reduce API spam.
         """
         try:
-            import requests, time, hmac, hashlib
+            # Query the GSI for OPEN positions
+            response = self.aws.state_table.query(
+                IndexName='status-timestamp-index',
+                KeyConditionExpression='#status = :open',
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={':open': 'OPEN'}
+            )
             
-            # Use credentials from persistence layer or fallback to environment
-            api_key = self.api_key or os.getenv('BINANCE_API_KEY')
-            secret = self.secret or os.getenv('BINANCE_SECRET_KEY')
-            
-            if not api_key or not secret:
-                logger.error("No API credentials provided for position loading")
-                return {}
-
-            # Get positions from Binance API
-            ts = int(time.time() * 1000)
-            params = f'timestamp={ts}'
-            signature = hmac.new(secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
-            
-            headers = {'X-MBX-APIKEY': api_key}
-            
-            # Respect TradingConfig.LIVE_MODE
-            is_live = getattr(TradingConfig, 'LIVE_MODE', False)
-            base_url = "https://fapi.binance.com" if is_live else "https://demo-fapi.binance.com"
-            url = f'{base_url}/fapi/v2/positionRisk?{params}&signature={signature}'
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
-                logger.error(f"Failed to get positions from Binance ({response.status_code}): {response.text}")
-                return {}
-            
-            data = response.json()
-            
-            # Filter open positions (size != 0)
+            items = response.get('Items', [])
             positions = {}
-            for pos in data:
-                size = float(pos['positionAmt'])
-                if size != 0:
-                    symbol = pos['symbol'].replace('USDT', '/USDT:USDT')
-                    direction = 'LONG' if size > 0 else 'SHORT'
-                    quantity = abs(size)
-                    
-                    positions[symbol] = {
-                        'symbol': symbol,
-                        'direction': direction,
-                        'entry_price': float(pos['entryPrice']),
-                        'quantity': quantity,
-                        'mark_price': float(pos['markPrice']),
-                        'pnl': float(pos.get('unRealizedProfit', 0)),
-                        'leverage': int(pos['leverage']),
-                        'timestamp': datetime.now(timezone.utc).isoformat()
-                    }
+            for item in items:
+                pos = from_decimal(item)
+                symbol = pos.get('symbol')
+                if symbol:
+                    positions[symbol] = pos
             
-            logger.info(f"[BINANCE] Found {len(positions)} open positions")
+            logger.debug(f"[DB] Loaded {len(positions)} positions from memory")
             return positions
             
         except Exception as e:
-            logger.error(f"Failed to get Binance positions: {e}")
+            logger.error(f"[DB_ERROR] Failed to load positions from memory: {e}")
+            # Fallback (optional) removed as per user request to avoid Binance calls
             return {}
     
     def save_risk_state(self, state):
@@ -284,11 +263,37 @@ class PersistenceLayer:
         }
 
     def delete_position(self, symbol):
-        """🏛️ EMPIRE V16: Positions deleted on Binance only"""
-        # Positions are managed exclusively on Binance
-        # No DynamoDB cleanup needed
-        logger.info(f"[BINARY] Position {symbol} deleted on Binance")
-        pass
+        """🏛️ EMPIRE V16.3: Mark position as CLOSED in DynamoDB memory"""
+        try:
+            safe_symbol = symbol.replace('/', '_').replace(':', '-')
+            trader_id = f'POSITION#{safe_symbol}'
+            
+            # Query for the open position
+            response = self.aws.state_table.query(
+                KeyConditionExpression='trader_id = :tid',
+                FilterExpression='#status = :open',
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={':tid': trader_id, ':open': 'OPEN'}
+            )
+            
+            if response.get('Items'):
+                item = response['Items'][0]
+                timestamp = item['timestamp']
+                
+                self.aws.state_table.update_item(
+                    Key={'trader_id': trader_id, 'timestamp': timestamp},
+                    UpdateExpression='SET #status = :closed, closed_at = :now',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':closed': 'CLOSED',
+                        ':now': datetime.now(timezone.utc).isoformat()
+                    }
+                )
+                logger.info(f"[DB] Position {symbol} marked as CLOSED in memory")
+            else:
+                logger.debug(f"[DB] No open position found in memory for {symbol}")
+        except Exception as e:
+            logger.error(f"[DB_ERROR] Failed to update position in memory: {e}")
 
 # ==================== ENGINE ====================
 

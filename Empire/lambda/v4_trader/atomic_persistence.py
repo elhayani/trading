@@ -25,42 +25,43 @@ class AtomicPersistence:
         
     def load_positions(self) -> Dict[str, Dict]:
         """
-        Load all open positions from DynamoDB using GSI with projection optimization.
-        Returns: {symbol: position_data}
+        🏛️ EMPIRE V16.3: Load positions from DynamoDB (Memory Memory)
+        Source of Truth shared between Scanner and Closer.
         """
         try:
-            # Query using status-timestamp-index for OPEN positions with projection
+            # Query the GSI for OPEN positions
             response = self.table.query(
                 IndexName='status-timestamp-index',
                 KeyConditionExpression='#status = :open',
                 ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':open': 'OPEN'},
-                ProjectionExpression='trader_id, symbol, entry_price, quantity, direction, stop_loss, take_profit, leverage, timestamp'
+                ExpressionAttributeValues={':open': 'OPEN'}
             )
             
             positions = {}
             for item in response.get('Items', []):
-                symbol = item['trader_id'].replace('POSITION#', '')
-                positions[symbol] = item
+                # Robust Decimal to float conversion
+                pos = self._from_decimal(item)
+                # Use 'symbol' field as key, fallback to trader_id
+                symbol = pos.get('symbol', pos.get('trader_id', '').replace('POSITION#', ''))
+                if symbol:
+                    positions[symbol] = pos
             
-            logger.info(f"✅ Loaded {len(positions)} open positions")
+            logger.info(f"✅ Loaded {len(positions)} positions from Memory (DynamoDB)")
             return positions
             
-        except ClientError as e:
-            logger.error(f"❌ Failed to load positions: {e}")
-            return {}
-        
         except Exception as e:
-            logger.warning(f"[WARN] GSI Query failed, falling back to scan: {e}")
-            try:
-                response = self.table.scan(
-                    FilterExpression='begins_with(trader_id, :prefix)',
-                    ExpressionAttributeValues={':prefix': 'POSITION#'}
-                )
-                return {item['trader_id'].replace('POSITION#', ''): item for item in response.get('Items', [])}
-            except Exception as e2:
-                logger.error(f"[ERROR] Failed to load positions (Scan): {e2}")
-                return {}
+            logger.error(f"❌ Failed to load memory positions: {e}")
+            return {}
+
+    def _from_decimal(self, obj):
+        """Recursively convert Decimal to float/int"""
+        if isinstance(obj, list):
+            return [self._from_decimal(i) for i in obj]
+        elif isinstance(obj, dict):
+            return {k: self._from_decimal(v) for k, v in obj.items()}
+        elif isinstance(obj, Decimal):
+            return float(obj) if obj % 1 > 0 else int(obj)
+        return obj
     
     def atomic_check_and_add_risk(
         self, 

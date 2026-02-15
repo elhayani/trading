@@ -41,60 +41,17 @@ dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'ap-no
 secretsmanager = boto3.client('secretsmanager', region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
 
 
-def get_binance_open_positions() -> Dict:
-    """
-    🏛️ EMPIRE V16: Get OPEN positions directly from Binance API
-    Bypass DynamoDB - Source of truth is Binance
-    """
+def get_memory_open_positions() -> Dict:
+    """🏛️ EMPIRE V16.3: Get open positions from DynamoDB memory (shared state)"""
     try:
-        import requests, time, hmac, hashlib
+        from atomic_persistence import AtomicPersistence
+        table_name = os.getenv('STATE_TABLE', 'V4TradingState')
+        table = dynamodb.Table(table_name)
+        persistence = AtomicPersistence(table)
         
-        # API credentials
-        api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
-        secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
-        
-        # Get positions from Binance API
-        ts = int(time.time() * 1000)
-        params = f'timestamp={ts}'
-        signature = hmac.new(secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
-        
-        headers = {'X-MBX-APIKEY': api_key}
-        url = f'https://demo-fapi.binance.com/fapi/v2/positionRisk?{params}&signature={signature}'
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            logger.error(f"Failed to get positions from Binance: {response.status_code}")
-            return {}
-        
-        data = response.json()
-        
-        # Filter open positions (size != 0)
-        positions = {}
-        for pos in data:
-            size = float(pos['positionAmt'])
-            if size != 0:
-                symbol = pos['symbol'].replace('USDT', '/USDT:USDT')
-                direction = 'LONG' if size > 0 else 'SHORT'
-                quantity = abs(size)
-                
-                positions[symbol] = {
-                    'symbol': symbol,
-                    'direction': direction,
-                    'entry_price': float(pos['entryPrice']),
-                    'quantity': quantity,
-                    'mark_price': float(pos['markPrice']),
-                    'pnl': float(pos.get('unRealizedProfit', 0)),
-                    'pnl_pct': 0.0,  # Percentage non disponible
-                    'leverage': int(pos['leverage']),
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                }
-        
-        logger.info(f"[BINANCE] Found {len(positions)} open positions")
-        return positions
-        
+        return persistence.load_positions()
     except Exception as e:
-        logger.error(f"Failed to load positions: {e}")
+        logger.error(f"[MEMORY_ERROR] Failed to load positions from memory: {e}")
         return {}
 
 def check_and_close_position(
@@ -342,58 +299,70 @@ def lambda_handler(event, context):
     logger.info(f"⚡ {lambda_role} Started")
     logger.info("=" * 60)
     
+    phases = {}
+    
     try:
-        # 🏛️ EMPIRE V16: FAST INIT - Direct credentials
+        # Phase 1: INIT
+        p1_start = time.time()
         import os
         api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
         secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
         
-        # Initialize exchange connector - DEMO mode forced
         exchange = ExchangeConnector(
             api_key=api_key,
             secret=secret,
-            live_mode=False  # Force DEMO
+            live_mode=False
         )
+        phases['init'] = round(time.time() - p1_start, 3)
         
-        # Log pour debug
-        logger.info(f"[CLOSER] Exchange initialized in {'LIVE' if exchange.live_mode else 'DEMO'} mode")
-        
-        # Add jitter to avoid simultaneous DynamoDB reads
-        import random
-        jitter = random.uniform(0, 2)  # 0 to 2 seconds of jitter
-        time.sleep(jitter)
-        
-        # Load open positions from Binance API
-        open_positions = get_binance_open_positions()
+        # Phase 2: LOAD POSITIONS (From Memory)
+        p2_start = time.time()
+        open_positions = get_memory_open_positions()
+        phases['load_positions'] = round(time.time() - p2_start, 3)
         
         if not open_positions:
             logger.info("  No open positions to check")
             return {
                 'statusCode': 200,
-                'body': json.dumps({'message': 'No open positions', 'positions_checked': 0})
+                'body': json.dumps({
+                    'message': 'No open positions', 
+                    'duration_seconds': round(time.time() - start_time, 2),
+                    'phases': phases
+                })
             }
         
+        # Phase 3: CHECK & CLOSE
+        p3_start = time.time()
         logger.info(f" Checking {len(open_positions)} open positions...")
-        
-        # Check each position
         closed_positions = []
         
+        # NOTE: For maximum speed with many positions, we could parallelize ticker fetching here
         for symbol, position in open_positions.items():
             result = check_and_close_position(exchange, symbol, position)
-            
             if result:
                 closed_positions.append(result)
         
-        # Response
-        duration = time.time() - start_time
+        phases['check_and_close'] = round(time.time() - p3_start, 3)
         
+        duration = time.time() - start_time
         response = {
             'lambda': lambda_role,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'duration_seconds': round(duration, 2),
+            'phases': phases,
             'positions_checked': len(open_positions),
             'positions_closed': len(closed_positions),
             'closed_details': closed_positions
+        }
+        
+        logger.info("=" * 60)
+        logger.info(f"✅ {lambda_role} Complete: {len(closed_positions)} closed")
+        logger.info(f"⏱️  Total Duration: {duration:.2f}s | Check: {phases['check_and_close']}s")
+        logger.info("=" * 60)
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps(response)
         }
         
         logger.info("=" * 60)
