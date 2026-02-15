@@ -259,22 +259,28 @@ class ExchangeConnector:
             if not self.live_mode:
                 try:
                     import requests, time, hmac, hashlib
+                    from urllib.parse import urlencode
                     base_url = "https://demo-fapi.binance.com/fapi/v1/order"
                     ts = int(time.time() * 1000)
                     clean_symbol = symbol.replace('/', '').split(':')[0]
                     side_val = 'SELL' if side.lower() == 'sell' or side.lower() == 'close' else 'BUY'
-                    # Side adjustment: If side is 'close' but quantity > 0, we need to know the original side.
-                    # Standard logic: if side is 'sell', it's a SELL order.
                     
-                    params = f"symbol={clean_symbol}&side={side_val}&type=MARKET&quantity={amount}&timestamp={ts}"
+                    params = {
+                        'symbol': clean_symbol,
+                        'side': side_val,
+                        'type': 'MARKET',
+                        'quantity': amount,
+                        'timestamp': ts
+                    }
                     if is_closing:
-                        params += "&reduceOnly=true"
+                        params['reduceOnly'] = 'true'
                     
-                    signature = hmac.new(self.exchange.secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
+                    query_string = urlencode(params)
+                    signature = hmac.new(self.exchange.secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
                     headers = {'X-MBX-APIKEY': self.exchange.apiKey}
                     
                     logger.info(f"[DEMO] Executing direct signed order for {clean_symbol}")
-                    resp = requests.post(f"{base_url}?{params}&signature={signature}", headers=headers)
+                    resp = requests.post(f"{base_url}?{query_string}&signature={signature}", headers=headers)
                     
                     if resp.status_code == 200:
                         return resp.json()
@@ -294,13 +300,14 @@ class ExchangeConnector:
             logger.error(f"[ERROR] Order execution failed: {e}")
             raise
 
-    def close_position(self, symbol: str, side: str, quantity: float) -> Dict:
+    def close_position(self, symbol: str, side: str, quantity: float, position_side: Optional[str] = None) -> Dict:
         """
         Close position with market order - API DIRECT (no CCXT)
         """
         try:
             # 🏛️ EMPIRE V16: API DIRECT pour contourner CCXT
             import requests, time, hmac, hashlib
+            from urllib.parse import urlencode
             
             # Nettoyer le symbole pour Binance
             clean_symbol = symbol.replace('/', '').replace(':USDT', '')
@@ -308,14 +315,28 @@ class ExchangeConnector:
             
             # Timestamp et signature
             ts = int(time.time() * 1000)
-            params = f"symbol={clean_symbol}&side={side_val}&type=MARKET&quantity={quantity}&timestamp={ts}&reduceOnly=true"
-            signature = hmac.new(self.exchange.secret.encode('utf-8'), params.encode('utf-8'), hashlib.sha256).hexdigest()
+            params = {
+                'symbol': clean_symbol,
+                'side': side_val,
+                'type': 'MARKET',
+                'quantity': quantity,
+                'timestamp': ts,
+                'reduceOnly': 'true'
+            }
+
+            if position_side:
+                ps = str(position_side).upper()
+                if ps in ("LONG", "SHORT"):
+                    params['positionSide'] = ps
+            
+            query_string = urlencode(params)
+            signature = hmac.new(self.exchange.secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
             
             # URL selon mode
             if self.live_mode:
-                url = f"https://fapi.binance.com/fapi/v1/order?{params}&signature={signature}"
+                url = f"https://fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
             else:
-                url = f"https://demo-fapi.binance.com/fapi/v1/order?{params}&signature={signature}"
+                url = f"https://demo-fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
             
             headers = {'X-MBX-APIKEY': self.exchange.apiKey}
             

@@ -8,6 +8,7 @@ from typing import Dict, Tuple
 from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Attr
 
 logger = logging.getLogger(__name__)
 
@@ -28,30 +29,63 @@ class AtomicPersistence:
         🏛️ EMPIRE V16.3: Load positions from DynamoDB (Memory Memory)
         Source of Truth shared between Scanner and Closer.
         """
+        positions = {}
         try:
             # Query the GSI for OPEN positions
-            response = self.table.query(
-                IndexName='status-timestamp-index',
-                KeyConditionExpression='#status = :open',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':open': 'OPEN'}
-            )
+            query_params = {
+                'IndexName': 'status-timestamp-index',
+                'KeyConditionExpression': '#status = :open',
+                'ExpressionAttributeNames': {'#status': 'status'},
+                'ExpressionAttributeValues': {':open': 'OPEN'}
+            }
             
-            positions = {}
-            for item in response.get('Items', []):
-                # Robust Decimal to float conversion
-                pos = self._from_decimal(item)
-                # Use 'symbol' field as key, fallback to trader_id
-                symbol = pos.get('symbol', pos.get('trader_id', '').replace('POSITION#', ''))
-                if symbol:
-                    positions[symbol] = pos
+            while True:
+                response = self.table.query(**query_params)
+                for item in response.get('Items', []):
+                    pos = self._from_decimal(item)
+                    symbol = pos.get('symbol', pos.get('trader_id', '').replace('POSITION#', ''))
+                    if symbol:
+                        positions[symbol] = pos
+                
+                if 'LastEvaluatedKey' in response:
+                    query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                else:
+                    break
             
             logger.info(f"✅ Loaded {len(positions)} positions from Memory (DynamoDB)")
             return positions
             
         except Exception as e:
-            logger.error(f"❌ Failed to load memory positions: {e}")
-            return {}
+            # Fallback: some deployments might not have the GSI on the state table
+            try:
+                logger.warning(f"⚠️ GSI Query failed, falling back to SCAN: {e}")
+                scan_params = {
+                    'FilterExpression': Attr('status').eq('OPEN')
+                }
+                
+                while True:
+                    response = self.table.scan(**scan_params)
+                    for item in response.get('Items', []):
+                        pos = self._from_decimal(item)
+                        symbol = pos.get('symbol', pos.get('trader_id', '').replace('POSITION#', ''))
+                        if symbol:
+                            positions[symbol] = pos
+                    
+                    if 'LastEvaluatedKey' in response:
+                        scan_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                    else:
+                        break
+
+                logger.info(f"✅ Loaded {len(positions)} positions from Memory (DynamoDB) [SCAN_FALLBACK]")
+                return positions
+            except Exception as scan_err:
+                logger.error(f"❌ Failed to load memory positions: {e}")
+                logger.error(f"❌ Fallback scan failed to load memory positions: {scan_err}")
+                return {}
+            except Exception as scan_err:
+                logger.error(f"❌ Failed to load memory positions: {e}")
+                logger.error(f"❌ Fallback scan failed to load memory positions: {scan_err}")
+                return {}
 
     def _from_decimal(self, obj):
         """Recursively convert Decimal to float/int"""
@@ -151,14 +185,15 @@ class AtomicPersistence:
             self.table.update_item(
                 Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
                 UpdateExpression='''
-                    SET total_risk = total_risk - :risk 
+                    SET total_risk = if_not_exists(total_risk, :zero) - :risk
                     REMOVE active_trades.#sym
                 ''',
                 ExpressionAttributeNames={
-                    '#sym': safe_symbol  # Use sanitized symbol for DynamoDB key
+                    '#sym': safe_symbol
                 },
                 ExpressionAttributeValues={
-                    ':risk': Decimal(str(risk_dollars))
+                    ':risk': Decimal(str(risk_dollars)),
+                    ':zero': Decimal('0'),
                 },
             )
             logger.info(f"[OK] Atomic risk removed: {symbol} ${risk_dollars:.2f}")

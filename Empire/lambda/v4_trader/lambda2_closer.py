@@ -12,6 +12,7 @@ import json
 import os
 import time
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
@@ -19,6 +20,10 @@ from decimal import Decimal
 import boto3
 from exchange_connector import ExchangeConnector
 from atomic_persistence import AtomicPersistence  # Added missing import
+from websocket_manager import BinanceWebSocketManager
+import requests
+import hmac
+import hashlib
 
 # Configure log level based on environment
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -73,6 +78,237 @@ def load_binance_credentials() -> Dict[str, str]:
     return {'api_key': api_key, 'secret_key': secret_key}
 
 
+def _to_binance_symbol(symbol: str) -> str:
+    # CCXT futures symbols often look like BTC/USDT:USDT
+    s = symbol.replace(':USDT', '').replace(':BUSD', '')
+    s = s.replace('/', '')
+    return s
+
+
+async def _fetch_mark_prices_snapshot(demo_mode: bool, timeout_s: float = 1.25) -> Dict[str, float]:
+    try:
+        import websockets
+    except Exception as e:
+        logger.warning(f"[WS] websockets import failed: {e}")
+        return {}
+
+    base_ws = "wss://stream.binancefuture.com/ws" if demo_mode else "wss://fstream.binance.com/ws"
+    url = f"{base_ws}/!markPrice@arr@1s"
+
+    try:
+        async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+            raw = await asyncio.wait_for(ws.recv(), timeout=timeout_s)
+            msg = json.loads(raw)
+
+            data = msg.get('data') if isinstance(msg, dict) else None
+            if data is None and isinstance(msg, list):
+                data = msg
+            if not isinstance(data, list):
+                return {}
+
+            prices = {}
+            for item in data:
+                try:
+                    sym = item.get('s')
+                    price = float(item.get('p'))
+                    if sym and price:
+                        prices[sym] = price
+                except Exception:
+                    continue
+            return prices
+    except Exception as e:
+        logger.warning(f"[WS] markPrice snapshot failed: {e}")
+        return {}
+
+
+def _get_live_position_amt(exchange: ExchangeConnector, symbol: str) -> Optional[float]:
+    try:
+        ccxt_symbol = exchange.resolve_symbol(symbol)
+        live_positions = exchange.fetch_positions([ccxt_symbol])
+        for p in live_positions or []:
+            if p.get('symbol') != ccxt_symbol:
+                continue
+            info = p.get('info') or {}
+
+            # Binance futures: info.positionAmt is signed (LONG > 0, SHORT < 0)
+            position_amt = info.get('positionAmt')
+            if position_amt is not None:
+                return float(position_amt)
+
+            # CCXT normalized fields may be unsigned; use only as fallback
+            contracts = p.get('contracts')
+            if contracts is not None:
+                try:
+                    contracts_f = float(contracts)
+                    side = (p.get('side') or info.get('positionSide') or '').upper()
+                    if side == 'SHORT':
+                        return -abs(contracts_f)
+                    if side == 'LONG':
+                        return abs(contracts_f)
+                    return contracts_f
+                except Exception:
+                    pass
+    except Exception:
+        return None
+
+
+def _signed_binance_get(exchange: ExchangeConnector, path: str, params: Dict[str, str]) -> Dict:
+    from urllib.parse import urlencode
+    base_url = "https://fapi.binance.com" if exchange.live_mode else "https://demo-fapi.binance.com"
+    ts = str(int(time.time() * 1000))
+    qp = {**params, 'timestamp': ts}
+    
+    # Sort keys for consistency and encode
+    query_string = urlencode(sorted(qp.items()))
+    signature = hmac.new(exchange.exchange.secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+    
+    url = f"{base_url}{path}?{query_string}&signature={signature}"
+    headers = {'X-MBX-APIKEY': exchange.exchange.apiKey}
+    resp = requests.get(url, headers=headers, timeout=5)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Binance GET failed ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
+def _get_position_risk(exchange: ExchangeConnector, symbol: str) -> Optional[Dict]:
+    try:
+        clean_symbol = symbol.replace('/', '').replace(':USDT', '')
+        data = _signed_binance_get(exchange, '/fapi/v2/positionRisk', {'symbol': clean_symbol})
+        # Response can be list
+        if isinstance(data, list) and data:
+            return data[0]
+        if isinstance(data, dict):
+            return data
+    except Exception as e:
+        logger.warning(f"[RISK] Failed to fetch positionRisk for {symbol}: {e}")
+        return None
+    return None
+
+
+def _get_live_position_side(exchange: ExchangeConnector, symbol: str) -> Optional[str]:
+    try:
+        ccxt_symbol = exchange.resolve_symbol(symbol)
+        live_positions = exchange.fetch_positions([ccxt_symbol])
+        for p in live_positions or []:
+            if p.get('symbol') != ccxt_symbol:
+                continue
+            info = p.get('info') or {}
+            ps = info.get('positionSide')
+            if ps:
+                ps = str(ps).upper()
+                if ps in ('LONG', 'SHORT'):
+                    return ps
+    except Exception:
+        return None
+    return None
+
+
+def cleanup_ghost_position(symbol: str, position: Dict) -> bool:
+    try:
+        safe_symbol = symbol.replace('/', '_').replace(':', '-')
+        trader_id = f'POSITION#{safe_symbol}'
+
+        table_name = os.getenv('STATE_TABLE', 'V4TradingState')
+        table = dynamodb.Table(table_name)
+
+        try:
+            table.delete_item(Key={'trader_id': trader_id})
+        except Exception as e:
+            logger.error(f"❌ Failed to delete ghost position item for {symbol}: {e}")
+
+        try:
+            entry_price = float(position.get('entry_price', 0))
+            quantity = float(position.get('quantity', 0))
+            leverage = float(position.get('leverage', 5))
+            risk_dollars = 0.0
+            if entry_price and quantity and leverage:
+                risk_dollars = (entry_price * quantity) / leverage
+            if risk_dollars > 0:
+                persistence = get_persistence()
+                persistence.atomic_remove_risk(symbol, risk_dollars)
+        except Exception as e:
+            logger.error(f"❌ Failed to cleanup atomic risk for ghost {symbol}: {e}")
+
+        logger.info(f"🧹 {symbol} - Ghost cleaned (Dynamo + risk)")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ghost cleanup failed for {symbol}: {e}")
+        return False
+    return None
+
+
+async def _fetch_user_positions_snapshot(
+    demo_mode: bool,
+    listen_key: str,
+    timeout_s: float = 0.75,
+) -> Dict[str, float]:
+    try:
+        import websockets
+    except Exception as e:
+        logger.warning(f"[WS] websockets import failed: {e}")
+        return {}
+
+    base_ws = "wss://stream.binancefuture.com/ws" if demo_mode else "wss://fstream.binance.com/ws"
+    url = f"{base_ws}/{listen_key}"
+
+    positions = {}
+    start = time.time()
+    try:
+        async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+            while time.time() - start < timeout_s:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+
+                msg = json.loads(raw)
+                if not isinstance(msg, dict):
+                    continue
+
+                if msg.get('e') != 'ACCOUNT_UPDATE':
+                    continue
+
+                update = msg.get('a', {})
+                pos_list = update.get('P', [])
+                for p in pos_list:
+                    try:
+                        sym = p.get('s')
+                        amt = float(p.get('pa', 0))
+                        if sym is not None:
+                            positions[sym] = amt
+                    except Exception:
+                        continue
+
+    except Exception as e:
+        logger.warning(f"[WS] user data snapshot failed: {e}")
+        return {}
+
+    return positions
+
+
+def fetch_user_positions_snapshot(demo_mode: bool, listen_key: str) -> Dict[str, float]:
+    try:
+        return asyncio.run(_fetch_user_positions_snapshot(demo_mode=demo_mode, listen_key=listen_key))
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(_fetch_user_positions_snapshot(demo_mode=demo_mode, listen_key=listen_key))
+        except Exception:
+            return {}
+
+
+def fetch_mark_prices_snapshot(demo_mode: bool) -> Dict[str, float]:
+    try:
+        return asyncio.run(_fetch_mark_prices_snapshot(demo_mode=demo_mode))
+    except RuntimeError:
+        # In case an event loop already exists (rare in Lambda sync handler)
+        try:
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(_fetch_mark_prices_snapshot(demo_mode=demo_mode))
+        except Exception:
+            return {}
+
+
 def get_memory_open_positions() -> Dict:
     """🏛️ EMPIRE V16.3: Get open positions from DynamoDB memory (shared state)"""
     try:
@@ -89,22 +325,27 @@ def get_memory_open_positions() -> Dict:
 def check_and_close_position(
     exchange: ExchangeConnector,
     symbol: str,
-    position: Dict
+    position: Dict,
+    current_price_override: Optional[float] = None,
+    user_position_amt_override: Optional[float] = None,
 ) -> Optional[Dict]:
     """
     Check if TP or SL is hit, close if yes
     Returns: Dict with action info or None
     """
     try:
-        # V16: FETCH REAL PRICE FROM EXCHANGE (Ticker)
-        try:
-            ticker = exchange.fetch_ticker(symbol)
-            current_price = float(ticker['last'])
-            logger.debug(f"[PRICE] {symbol} current: ${current_price:.4f}")
-        except Exception as ticker_err:
-            logger.error(f"[ERROR] Failed to fetch ticker for {symbol}: {ticker_err}")
-            # Fallback to DynamoDB price (last known) if available
-            current_price = float(position.get('mark_price', position.get('entry_price', 0)))
+        # V16: Prefer WebSocket mark price snapshot, fallback to REST ticker
+        if current_price_override is not None:
+            current_price = float(current_price_override)
+        else:
+            try:
+                ticker = exchange.fetch_ticker(symbol)
+                current_price = float(ticker['last'])
+                logger.debug(f"[PRICE] {symbol} current: ${current_price:.4f}")
+            except Exception as ticker_err:
+                logger.error(f"[ERROR] Failed to fetch ticker for {symbol}: {ticker_err}")
+                # Fallback to DynamoDB price (last known) if available
+                current_price = float(position.get('mark_price', position.get('entry_price', 0)))
         
         if current_price == 0:
             logger.error(f"[ERROR] No price available for {symbol}")
@@ -114,6 +355,15 @@ def check_and_close_position(
         direction = position['direction']
         take_profit = float(position.get('take_profit', 0))
         stop_loss = float(position.get('stop_loss', 0))
+
+        # Race-condition guard (strong): if user data says positionAmt is 0, skip immediately
+        if user_position_amt_override is not None:
+            try:
+                if abs(float(user_position_amt_override)) == 0.0:
+                    logger.info(f"ℹ️ {symbol} - Skip close: user stream says positionAmt=0")
+                    return None
+            except Exception:
+                pass
         
         # TIMEOUT: Calculer l'âge de la position
         from datetime import datetime, timezone
@@ -133,10 +383,39 @@ def check_and_close_position(
             exit_reason = f'TIMEOUT_{int(age_minutes)}min'
             
             try:
-                side = 'sell' if direction == 'LONG' else 'buy'
-                quantity = float(position['quantity'])
+                risk = _get_position_risk(exchange, symbol)
+                if risk is not None:
+                    live_amt = float(risk.get('positionAmt', 0))
+                    position_side = str(risk.get('positionSide', '')).upper() or None
+                else:
+                    live_amt = _get_live_position_amt(exchange, symbol)
+                    position_side = _get_live_position_side(exchange, symbol) if live_amt is not None else None
+
+                if live_amt is not None and abs(live_amt) == 0.0:
+                    logger.info(f"ℹ️ {symbol} - Skip timeout close: live position amount is 0")
+                    cleanup_ghost_position(symbol, position)
+                    return None
+
+                if live_amt is not None:
+                    side = 'sell' if live_amt > 0 else 'buy'
+                    quantity = abs(float(live_amt))
+                else:
+                    side = 'sell' if direction == 'LONG' else 'buy'
+                    quantity = float(position['quantity'])
+                    position_side = None
                 
-                close_result = exchange.close_position(symbol, side, quantity)
+                try:
+                    close_result = exchange.close_position(symbol, side, quantity, position_side=position_side)
+                except Exception as e:
+                    msg = str(e)
+                    if "ReduceOnly" in msg or "reduceOnly" in msg:
+                        logger.info(f"ℹ️ {symbol} - Skip timeout close: reduceOnly rejected")
+                        # Re-check: if now zero, ghost cleanup
+                        risk2 = _get_position_risk(exchange, symbol)
+                        if risk2 is not None and abs(float(risk2.get('positionAmt', 0))) == 0.0:
+                            cleanup_ghost_position(symbol, position)
+                        return None
+                    raise
                 if close_result:
                     # Calculate PnL
                     if direction == 'LONG':
@@ -216,33 +495,36 @@ def check_and_close_position(
             
             # Execute close order using exchange directly (FAST)
             try:
-                # Race-condition guard: confirm position still exists on exchange
-                try:
-                    ccxt_symbol = exchange.resolve_symbol(symbol)
-                    live_positions = exchange.fetch_positions([ccxt_symbol])
-                    for p in live_positions or []:
-                        if p.get('symbol') != ccxt_symbol:
-                            continue
-                        contracts = p.get('contracts')
-                        if contracts is None:
-                            contracts = p.get('contractSize')
-                        try:
-                            contracts = float(contracts) if contracts is not None else None
-                        except Exception:
-                            contracts = None
-                        if contracts is not None and abs(contracts) == 0.0:
-                            logger.info(f"ℹ️ {symbol} - Skip close: position already 0 on exchange")
-                            return None
-                except Exception as pos_err:
-                    logger.warning(f"[WARN] {symbol} - Could not verify position on exchange before close: {pos_err}")
+                risk = _get_position_risk(exchange, symbol)
+                if risk is not None:
+                    live_amt = float(risk.get('positionAmt', 0))
+                    position_side = str(risk.get('positionSide', '')).upper() or None
+                else:
+                    live_amt = _get_live_position_amt(exchange, symbol)
+                    position_side = _get_live_position_side(exchange, symbol) if live_amt is not None else None
+
+                if live_amt is not None and abs(live_amt) == 0.0:
+                    logger.info(f"ℹ️ {symbol} - Skip close: position already 0 on exchange")
+                    cleanup_ghost_position(symbol, position)
+                    return None
 
                 # Direct market order execution
-                if direction == 'LONG':
-                    close_result = exchange.create_market_order(symbol, 'sell', position['quantity'])
+                if live_amt is not None:
+                    close_side = 'sell' if live_amt > 0 else 'buy'
+                    close_qty = abs(float(live_amt))
                 else:
-                    close_result = exchange.create_market_order(symbol, 'buy', position['quantity'])
+                    close_side = 'sell' if direction == 'LONG' else 'buy'
+                    close_qty = float(position['quantity'])
+
+                close_result = exchange.close_position(symbol, close_side, close_qty, position_side=position_side)
             except Exception as e:
                 msg = str(e)
+                if "ReduceOnly" in msg or "reduceOnly" in msg:
+                    logger.info(f"ℹ️ {symbol} - Skip close: reduceOnly rejected (likely already closed / wrong state)")
+                    risk2 = _get_position_risk(exchange, symbol)
+                    if risk2 is not None and abs(float(risk2.get('positionAmt', 0))) == 0.0:
+                        cleanup_ghost_position(symbol, position)
+                    return None
                 if 'Position not found' in msg or 'position not found' in msg:
                     logger.info(f"ℹ️ {symbol} - Skip close: position not found on exchange")
                     return None
@@ -279,6 +561,100 @@ def check_and_close_position(
         logger.error(f"Error checking {symbol}: {e}")
         return None
 
+def sync_binance_orphans(exchange: ExchangeConnector, memory_positions: Dict) -> Dict:
+    """
+    🏛️ EMPIRE V16.4: Anti-Orphan Management
+    Compare Binance Real positions vs DynamoDB Memory positions.
+    Register orphans in DynamoDB so they get managed by Closer.
+    """
+    results = {'orphans_found': 0, 'errors': 0}
+    try:
+        # 1. Fetch ALL active positions from Binance
+        # Use CCXT for robustness or direct API for speed
+        live_positions = exchange.exchange.fapiPrivateV2GetPositionRisk()
+        
+        # 2. Extract active ones (amt != 0)
+        active_on_exchange = {}
+        for p in live_positions:
+            amt = float(p.get('positionAmt', 0))
+            if abs(amt) > 0:
+                # Map back to CCXT format for consistency
+                # Symbol is e.g. 'USELESSUSDT'
+                raw_sym = p['symbol']
+                # Try to find the CCXT symbol (e.g. USELESS/USDT:USDT)
+                ccxt_sym = None
+                if exchange.markets:
+                    for s, m in exchange.markets.items():
+                        if m.get('id') == raw_sym:
+                            ccxt_sym = s
+                            break
+                
+                
+                if not ccxt_sym:
+                    # Fallback mapping if not in cache (common for Chinese/new tokens)
+                    if raw_sym.endswith('USDT'):
+                        base = raw_sym[:-4]
+                        ccxt_sym = f"{base}/USDT:USDT"
+                    else:
+                        ccxt_sym = raw_sym
+
+                active_on_exchange[ccxt_sym] = {
+                    'quantity': abs(amt),
+                    'direction': 'LONG' if amt > 0 else 'SHORT',
+                    'entry_price': float(p.get('entryPrice', 0)),
+                    'leverage': int(p.get('leverage', 5)),
+                    'mark_price': float(p.get('markPrice', 0))
+                }
+
+        # 3. Identify orphans (On Exchange but NOT in Memory)
+        for sym, data in active_on_exchange.items():
+            if sym not in memory_positions:
+                logger.warning(f"🚨 ORPHAN DETECTED: {sym} on Binance but missing in DynamoDB. Registering...")
+                
+                # Create mock position data
+                # SL/TP based on entry price (emergency defaults)
+                entry = data['entry_price']
+                if data['direction'] == 'LONG':
+                    tp = entry * (1 + TradingConfig.MIN_TP_PCT)
+                    sl = entry * (1 - (TradingConfig.SL_MULTIPLIER * 0.005)) # ~0.5% default SL
+                else:
+                    tp = entry * (1 - TradingConfig.MIN_TP_PCT)
+                    sl = entry * (1 + (TradingConfig.SL_MULTIPLIER * 0.005))
+
+                pos_data = {
+                    'trade_id': f"ORPHAN-{int(time.time())}",
+                    'symbol': sym,
+                    'status': 'OPEN',
+                    'entry_price': entry,
+                    'quantity': data['quantity'],
+                    'direction': data['direction'],
+                    'take_profit': tp,
+                    'stop_loss': sl,
+                    'leverage': data['leverage'],
+                    'asset_class': 'Crypto',
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'entry_time': datetime.now(timezone.utc).isoformat(),
+                    'risk_dollars': (entry * data['quantity']) / data['leverage'],
+                    'notes': 'Automatically Registered Orphan'
+                }
+                
+                # Save to DynamoDB
+                try:
+                    persistence = get_persistence()
+                    persistence.save_position(sym, pos_data)
+                    # Register risk atomically to avoid portfolio imbalance
+                    persistence.atomic_check_and_add_risk(sym, pos_data['risk_dollars'], 999999) # Safe limit
+                    results['orphans_found'] += 1
+                except Exception as e:
+                    logger.error(f"❌ Failed to register orphan {sym}: {e}")
+                    results['errors'] += 1
+
+    except Exception as e:
+        logger.error(f"❌ Orphan Sync failed: {e}")
+        results['errors'] += 1
+        
+    return results
+
 def update_position_status(
     symbol: str,
     status: str,
@@ -291,32 +667,14 @@ def update_position_status(
     table = dynamodb.Table(table_name)
     
     try:
-        # 🏛️ EMPIRE V16: Optimize with Query instead of Scan
         safe_symbol = symbol.replace('/', '_').replace(':', '-')
         trader_id = f'POSITION#{safe_symbol}'
-        
-        response = table.query(
-            KeyConditionExpression='trader_id = :tid',
-            FilterExpression='#status = :open',
-            ExpressionAttributeNames={'#status': 'status'},
-            ExpressionAttributeValues={
-                ':open': 'OPEN',
-                ':tid': trader_id
-            },
-            Limit=1
-        )
-        
-        if response['Items']:
-            item = response['Items'][0]
-            trader_id = item['trader_id']
-            timestamp = item['timestamp']
-            
-            # Update status
+
+        response = table.get_item(Key={'trader_id': trader_id})
+        item = response.get('Item')
+        if item and item.get('status') == 'OPEN':
             table.update_item(
-                Key={
-                    'trader_id': trader_id,
-                    'timestamp': timestamp
-                },
+                Key={'trader_id': trader_id},
                 UpdateExpression='SET #status = :closed, exit_price = :price, exit_reason = :reason, pnl_pct = :pnl, closed_at = :now',
                 ExpressionAttributeNames={'#status': 'status'},
                 ExpressionAttributeValues={
@@ -366,6 +724,14 @@ def lambda_handler(event, context):
         p1_start = time.time()
         creds = load_binance_credentials()
         live_mode = bool(getattr(TradingConfig, 'LIVE_MODE', False))
+        demo_mode = not live_mode
+
+        listen_key = None
+        try:
+            ws_mgr = BinanceWebSocketManager(demo_mode=demo_mode)
+            listen_key = ws_mgr.create_listen_key(api_key=creds['api_key'])
+        except Exception as e:
+            logger.warning(f"[WS] listenKey unavailable, continuing without user stream: {e}")
 
         exchange = ExchangeConnector(
             api_key=creds['api_key'],
@@ -380,42 +746,116 @@ def lambda_handler(event, context):
             except Exception:
                 return 0
 
-        def run_single_pass() -> Dict:
+        def run_single_pass(offset: Optional[int] = None) -> Dict:
             p2_start = time.time()
-            open_positions = get_memory_open_positions()
-            p2_dur = round(time.time() - p2_start, 3)
+            
+            # 🏛️ EMPIRE V16.5: Binance-First Mode
+            # Source of truth is the exchange, not DynamoDB
+            try:
+                # 1. Fetch REAL active positions from Binance
+                live_positions = exchange.exchange.fapiPrivateV2GetPositionRisk()
+                active_on_exchange = {}
+                for p in live_positions:
+                    amt = float(p.get('positionAmt', 0))
+                    if abs(amt) > 0:
+                        symbol = p['symbol']
+                        # Standardize to CCXT-like format for our internal logic
+                        if symbol.endswith('USDT'):
+                            ccxt_symbol = f"{symbol[:-4]}/USDT:USDT"
+                        else:
+                            ccxt_symbol = symbol
+                        
+                        active_on_exchange[ccxt_symbol] = p
+                
+                # 2. Fetch DynamoDB metadata
+                persistence = get_persistence()
+                memory_positions = persistence.load_positions()
+                
+                # 3. Sync & Update
+                final_positions = {}
+                for sym, binance_data in active_on_exchange.items():
+                    if sym in memory_positions:
+                        pos = memory_positions[sym]
+                        pos['quantity'] = abs(float(binance_data['positionAmt']))
+                        pos['entry_price'] = float(binance_data['entryPrice'])
+                        final_positions[sym] = pos
+                    else:
+                        logger.warning(f"🚨 ORPHAN SYNC: {sym} found on Binance. Mocking SL/TP...")
+                        entry = float(binance_data['entryPrice'])
+                        side = 'LONG' if float(binance_data['positionAmt']) > 0 else 'SHORT'
+                        
+                        if side == 'LONG':
+                            tp = entry * (1 + TradingConfig.MIN_TP_PCT)
+                            sl = entry * (1 - 0.005)
+                        else:
+                            tp = entry * (1 - TradingConfig.MIN_TP_PCT)
+                            sl = entry * (1 + 0.005)
+                            
+                        orphan_pos = {
+                            'trade_id': f"ORPHAN-{int(time.time())}",
+                            'symbol': sym,
+                            'status': 'OPEN',
+                            'entry_price': entry,
+                            'quantity': abs(float(binance_data['positionAmt'])),
+                            'direction': side,
+                            'take_profit': tp,
+                            'stop_loss': sl,
+                            'leverage': int(binance_data.get('leverage', 5)),
+                            'asset_class': 'Crypto',
+                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                            'entry_time': datetime.now(timezone.utc).isoformat(),
+                            'notes': 'Automatically Registered Orphan (Binance-First)'
+                        }
+                        persistence.save_position(sym, orphan_pos)
+                        final_positions[sym] = orphan_pos
 
-            if not open_positions:
+                # 4. GHOST CLEANUP
+                for sym in memory_positions:
+                    if sym not in active_on_exchange:
+                        logger.info(f"ℹ️ GHOST DETECTED: {sym} cleaned from DynamoDB")
+                        persistence.delete_position(sym)
+
+            except Exception as e:
+                logger.error(f"❌同步错误 (Binance-First): {e}")
+                final_positions = get_memory_open_positions()
+
+            p2_dur = round(time.time() - p2_start, 3)
+            
+            if not final_positions:
                 return {
                     'positions_checked': 0,
                     'positions_closed': 0,
                     'closed_details': [],
-                    'phases': {
-                        'load_positions': p2_dur,
-                        'check_and_close': 0.0,
-                    }
+                    'phases': {'load_positions': p2_dur, 'check_and_close': 0.0}
                 }
 
+            # Phase 3: Check and Close
             p3_start = time.time()
-            logger.info(f" Checking {len(open_positions)} open positions...")
+            mark_prices = fetch_mark_prices_snapshot(demo_mode=demo_mode)
             closed_positions = []
-            for symbol, position in open_positions.items():
-                if remaining_ms() and remaining_ms() < 2000:
-                    logger.warning("⏳ Timeout guard: stopping checks (low remaining time)")
+            
+            for symbol, position in final_positions.items():
+                if remaining_ms() and remaining_ms() < 1000:
                     break
-                result = check_and_close_position(exchange, symbol, position)
-                if result:
-                    closed_positions.append(result)
+                
+                current_price_override = None
+                if mark_prices:
+                    lookup = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
+                    current_price_override = mark_prices.get(lookup)
 
+                result = check_and_close_position(
+                    exchange, symbol, position, 
+                    current_price_override=current_price_override
+                )
+                if result and result.get('action') == 'CLOSED':
+                    closed_positions.append(result)
+            
             p3_dur = round(time.time() - p3_start, 3)
             return {
-                'positions_checked': len(open_positions),
+                'positions_checked': len(final_positions),
                 'positions_closed': len(closed_positions),
                 'closed_details': closed_positions,
-                'phases': {
-                    'load_positions': p2_dur,
-                    'check_and_close': p3_dur,
-                }
+                'phases': {'load_positions': p2_dur, 'check_and_close': p3_dur}
             }
 
         ticks_executed = []
@@ -460,6 +900,11 @@ def lambda_handler(event, context):
                 aggregated_checked = max(aggregated_checked, single['positions_checked'])
                 aggregated_closed.extend(single['closed_details'])
                 ticks_executed.append({'offset_s': int(target_offset), 'closed': single['positions_closed']})
+
+                # Optimization: if there are no open positions, do not keep sleeping for remaining offsets
+                if single.get('positions_checked', 0) == 0:
+                    logger.info("ℹ️ No open positions after tick - exiting remaining offsets")
+                    break
 
         duration = time.time() - start_time
         response = {

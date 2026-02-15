@@ -458,6 +458,11 @@ class TradingEngine:
             return base_capital
     
     def run_cycle(self, symbol: str, scanner_data: Dict = None, positions: Dict = None) -> Dict:
+        # 🛡️ SECURITY: Kill Switch
+        if getattr(TradingConfig, 'EMERGENCY_STOP', False):
+            logger.critical("🚨 EMERGENCY STOP ACTIVATED in config")
+            return {'symbol': symbol, 'status': 'STOPPED', 'reason': 'EMERGENCY_STOP'}
+
         # Resolve to canonical symbol early (Audit #V11.6.8)
         symbol = self.exchange.resolve_symbol(symbol)
         asset_class = classify_asset(symbol)  # Define early for logging
@@ -772,21 +777,26 @@ class TradingEngine:
         """Get real position detail from Binance for a specific symbol. Returns None if no position."""
         try:
             ccxt_ex = self.exchange.exchange if hasattr(self.exchange, 'exchange') else self.exchange
-            positions = ccxt_ex.fapiPrivateV2GetPositionRisk()
-            # Convert symbol to Binance format (SOL/USDT:USDT -> SOLUSDT)
+            # Explicit parameter for speed and reliability (Audit #V16.4)
             binance_sym = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
-            for pos in positions:
-                if pos.get('symbol') == binance_sym:
-                    qty = abs(float(pos.get('positionAmt', 0)))
-                    if qty > 0:
-                        return {
-                            'quantity': qty,
-                            'side': 'LONG' if float(pos['positionAmt']) > 0 else 'SHORT',
-                            'entry_price': float(pos.get('entryPrice', 0)),
-                            'unrealized_pnl': float(pos.get('unRealizedProfit', 0)),
-                            'mark_price': float(pos.get('markPrice', 0)),
-                            'leverage': int(pos.get('leverage', 1))
-                        }
+            positions = ccxt_ex.fapiPrivateV2GetPositionRisk({'symbol': binance_sym})
+            
+            if not positions:
+                return None
+                
+            # Response can be list or single dict
+            pos = positions[0] if isinstance(positions, list) else positions
+            
+            qty = abs(float(pos.get('positionAmt', 0)))
+            if qty > 0:
+                return {
+                    'quantity': qty,
+                    'side': 'LONG' if float(pos['positionAmt']) > 0 else 'SHORT',
+                    'entry_price': float(pos.get('entryPrice', 0)),
+                    'unrealized_pnl': float(pos.get('unRealizedProfit', 0)),
+                    'mark_price': float(pos.get('markPrice', 0)),
+                    'leverage': int(pos.get('leverage', 1))
+                }
             return None
         except Exception as e:
             logger.error(f"[BINANCE_SYNC] Failed to get position detail for {symbol}: {e}")
@@ -988,10 +998,52 @@ class TradingEngine:
                     self.persistence.delete_position(symbol)
                     del positions[symbol]
                     logger.info(f"[OK] Closed {symbol} | PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
+                    
+                    # 📊 MONITORING: CloudWatch Metrics
+                    try:
+                        import boto3
+                        cw = boto3.client('cloudwatch', region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
+                        cw.put_metric_data(
+                            Namespace='EmpireTrading',
+                            MetricData=[
+                                {
+                                    'MetricName': 'TradePnLPercent',
+                                    'Dimensions': [{'Name': 'Symbol', 'Value': symbol}],
+                                    'Value': float(pnl_pct),
+                                    'Unit': 'Percent'
+                                },
+                                {
+                                    'MetricName': 'TradePnLUSD',
+                                    'Value': float(pnl),
+                                    'Unit': 'None'
+                                }
+                            ]
+                        )
+                    except Exception as cw_err:
+                        logger.warning(f"[CW_ERROR] Failed to log metrics: {cw_err}")
                 else:
                     logger.info(f"[HOLD] {symbol} | PnL: {pnl_pct:+.2f}% | Time: {entry_time_str[:16] if entry_time_str else 'N/A'}")
 
             except Exception as e: logger.error(f"[ERROR] Manage failed for {symbol}: {e}")
+
+    async def execute_trade_websocket(self, symbol: str, side: str, quantity: float, price: float) -> Optional[Dict]:
+        """🏛️ EMPIRE V16.2: Wrapper pour l'exécuteur WebSocket"""
+        try:
+            from websocket_executor import WebSocketExecutor
+            executor = WebSocketExecutor(demo_mode=not TradingConfig.LIVE_MODE)
+            
+            # Map side (LONG/SHORT -> BUY/SELL)
+            ws_side = 'BUY' if side == 'LONG' else 'SELL'
+            
+            # Utiliser Decimal pour la précision
+            from decimal import Decimal
+            d_quantity = Decimal(str(quantity))
+            
+            result = await executor.execute_market_order(symbol, ws_side, float(d_quantity))
+            return result
+        except Exception as e:
+            logger.error(f"[WS_EXEC_WRAPPER_ERROR] {e}")
+            return None
 
 # ==================== LAMBDA HANDLER ====================
 
