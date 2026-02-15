@@ -764,7 +764,14 @@ def perform_single_scan(event, context):
             raise Exception("No symbols passed server filter")
         
         symbols_to_scan = [t['symbol'] for t in filtered_tickers]
+        # Force BTC for Compass (Audit Fix #2)
+        BTC_SYMBOL = "BTC/USDT:USDT"
+        if BTC_SYMBOL not in symbols_to_scan:
+            symbols_to_scan.append(BTC_SYMBOL)
+            
         ticker_map = {t['symbol']: t for t in filtered_tickers}
+        if BTC_SYMBOL not in ticker_map:
+            ticker_map[BTC_SYMBOL] = {'symbol': BTC_SYMBOL, 'volume_24h_usdt': 1e9} # Placeholder volume if missing
         
         phase2_time = time.time() - filter_start
         logger.info(f"⚡ Server filter: {len(symbols_to_scan)} symbols in {phase2_time:.1f}s")
@@ -774,6 +781,15 @@ def perform_single_scan(event, context):
         hour_utc = datetime.utcnow().hour
         
         klines_map = fetch_batch_klines_fast(symbols_to_scan, limit=60)
+        
+        # 🧭 FEED BTC COMPASS (Audit Fix #2)
+        from btc_compass import btc_compass
+        if BTC_SYMBOL in klines_map:
+            btc_klines = klines_map[BTC_SYMBOL]
+            if btc_klines:
+                last_k = btc_klines[-1]
+                btc_compass.analyze_btc_trend(btc_price=last_k[4], btc_volume=last_k[5])
+                logger.info(f"🧭 BTC Compass UPDATED: {btc_compass.btc_trend} ({btc_compass.btc_strength:.2%})")
         
         phase3_time = time.time() - klines_start
         logger.info(f"📊 Fetched {len(klines_map)} klines in {phase3_time:.1f}s")

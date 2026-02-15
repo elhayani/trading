@@ -105,7 +105,10 @@ class TradingConfig:
     MACRO_CACHE_TTL_SECONDS = 3600
     
     # --- Exchange Configuration ---
-    LIVE_MODE = False  # Set to True for production
+    # ⚠️ CRITICAL: LIVE_MODE controls real money trading
+    # False = Binance Testnet (demo money)
+    # True = Binance Production (REAL MONEY)
+    LIVE_MODE = True  # ✅ PRODUCTION MODE ENABLED
     SECRET_NAME = "trading/binance"
 
     # ================================================================

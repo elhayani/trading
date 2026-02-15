@@ -24,6 +24,7 @@ from aws_cdk import (
     aws_dynamodb as dynamodb,
     aws_iam as iam,
     aws_sns as sns,
+    aws_sns_subscriptions as subscriptions,
     aws_events as events,
     aws_events_targets as targets,
     aws_scheduler as scheduler,
@@ -70,6 +71,8 @@ class V4TradingStack(Stack):
             topic_name="Empire_Status_Reports",
             display_name="Empire V4 Status"
         )
+        
+        status_topic.add_subscription(subscriptions.EmailSubscription("zelhayani@gmail.com"))
 
         # =====================================================================
         # DynamoDB Tables

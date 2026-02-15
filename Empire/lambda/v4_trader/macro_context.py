@@ -87,7 +87,19 @@ def _get_forex_factory_calendar() -> List[Dict]:
             })
             
         with _macro_lock:
-            _macro_cache['calendar'] = events
+            # 🏛️ EMPIRE V16.7.8 Protection: Filter out past events and limit size
+            now_utc = datetime.now(timezone.utc)
+            future_events = []
+            for ev in events:
+                try:
+                    # Simple date check (events are daily)
+                    ev_date = datetime.strptime(ev['date'], "%m-%d-%Y").replace(tzinfo=timezone.utc)
+                    if ev_date.date() >= now_utc.date():
+                        future_events.append(ev)
+                except:
+                    future_events.append(ev) # Keep if unparseable
+            
+            _macro_cache['calendar'] = future_events[:20] # Limit to 20 events
             _macro_cache['calendar_ts'] = now
             
         return events

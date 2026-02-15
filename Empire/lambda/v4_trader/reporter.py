@@ -24,14 +24,19 @@ def get_paris_time():
 
 # Configuration from Environment (Audit Fix #3, #10)
 MAIN_TABLE = os.environ.get('HISTORY_TABLE', 'EmpireTradesHistory')
+SKIPPED_TABLE = os.environ.get('SKIPPED_TABLE', 'EmpireSkippedTrades')
 DEFAULT_TABLES = f"{MAIN_TABLE},EmpireCryptoV4,EmpireForexHistory,EmpireIndicesHistory,EmpireCommoditiesHistory"
 TABLES_TO_SCAN = os.environ.get('REPORTER_TABLES', DEFAULT_TABLES).split(',')
 RECIPIENT = os.environ.get('RECIPIENT_EMAIL', 'zelhayani@gmail.com')
 INITIAL_BUDGET = float(os.environ.get('INITIAL_BUDGET', '20000.0'))
 SES_REGION = os.environ.get('AWS_REGION', 'ap-northeast-1')
-ses = boto3.client('ses', region_name=SES_REGION)
+# 🏛️ V16.8 FIX: SES doit utiliser une région où l'identité est vérifiée
+SES_SEND_REGION = os.environ.get('SES_REGION', 'us-east-1')
+ses = boto3.client('ses', region_name=SES_SEND_REGION)
+sns = boto3.client('sns', region_name=SES_REGION)
 s3 = boto3.client('s3', region_name=SES_REGION)
 DASHBOARD_BUCKET = os.environ.get('DASHBOARD_BUCKET')
+SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
 
 def get_yahoo_ticker(symbol):
     """Maps internal symbols to Yahoo Finance tickers (Audit Fix #11)"""
@@ -153,6 +158,36 @@ def get_all_trades():
         except Exception as e:
             logger.error(f"❌ Error scanning table {table_name}: {e}")
     return all_items
+
+def get_skipped_trades_30min():
+    """🏛️ V16.8: Fetch skipped trades from last 30 minutes"""
+    try:
+        table = dynamodb.Table(SKIPPED_TABLE)
+        now = datetime.now(timezone.utc)
+        cutoff = int((now - timedelta(minutes=30)).timestamp() * 1000)
+        
+        response = table.scan(
+            FilterExpression='#ts > :cutoff',
+            ExpressionAttributeNames={'#ts': 'timestamp'},
+            ExpressionAttributeValues={':cutoff': cutoff}
+        )
+        items = response.get('Items', [])
+        
+        # Pagination
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(
+                ExclusiveStartKey=response['LastEvaluatedKey'],
+                FilterExpression='#ts > :cutoff',
+                ExpressionAttributeNames={'#ts': 'timestamp'},
+                ExpressionAttributeValues={':cutoff': cutoff}
+            )
+            items.extend(response.get('Items', []))
+        
+        logger.info(f"📋 Fetched {len(items)} skipped trades (last 30 min)")
+        return sorted(items, key=lambda x: x.get('timestamp', 0), reverse=True)
+    except Exception as e:
+        logger.error(f"❌ Error fetching skipped trades: {e}")
+        return []
 
 def format_reason_text(reason):
     """Sniper-style formatting for trade reasons (Compact & Icons)"""
@@ -384,12 +419,15 @@ def lambda_handler(event, context):
             except Exception as e:
                 logger.warning(f"Could not parse timestamp {ts_str}: {e}")
 
-        # If no recent events (at all, including SKIPPED), skip the email (Audit Fix #9)
-        if not recent_events:
+        # 🏛️ V16.8: Fetch skipped trades from EmpireSkippedTrades table
+        skipped_trades = get_skipped_trades_30min()
+        
+        # If no recent events AND no skipped trades, skip the email
+        if not recent_events and not skipped_trades:
             logger.info("💤 No recent events (30m). Skipping report.")
             return {"status": "SKIPPED_NO_CHANGE"}
             
-        logger.info(f"🚀 Triggered! {len(recent_events)} recent events found.")
+        logger.info(f"🚀 Triggered! {len(recent_events)} recent events + {len(skipped_trades)} skipped found.")
 
         # --- SECTION: JOURNAL DU JOUR (Today's Activity) ---
         todays_events = sorted(todays_events, key=lambda x: x['timestamp'], reverse=True)
@@ -444,6 +482,49 @@ def lambda_handler(event, context):
                     <td style="font-weight:bold;">{html.escape(pair)}</td>
                     <td style="font-size:11px; color:#334155;">{event_desc}</td>
                     <td style="text-align:right;">{pnl_disp}</td>
+                </tr>"""
+            html_sections += "</tbody></table>"
+
+        # --- SECTION: SKIPPED TRADES (Last 30 min) ---
+        if skipped_trades:
+            html_sections += f"<div class='section-title' style='border-left-color: #f97316;'>⚪ TRADES SKIPPED ({len(skipped_trades)} derniers 30 min)</div>"
+            html_sections += """<table class="empire-table">
+                <thead><tr>
+                    <th style='text-align:left'>HEURE</th>
+                    <th style='text-align:left'>ACTIF</th>
+                    <th style='text-align:left'>RAISON DU SKIP</th>
+                </tr></thead><tbody>"""
+            
+            for sk in skipped_trades[:20]:  # Max 20 pour lisibilité
+                ts = sk.get('timestamp', 0)
+                try:
+                    if isinstance(ts, (int, float)):
+                        dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).astimezone(PARIS_TZ)
+                    else:
+                        dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00')).astimezone(PARIS_TZ)
+                    time_str = dt.strftime('%H:%M')
+                except:
+                    time_str = str(ts)[:5]
+                
+                symbol = sk.get('Symbol', sk.get('symbol', 'N/A'))
+                reason = sk.get('Reason', sk.get('reason', 'N/A'))
+                
+                # Color-code reasons
+                reason_color = '#94a3b8'
+                if 'MOMENTUM' in str(reason).upper() or 'LOW' in str(reason).upper():
+                    reason_color = '#f59e0b'
+                elif 'RISK' in str(reason).upper() or 'BLOCK' in str(reason).upper():
+                    reason_color = '#ef4444'
+                elif 'BLACKOUT' in str(reason).upper() or 'NEWS' in str(reason).upper():
+                    reason_color = '#8b5cf6'
+                elif 'COMPASS' in str(reason).upper() or 'BTC' in str(reason).upper():
+                    reason_color = '#3b82f6'
+                
+                html_sections += f"""
+                <tr style="background-color:#fafafa;">
+                    <td style="color:#64748b; font-size:11px;">{time_str}</td>
+                    <td style="font-weight:bold; font-size:12px;">{html.escape(str(symbol))}</td>
+                    <td style="font-size:11px; color:{reason_color};">{html.escape(str(reason)[:80])}</td>
                 </tr>"""
             html_sections += "</tbody></table>"
 
@@ -570,7 +651,7 @@ def lambda_handler(event, context):
         </body></html>
         """
         
-        if not open_trades and not todays_events:
+        if not open_trades and not todays_events and not skipped_trades:
             logger.info("💤 No significant activity to report. Skipping email.")
             return {"status": "SKIPPED_NO_CONTENT"}
 
@@ -604,16 +685,65 @@ def lambda_handler(event, context):
             """
             html_body = html_body.replace('<div class="header">', dashboard_link_html + '<div class="header">')
 
-        ses.send_email(
-            Source=RECIPIENT,
-            Destination={'ToAddresses': [RECIPIENT]},
-            Message={
-                'Subject': {'Data': f"🏛️ Empire Report: {len(open_trades)} Open | {len(todays_events)} Today"},
-                'Body': {'Html': {'Data': html_body}}
-            }
-        )
-        logger.info("[SUCCESS] Email Sent.")
-        return {"status": "SUCCESS"}
+        # 🏛️ Empire V16.8: Dual Delivery (SES + SNS) — FIXED FORMAT
+        email_sent = False
+        email_subject = f"🏛️ Empire: {len(open_trades)} Open | {len(skipped_trades)} Skipped | {len(todays_events)} Today"
+        
+        # 1. Attempt SES (Pretty HTML) — 🔴 FIX: Correct Message structure
+        try:
+            ses.send_email(
+                Source=RECIPIENT,
+                Destination={'ToAddresses': [RECIPIENT]},
+                Message={
+                    'Subject': {'Data': email_subject, 'Charset': 'UTF-8'},
+                    'Body': {
+                        'Html': {'Data': html_body, 'Charset': 'UTF-8'}
+                    }
+                }
+            )
+            logger.info("[SUCCESS] SES Email Sent.")
+            email_sent = True
+        except Exception as ses_err:
+            logger.warning(f"⚠️ SES Failed: {ses_err}")
+            # 🏛️ V16.8 FIX: Try with raw email as fallback
+            try:
+                ses_fallback = boto3.client('ses', region_name='us-east-1')
+                ses_fallback.send_email(
+                    Source=RECIPIENT,
+                    Destination={'ToAddresses': [RECIPIENT]},
+                    Message={
+                        'Subject': {'Data': email_subject, 'Charset': 'UTF-8'},
+                        'Body': {
+                            'Html': {'Data': html_body, 'Charset': 'UTF-8'}
+                        }
+                    }
+                )
+                logger.info("[SUCCESS] SES Email Sent (us-east-1 fallback).")
+                email_sent = True
+            except Exception as ses_fb_err:
+                logger.error(f"❌ SES Fallback us-east-1 also failed: {ses_fb_err}")
+
+        # 2. Fallback/Dual Dispatch to SNS (Guaranteed Delivery)
+        if SNS_TOPIC_ARN:
+            try:
+                # Build text summary for SNS
+                dashboard_text = f"\n🔗 Dashboard: {presigned_url}" if presigned_url else ""
+                sns_message = f"Empire Report\n\nPositions ouvertes: {len(open_trades)}\nTrades skipped (30m): {len(skipped_trades)}\nÉvénements du jour: {len(todays_events)}{dashboard_text}"
+                
+                sns.publish(
+                    TopicArn=SNS_TOPIC_ARN,
+                    Subject=email_subject[:100],  # SNS subject max 100 chars
+                    Message=sns_message
+                )
+                logger.info("[SUCCESS] SNS Notification Sent.")
+                email_sent = True
+            except Exception as sns_err:
+                logger.error(f"❌ SNS Failed: {sns_err}")
+
+        if email_sent:
+            return {"status": "SUCCESS"}
+        else:
+            return {"status": "DELIVERY_FAILED"}
     except Exception as e:
         logger.error(f"Error: {e}")
         return {"status": "ERROR"}

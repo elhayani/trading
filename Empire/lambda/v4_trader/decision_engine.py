@@ -31,6 +31,21 @@ class DecisionEngine:
         history_context: Optional[Dict] = None,
         intended_direction: Optional[str] = None
     ) -> Tuple[bool, str, float]:
+        # 🧭 1. BTC COMPASS VALIDATION (Audit Fix #2)
+        from btc_compass import btc_compass
+        trade_side = 'BUY' if intended_direction == 'LONG' else 'SELL'
+        signal_score = ta_result.get('score', 0)
+        
+        allowed, compass_reason = btc_compass.validate_trade_direction(
+            symbol=symbol,
+            trade_side=trade_side,
+            signal_strength=signal_score / 100.0
+        )
+        
+        if not allowed:
+            logger.warning(f"🧭 [BTC_COMPASS_BLOCK] {symbol} {intended_direction} blocked: {compass_reason}")
+            return False, f"BTC_COMPASS: {compass_reason}", 0.0
+
         if context.get('is_news_blackout'):
             return False, f"NEWS_BLACKOUT: {context.get('news_reason', 'Major Event')}", 0.0
 
@@ -104,6 +119,7 @@ class DecisionEngine:
         
         stop_loss = self.risk_manager.calculate_stop_loss(entry_price, atr, direction)
 
+        vix = context.get('vix', 20.0)
         sizing = self.risk_manager.calculate_position_size(
             capital=capital,
             entry_price=entry_price,
@@ -113,7 +129,8 @@ class DecisionEngine:
             direction=direction,
             compound_capital=compound_capital,
             signal_score=ta_result.get('score', 60),
-            symbol=symbol
+            symbol=symbol,
+            vix=vix
         )
 
         if sizing["blocked"]:

@@ -23,26 +23,44 @@ class RiskManager:
         """Définir le volume 24h pour la protection liquidité"""
         self._current_volume_24h = volume_24h
     
-    def get_adaptive_leverage(self, score: int, base_leverage: int = None) -> int:
+    def get_adaptive_leverage(self, score: int, vix: float = 20.0) -> int:
         """
-        V16.0 Adaptive Leverage (independent of base config).
+        V16.7.8 Adaptive Leverage with VIX Volatility Adjustment.
         
-        Returns leverage based purely on signal score:
-        - Score 90+: x7 (Elite signals - highest conviction)
-        - Score 80+: x5 (Strong signals - standard)
-        - Score 70+: x3 (Good signals - reduced risk)
-        - Score 60+: x2 (Limit signals - minimal exposure)
+        Returns leverage based on signal score and macro volatility:
+        - Score 90+: x7 (Elite) -> Reduced by VIX
+        - Score 80+: x5 (Strong)
+        - Score 70+: x3 (Good)
+        - Score 60+: x2 (Limit)
         
-        base_leverage parameter is ignored (kept for compatibility).
+        Volatility Penalty:
+        - VIX > 25: -1x leverage
+        - VIX > 35: -2x leverage (Min 1x)
         """
+        # Base leverage by score
         if score >= 90:
-            return 7  # Elite
+            base_lev = 7
         elif score >= 80:
-            return 5  # Strong
+            base_lev = 5
         elif score >= 70:
-            return 3  # Good
+            base_lev = 3
         else:
-            return 2  # Limit
+            base_lev = 2
+            
+        # Volatility adjustment
+        if vix > 35:
+            base_lev -= 2
+        elif vix > 25:
+            base_lev -= 1
+            
+        # Hard floor at 1x
+        leverage = max(1, base_lev)
+        
+        # Elite Protection: Score 95+ should stay at least 2x even if VIX is high
+        if score >= 95:
+            leverage = max(2, leverage)
+            
+        return int(leverage)
 
     def calculate_position_size(
         self,
@@ -55,7 +73,8 @@ class RiskManager:
         leverage: float = None,
         compound_capital: float = None,
         signal_score: int = 60,
-        symbol: str = "UNKNOWN"
+        symbol: str = "UNKNOWN",
+        vix: float = 20.0
     ) -> Dict[str, Union[float, bool, str]]:
         # Convert all inputs to float to prevent Decimal/float arithmetic errors
         entry_price = float(entry_price)
@@ -73,10 +92,9 @@ class RiskManager:
         else:
             capital_to_use = capital
         
-        # Appliquer le levier adaptatif selon le score
-        base_leverage = leverage or TradingConfig.LEVERAGE
-        leverage = self.get_adaptive_leverage(signal_score, base_leverage)
-        logger.info(f"[LEVERAGE] Score {signal_score} → Leverage x{leverage} (base: x{base_leverage})")
+        # Appliquer le levier adaptatif selon le score et la volatilité
+        leverage = self.get_adaptive_leverage(signal_score, vix)
+        logger.info(f"[LEVERAGE] Score {signal_score} | VIX {vix:.1f} → Leverage x{leverage}")
         
         if entry_price <= 0: return self._blocked("INVALID_ENTRY_PRICE", stop_loss_price)
 
@@ -118,17 +136,28 @@ class RiskManager:
         if price_risk > 0 and (margin_per_slot * leverage * price_risk) > risk_budget:
             return self._blocked("RISK_BUDGET_EXCEEDED", stop_loss_price)
         
-        # 5. Garde-fou perte max par trade (2% du capital)
-        max_loss_usd = capital_to_use * (TradingConfig.MAX_LOSS_PER_TRADE_PCT / 100)
+        # 5. Garde-fou perte max par trade (2% par défaut, 3% pour Elite 95+)
+        max_loss_pct = TradingConfig.MAX_LOSS_PER_TRADE_PCT
+        if signal_score >= 95:
+            max_loss_pct = max(max_loss_pct, 3.0) # Elite protection
+            
+        max_loss_usd = capital_to_use * (max_loss_pct / 100)
         sl_distance_pct = abs(entry_price - stop_loss_price) / entry_price
         max_notional = max_loss_usd / sl_distance_pct if sl_distance_pct > 0 else float('inf')
         actual_notional = margin_per_slot * leverage
         
         if actual_notional > max_notional:
             # Réduire le levier pour respecter la limite de perte max
+            adaptive_leverage = leverage  # Sauvegarder le levier adaptatif original
             new_leverage = int(max_notional / margin_per_slot)
             new_leverage = max(1, new_leverage)
-            logger.warning(f"[RISK_CAP] Leverage reduced x{leverage} → x{new_leverage} (max loss: {max_loss_usd:.0f})")
+            
+            # 🚨 V16.7.8 FIX: Alert when adaptive leverage is degraded
+            if new_leverage < adaptive_leverage:
+                logger.warning(f"🚨 [LEVERAGE_DEGRADED] {symbol} Score {signal_score}: Adaptive x{adaptive_leverage} → Capped x{new_leverage} (Max loss: ${max_loss_usd:.0f}, SL distance: {sl_distance_pct:.2%})")
+                if signal_score >= 90:
+                    logger.error(f"⚠️ [ELITE_DEGRADED] Elite signal (score {signal_score}) degraded from x{adaptive_leverage} to x{new_leverage}! Profitability at risk!")
+            
             leverage = new_leverage
             # Recalculer avec le nouveau levier
             target_notional = margin_per_slot * leverage

@@ -132,36 +132,34 @@ class AtomicPersistence:
             
             # Ensure active_trades map exists first
             try:
+                # ✅ V16.7.8 FIX: Single atomic operation to prevent race condition
+                # Combine risk increment AND trade registration in ONE update
                 response = self.table.update_item(
                     Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
-                    UpdateExpression='SET total_risk = if_not_exists(total_risk, :start) + :new_risk, last_updated = :ts, #active_trades = if_not_exists(#active_trades, :empty)',
+                    UpdateExpression='''
+                        SET total_risk = if_not_exists(total_risk, :start) + :new_risk, 
+                            last_updated = :ts, 
+                            #active_trades = if_not_exists(#active_trades, :empty),
+                            #active_trades.#symbol = :trade_data
+                    ''',
                     ConditionExpression='attribute_not_exists(total_risk) OR (total_risk + :new_risk) <= :max_risk',
                     ExpressionAttributeNames={
-                        '#active_trades': 'active_trades'
+                        '#active_trades': 'active_trades',
+                        '#symbol': safe_symbol
                     },
                     ExpressionAttributeValues={
                         ':start': 0,
                         ':new_risk': new_risk,
                         ':max_risk': max_risk,
                         ':ts': datetime.now(timezone.utc).isoformat(),
-                        ':empty': {}
+                        ':empty': {},
+                        ':trade_data': trade_data
                     },
                     ReturnValues='ALL_NEW'
                 )
                 
                 updated_risk = float(response['Attributes'].get('total_risk', 0))
-                
-                # Add to active trades map
-                self.table.update_item(
-                    Key={'trader_id': 'PORTFOLIO_RISK#GLOBAL'},
-                    UpdateExpression='SET active_trades.#symbol = :trade_data',
-                    ExpressionAttributeNames={
-                        '#symbol': safe_symbol
-                    },
-                    ExpressionAttributeValues={
-                        ':trade_data': trade_data
-                    }
-                )
+                logger.info(f"✅ [ATOMIC_SUCCESS] {symbol} registered atomically. Total risk: ${updated_risk:.2f}")
                 
                 return True, f"Risk registered: ${risk_dollars:.2f} (Total: ${updated_risk:.2f})"
                 

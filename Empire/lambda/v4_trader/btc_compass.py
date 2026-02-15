@@ -4,6 +4,7 @@ BTC comme boussole directionnelle pour éviter 90% des pièges de scalping
 """
 
 import logging
+import time
 from typing import Dict, Optional, Tuple
 from config import TradingConfig
 
@@ -316,4 +317,4 @@ def get_btc_compass_recommendation() -> Dict:
         'risk_adj': btc_compass.get_risk_adjustment()
     }
 
-import time
+

@@ -36,8 +36,6 @@ import config
 from config import TradingConfig
 import market_analysis
 from market_analysis import analyze_market, classify_asset
-import news_fetcher
-from news_fetcher import NewsFetcher
 import exchange_connector
 from exchange_connector import ExchangeConnector
 import risk_manager
@@ -343,7 +341,6 @@ class TradingEngine:
         
         self.risk_manager = RiskManager()
         self.decision_engine = DecisionEngine(risk_manager=self.risk_manager)
-        self.news_fetcher = NewsFetcher()
         self.claude = ClaudeNewsAnalyzer()
         
         # Hydrate RiskManager
@@ -612,8 +609,6 @@ class TradingEngine:
                 except:
                     volume_24h = 0
             
-            # 🚀 OPTIMIZATION V16: Disable news fetching for speed
-            # news_score = self.news_fetcher.get_news_sentiment_score(symbol) 
             news_score = 0
             
             import macro_context
@@ -642,17 +637,8 @@ class TradingEngine:
                 self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
 
-            # 🏛️ EMPIRE V16.7.4: Claude AI Veto (ULTRA FAST)
-            if getattr(TradingConfig, 'USE_CLAUDE_VETO', False):
-                try:
-                    # Fetch minimal history (5 candles) for speed as requested
-                    ohlcv_veto = self.exchange.fetch_ohlcv(symbol, timeframe='1m', limit=5)
-                    if not self.claude.market_veto(symbol, ohlcv_veto, signal_type):
-                        reason = "CLAUDE_VETO: Rejection detected by AI"
-                        self.persistence.log_skipped_trade(symbol, reason, asset_class)
-                        return {'symbol': symbol, 'status': 'VETOED', 'reason': reason}
-                except Exception as veto_err:
-                    logger.error(f"[VETO_ERROR] {veto_err}")
+            # 🏛️ EMPIRE V16.8: Claude Veto moved to Scanner (pick_best_trades)
+            # market_veto() is deprecated - all AI arbitrage happens in Scanner Phase 3
             
             return self._execute_entry(symbol, signal_type, decision, ta_result, asset_class, balance)
             

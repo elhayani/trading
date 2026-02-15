@@ -750,6 +750,8 @@ def lambda_handler(event, context):
         
         total_closed = 0
         cycle_count = 0
+        consecutive_errors = 0  # 🏛️ V16.7.8 FIX: Track consecutive failures
+        MAX_CONSECUTIVE_ERRORS = 3  # Fail fast after 3 consecutive errors
         
         while True:
             cycle_start = time.time()
@@ -836,24 +838,62 @@ def lambda_handler(event, context):
                         if mark_prices:
                             lookup = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
                             current_price_override = mark_prices.get(lookup)
-
-                        # Logic: If news blackout, force exit immediately
+                        # 1. News Blackout Protection
                         if is_blackout:
-                            logger.warning(f"🛑 NEWS BLACKOUT EXIT: Closing {symbol} - {macro.get('news_reason')}")
-                            result = exchange.close_position(symbol, position)
-                            if result:
-                                total_closed += 1
+                            logger.warning(f"🛑 NEWS BLACKOUT EXIT: Closing {symbol} - {macro.get('news_reason', 'Major Event')}")
+                            try:
+                                close_side = 'sell' if position.get('direction') == 'LONG' else 'buy'
+                                exchange.close_position(symbol, close_side, position['quantity'])
                                 persistence.delete_position(symbol)
-                            continue
+                                total_closed += 1
+                                continue
+                            except Exception as e:
+                                logger.error(f"❌ Failed to close {symbol} during blackout: {e}")
+
+                        # 🧭 2. BTC COMPASS PROTECTION (Audit Fix #2)
+                        from btc_compass import btc_compass
+                        # Basic BTC Data Fetching within the closer session
+                        # (Ideally we'd use the mark_prices from Phase 1)
+                        btc_price = mark_prices.get('BTCUSDT') if mark_prices else None
+                        if btc_price:
+                            # Feed the compass (approximate volume as it's not critical for trend here)
+                            btc_compass.analyze_btc_trend(btc_price=btc_price, btc_volume=0)
+                            
+                            # Exit if Trend Lock is violated
+                            if getattr(TradingConfig, 'BTC_DIRECTION_LOCK', False):
+                                current_btc_trend = btc_compass.btc_trend
+                                position_side = position.get('direction')
+                                
+                                if current_btc_trend == 'BEARISH' and position_side == 'LONG':
+                                    logger.warning(f"🧭 [COMPASS_EXIT] BTC BEARISH reversal! Closing LONG {symbol}")
+                                    exchange.close_position(symbol, position['direction'] == 'LONG' and 'sell' or 'buy', position['quantity'])
+                                    persistence.delete_position(symbol)
+                                    total_closed += 1
+                                    continue
+                                elif current_btc_trend == 'BULLISH' and position_side == 'SHORT':
+                                    logger.warning(f"🧭 [COMPASS_EXIT] BTC BULLISH reversal! Closing SHORT {symbol}")
+                                    exchange.close_position(symbol, position['direction'] == 'LONG' and 'sell' or 'buy', position['quantity'])
+                                    persistence.delete_position(symbol)
+                                    total_closed += 1
+                                    continue
 
                         result = check_and_close_position(exchange, symbol, position, current_price_override=current_price_override)
                         if result and result.get('action') == 'CLOSED':
                             total_closed += 1
                             logger.info(f"✅ Closed: {symbol} ({result.get('reason')})")
+                
+                # ✅ V16.7.8 FIX: Reset consecutive errors on successful cycle
+                consecutive_errors = 0
 
             except Exception as e:
                 # Global cycle try/except for recovery
-                logger.error(f"⚠️ CYCLE {cycle_count} RECOVERED FROM ERROR: {e}", exc_info=True)
+                consecutive_errors += 1
+                logger.error(f"⚠️ CYCLE {cycle_count} RECOVERED FROM ERROR ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}", exc_info=True)
+                
+                # 🚨 V16.7.8 FIX: Fail fast if too many consecutive errors
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    logger.critical(f"🚨 CRITICAL: {MAX_CONSECUTIVE_ERRORS} consecutive cycle failures! Aborting session to trigger CloudWatch alarms.")
+                    raise RuntimeError(f"Too many consecutive failures ({consecutive_errors}). Last error: {e}")
 
             # Sleep
             elapsed_cycle = time.time() - cycle_start
