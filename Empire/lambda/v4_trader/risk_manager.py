@@ -114,12 +114,12 @@ class RiskManager:
         if price_risk < min_risk: return self._blocked("STOP_TOO_TIGHT", stop_loss_price)
 
         # 4. Safety Cap: Do not exceed MAX_LOSS_PER_TRADE
-        risk_budget = capital * TradingConfig.MAX_LOSS_PER_TRADE * confidence
+        risk_budget = capital_to_use * TradingConfig.MAX_LOSS_PER_TRADE * confidence
         if price_risk > 0 and (margin_per_slot * leverage * price_risk) > risk_budget:
             return self._blocked("RISK_BUDGET_EXCEEDED", stop_loss_price)
         
         # 5. Garde-fou perte max par trade (2% du capital)
-        max_loss_usd = capital * (TradingConfig.MAX_LOSS_PER_TRADE_PCT / 100)
+        max_loss_usd = capital_to_use * (TradingConfig.MAX_LOSS_PER_TRADE_PCT / 100)
         sl_distance_pct = abs(entry_price - stop_loss_price) / entry_price
         max_notional = max_loss_usd / sl_distance_pct if sl_distance_pct > 0 else float('inf')
         actual_notional = margin_per_slot * leverage
@@ -134,9 +134,16 @@ class RiskManager:
             target_notional = margin_per_slot * leverage
             quantity = target_notional / entry_price
 
+        # 5.1 Hard Cap: Do not exceed MAX_POSITION_SIZE_USDT (🏛️ EMPIRE V16.7.3)
+        max_pos_size = getattr(TradingConfig, 'MAX_POSITION_SIZE_USDT', 2500)
+        current_notional = quantity * entry_price
+        if current_notional > max_pos_size:
+            quantity = max_pos_size / entry_price
+            logger.warning(f"[SIZE_CAP] {symbol} size capped at ${max_pos_size} (was ${current_notional:.0f})")
+
         # 6. Portfolio cap
         total_risk = sum(t["risk"] for t in self.active_trades.values())
-        available_risk = (capital * TradingConfig.MAX_PORTFOLIO_RISK_PCT) - total_risk
+        available_risk = (capital_to_use * TradingConfig.MAX_PORTFOLIO_RISK_PCT) - total_risk
         
         if available_risk <= 0: return self._blocked("PORTFOLIO_RISK_CAP", stop_loss_price)
         
@@ -156,14 +163,23 @@ class RiskManager:
         }
 
     @staticmethod
-    def calculate_stop_loss(entry_price: float, atr: float, direction: str = "LONG", multiplier: float = 2.0) -> float:
+    def calculate_stop_loss(entry_price: float, atr: float, direction: str = "LONG", multiplier: float = None) -> float:
         # Convert to float to avoid Decimal/float operation errors
         entry_price = float(entry_price)
         atr = float(atr)
+        mult = multiplier if multiplier is not None else TradingConfig.SL_MULTIPLIER
         
-        if atr <= 0: return round(entry_price * (0.98 if direction == "LONG" else 1.02), 8)
-        dist = atr * multiplier
-        return round(entry_price - dist if direction == "LONG" else entry_price + dist, 8)
+        # Calculate distance based on ATR
+        if atr > 0:
+            dist_atr = atr * mult
+        else:
+            dist_atr = 0
+            
+        # Enforce MIN_SL_PCT floor (conflit ATR vs Fixe)
+        min_dist = entry_price * getattr(TradingConfig, 'MIN_SL_PCT', 0.0045)
+        final_dist = max(dist_atr, min_dist)
+        
+        return round(entry_price - final_dist if direction == "LONG" else entry_price + final_dist, 8)
 
     def register_trade(self, symbol: str, entry: float, qty: float, risk: float, sl: float, direction: str):
         self.active_trades[symbol] = {"entry": entry, "size": qty, "risk": risk, "stop_loss": sl, "direction": direction}

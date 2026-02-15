@@ -30,6 +30,8 @@ RECIPIENT = os.environ.get('RECIPIENT_EMAIL', 'zelhayani@gmail.com')
 INITIAL_BUDGET = float(os.environ.get('INITIAL_BUDGET', '20000.0'))
 SES_REGION = os.environ.get('AWS_REGION', 'ap-northeast-1')
 ses = boto3.client('ses', region_name=SES_REGION)
+s3 = boto3.client('s3', region_name=SES_REGION)
+DASHBOARD_BUCKET = os.environ.get('DASHBOARD_BUCKET')
 
 def get_yahoo_ticker(symbol):
     """Maps internal symbols to Yahoo Finance tickers (Audit Fix #11)"""
@@ -571,6 +573,36 @@ def lambda_handler(event, context):
         if not open_trades and not todays_events:
             logger.info("💤 No significant activity to report. Skipping email.")
             return {"status": "SKIPPED_NO_CONTENT"}
+
+        # 🏛️ EMPIRE V16.7.4: Generate Signed URL for Dashboard (1 hour validity)
+        presigned_url = None
+        if DASHBOARD_BUCKET:
+            try:
+                key = "index.html"
+                s3.put_object(
+                    Bucket=DASHBOARD_BUCKET,
+                    Key=key,
+                    Body=html_body,
+                    ContentType='text/html'
+                )
+                presigned_url = s3.generate_presigned_url(
+                    'get_object',
+                    Params={'Bucket': DASHBOARD_BUCKET, 'Key': key},
+                    ExpiresIn=3600
+                )
+                logger.info(f"✅ Dashboard URL generated: {presigned_url[:50]}...")
+            except Exception as e:
+                logger.error(f"❌ Error generating dashboard URL: {e}")
+
+        # Inject URL into email body if available
+        if presigned_url:
+            dashboard_link_html = f"""
+            <div style="text-align:center; padding: 20px; background: #fdf2f2; border: 1px dashed #f87171; border-radius: 8px; margin: 10px;">
+                <p style="margin:0; font-weight:bold; color:#b91c1c;">🚀 ACCÈS DASHBOARD LIVE (1 heure)</p>
+                <a href="{presigned_url}" style="display:inline-block; margin-top:10px; padding:12px 24px; background:#ef4444; color:white; text-decoration:none; border-radius:6px; font-weight:bold;">VOIR MON EMPIRE EN DIRECT</a>
+            </div>
+            """
+            html_body = html_body.replace('<div class="header">', dashboard_link_html + '<div class="header">')
 
         ses.send_email(
             Source=RECIPIENT,

@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Empire Trading Dashboard - V16.5</title>
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🚀</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .neon-text {
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8),
+                0 0 20px rgba(255, 255, 255, 0.6),
+                0 0 30px rgba(255, 255, 255, 0.4);
+        }
+    </style>
+</head>
+
+<body class="gradient-bg min-h-screen text-white">
+    <!-- Header -->
+    <header class="glass-effect p-6 mb-8">
+        <div class="container mx-auto">
+            <h1 class="text-4xl font-bold neon-text text-center">
+                🚀 Empire Trading Dashboard
+            </h1>
+            <p class="text-center text-gray-200 mt-2">WebSocket V16.5 - High Quality Trading</p>
+            <div class="flex justify-center mt-4 space-x-4">
+                <span class="px-3 py-1 bg-green-500 rounded-full text-sm">WebSocket Active</span>
+                <span class="px-3 py-1 bg-purple-500 rounded-full text-sm pulse">Live Data</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard -->
+    <main class="container mx-auto px-6">
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Total Balance</p>
+                        <p class="text-3xl font-bold text-blue-400" id="totalBalance">$0</p>
+                    </div>
+                    <div class="text-4xl">�</div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Win Rate</p>
+                        <p class="text-3xl font-bold text-green-400" id="winRate">0%</p>
+                    </div>
+                    <div class="text-4xl">🎯</div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Total PnL</p>
+                        <p class="text-3xl font-bold text-blue-400" id="totalPnL">$0</p>
+                    </div>
+                    <div class="text-4xl">💰</div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Active Positions</p>
+                        <p class="text-3xl font-bold text-yellow-400" id="activePositions">0</p>
+                    </div>
+                    <div class="text-4xl">📈</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Budget Section -->
+        <div class="glass-effect rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4">💰 Budget & Capital Allocation</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div class="text-center">
+                    <p class="text-gray-300 text-sm">Total Balance</p>
+                    <p class="text-3xl font-bold text-blue-400" id="budgetTotal">$0</p>
+                    <p class="text-xs text-gray-400 mt-1">Capital total</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-gray-300 text-sm">Available Balance</p>
+                    <p class="text-3xl font-bold text-green-400" id="budgetAvailable">$0</p>
+                    <p class="text-xs text-gray-400 mt-1">Margin libre</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-gray-300 text-sm">Buying Power</p>
+                    <p class="text-3xl font-bold text-purple-400" id="budgetBuyingPower">$0</p>
+                    <p class="text-xs text-gray-400 mt-1">Leverage x5</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-gray-300 text-sm">Risk Utilization</p>
+                    <p class="text-3xl font-bold text-yellow-400" id="budgetRiskUtil">0%</p>
+                    <p class="text-xs text-gray-400 mt-1">Margin utilisée</p>
+                </div>
+            </div>
+            <div class="mt-4">
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-300">Margin Used</span>
+                    <span id="budgetMarginUsed" class="text-yellow-400">$0</span>
+                </div>
+                <div class="flex justify-between text-sm mt-1">
+                    <span class="text-gray-300">Unrealized PnL</span>
+                    <span id="budgetUnrealizedPnl" class="text-blue-400">$0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Account Info -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Available Balance</p>
+                        <p class="text-2xl font-bold text-green-400" id="availableBalance">$0</p>
+                    </div>
+                    <div class="text-3xl">💵</div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Unrealized PnL</p>
+                        <p class="text-2xl font-bold text-blue-400" id="unrealizedPnl">$0</p>
+                    </div>
+                    <div class="text-3xl">📊</div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Margin Used</p>
+                        <p class="text-2xl font-bold text-yellow-400" id="marginUsed">$0</p>
+                    </div>
+                    <div class="text-3xl">🔒</div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-300 text-sm">Total Trades</p>
+                        <p class="text-2xl font-bold text-purple-400" id="totalTrades">0</p>
+                    </div>
+                    <div class="text-3xl">📈</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- PnL Chart -->
+            <div class="glass-effect rounded-lg p-6">
+                <h2 class="text-xl font-bold mb-4">📈 Performance PnL</h2>
+                <canvas id="pnlChart" width="400" height="200"></canvas>
+            </div>
+
+            <!-- Win Rate Chart -->
+            <div class="glass-effect rounded-lg p-6">
+                <h2 class="text-xl font-bold mb-4">🎯 Win Rate Evolution</h2>
+                <canvas id="winRateChart" width="400" height="200"></canvas>
+            </div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="glass-effect rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4">🔄 Recent Trades</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="border-b border-gray-600">
+                            <th class="pb-2">Time</th>
+                            <th class="pb-2">Symbol</th>
+                            <th class="pb-2">Type</th>
+                            <th class="pb-2">Price</th>
+                            <th class="pb-2">Quantity</th>
+                            <th class="pb-2">PnL</th>
+                            <th class="pb-2">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesTable">
+                        <tr>
+                            <td colspan="7" class="text-center py-8 text-gray-400">
+                                No trades yet...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Skipped Trades -->
+        <div class="glass-effect rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4">⏭️ Skipped Trades & Reasons</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="border-b border-gray-600">
+                            <th class="pb-2">Time</th>
+                            <th class="pb-2">Symbol</th>
+                            <th class="pb-2">Type</th>
+                            <th class="pb-2">Signal</th>
+                            <th class="pb-2">Skip Reason</th>
+                            <th class="pb-2">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="skippedTradesTable">
+                        <tr>
+                            <td colspan="6" class="text-center py-8 text-gray-400">
+                                No skipped trades...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Live Positions -->
+        <div class="glass-effect rounded-lg p-6">
+            <h2 class="text-xl font-bold mb-4">📊 Active Positions</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="positionsGrid">
+                <div class="text-center py-8 text-gray-400 col-span-3">
+                    No active positions...
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="glass-effect p-6 mt-12">
+        <div class="container mx-auto text-center">
+            <p class="text-gray-300">Empire Trading V16.5 - WebSocket High Quality</p>
+            <p class="text-sm text-gray-400 mt-2">Last Update: <span id="lastUpdate">--</span></p>
+        </div>
+    </footer>
+
+    <script>
+        // Configuration
+        const API_BASE = (new URLSearchParams(window.location.search).get('api') || 'http://localhost:5005').replace(/\/$/, '');
+        const WS_MODE = (new URLSearchParams(window.location.search).get('ws') || 'live').toLowerCase();
+        const WS_URL = WS_MODE === 'demo' ? 'wss://demo-stream.binance.com:9443/ws' : 'wss://stream.binance.com:9443/ws';
+
+        // State
+        let trades = [];
+        let positions = [];
+        let pnlData = [];
+        let winRateData = [];
+
+        // Charts
+        const pnlChart = new Chart(document.getElementById('pnlChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'PnL ($)',
+                    data: [],
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    },
+                    x: {
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: 'white' } }
+                }
+            }
+        });
+
+        const winRateChart = new Chart(document.getElementById('winRateChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Win Rate (%)',
+                    data: [],
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    },
+                    x: {
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: 'white' } }
+                }
+            }
+        });
+
+        // WebSocket Connection
+        function connectWebSocket() {
+            const ws = new WebSocket(WS_URL);
+
+            ws.onopen = function () {
+                console.log('WebSocket connected');
+                // Subscribe to ticker data
+                ws.send(JSON.stringify({
+                    method: 'SUBSCRIBE',
+                    params: ['!ticker@arr'],
+                    id: 1
+                }));
+            };
+
+            ws.onmessage = function (event) {
+                const data = JSON.parse(event.data);
+                if (data.stream === '!ticker@arr') {
+                    updateMarketData(data.data);
+                }
+            };
+
+            ws.onerror = function (error) {
+                console.error('WebSocket error:', error);
+                setTimeout(connectWebSocket, 5000); // Reconnect
+            };
+
+            return ws;
+        }
+
+        // Update Market Data
+        function updateMarketData(tickerData) {
+            // Update dashboard with live market data
+            tickerData.forEach(ticker => {
+                const symbol = ticker.s;
+                const price = parseFloat(ticker.c);
+                const change = parseFloat(ticker.P);
+
+                // Update positions if they exist
+                const position = positions.find(p => p.symbol === symbol);
+                if (position) {
+                    position.currentPrice = price;
+                    position.pnl = calculatePnL(position);
+                    updatePositionsDisplay();
+                }
+            });
+        }
+
+        // Calculate PnL
+        function calculatePnL(position) {
+            const priceDiff = position.currentPrice - position.entryPrice;
+            return position.side === 'BUY' ? priceDiff * position.quantity : -priceDiff * position.quantity;
+        }
+
+        // Update Stats
+        function updateStats() {
+            const totalTrades = trades.length;
+            const winningTrades = trades.filter(t => t.pnl > 0).length;
+            const winRate = totalTrades > 0 ? (winningTrades / totalTrades * 100).toFixed(1) : 0;
+            const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
+
+            document.getElementById('totalTrades').textContent = totalTrades;
+            document.getElementById('winRate').textContent = winRate + '%';
+            document.getElementById('totalPnL').textContent = '$' + totalPnL.toFixed(2);
+            document.getElementById('activePositions').textContent = positions.length;
+        }
+
+        // Update Charts
+        function updateCharts() {
+            // Update PnL chart
+            const pnlHistory = trades.slice(-20).map(t => t.pnl);
+            pnlChart.data.labels = pnlHistory.map((_, i) => `T${i + 1}`);
+            pnlChart.data.datasets[0].data = pnlHistory;
+            pnlChart.update();
+
+            // Update Win Rate chart
+            let cumulativeWinRate = [];
+            let wins = 0;
+            trades.forEach((trade, i) => {
+                if (trade.pnl > 0) wins++;
+                cumulativeWinRate.push((wins / (i + 1)) * 100);
+            });
+
+            winRateChart.data.labels = cumulativeWinRate.map((_, i) => `T${i + 1}`);
+            winRateChart.data.datasets[0].data = cumulativeWinRate;
+            winRateChart.update();
+        }
+
+        // Update Trades Table
+        function updateTradesTable() {
+            try {
+                const tbody = document.getElementById('tradesTable');
+
+                if (trades.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="7" class="text-center py-12">
+                                <div class="flex flex-col items-center justify-center space-y-3">
+                                    <div class="text-6xl">📊</div>
+                                    <div class="text-gray-400 text-lg">Aucun trade pour le moment</div>
+                                    <div class="text-gray-500 text-sm">Le bot de trading analysera le marché et exécutera les premiers trades</div>
+                                    <div class="flex items-center space-x-2 text-xs text-gray-600">
+                                        <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                        <span>En attente de signaux de trading</span>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = trades.map(trade => {
+                    const priceText = (trade.price === null || Number.isNaN(trade.price)) ? '-' : `$${Number(trade.price).toFixed(2)}`;
+                    const qtyText = (trade.quantity === null || Number.isNaN(trade.quantity)) ? '-' : Number(trade.quantity).toFixed(6);
+                    const pnlVal = Number(trade.pnl) || 0;
+                    const typeText = trade.type || trade.side || '-';
+                    const tsText = formatTimestamp(trade.timestamp);
+                    return `
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2">${tsText}</td>
+                        <td class="py-2">${trade.symbol}</td>
+                        <td class="py-2"><span class="px-2 py-1 rounded text-xs ${typeText === 'BUY' ? 'bg-green-600' : typeText === 'SELL' ? 'bg-red-600' : 'bg-slate-600'}">${typeText}</span></td>
+                        <td class="py-2">${priceText}</td>
+                        <td class="py-2">${qtyText}</td>
+                        <td class="py-2 font-bold ${pnlVal > 0 ? 'text-green-400' : 'text-red-400'}">$${pnlVal.toFixed(2)}</td>
+                        <td class="py-2"><span class="px-2 py-1 rounded text-xs ${trade.status === 'CLOSED' ? 'bg-green-600' : 'bg-yellow-600'}">${trade.status}</span></td>
+                    </tr>
+                `;
+                }).join('');
+            } catch (error) {
+                console.error('❌ Error updating trades table:', error);
+            }
+        }
+
+        // Update Positions Display
+        function updatePositionsDisplay() {
+            const grid = document.getElementById('positionsGrid');
+
+            if (positions.length === 0) {
+                grid.innerHTML = `
+                    <div class="text-center py-12 text-gray-400 col-span-3">
+                        <div class="flex flex-col items-center justify-center space-y-3">
+                            <div class="text-6xl">📈</div>
+                            <div class="text-lg">Aucune position active</div>
+                            <div class="text-sm">Le bot n'a pas encore ouvert de positions</div>
+                            <div class="flex items-center space-x-2 text-xs text-gray-600">
+                                <div class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                                <span>En attente d'opportunités</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = positions.map(position => `
+                <div class="glass-effect rounded-lg p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="font-bold">${position.symbol}</h3>
+                        <span class="px-2 py-1 rounded text-xs ${position.side === 'BUY' ? 'bg-green-600' : 'bg-red-600'}">${position.side}</span>
+                    </div>
+                    <div class="text-sm space-y-1">
+                        <div>Entry: $${position.entryPrice.toFixed(4)}</div>
+                        <div>Current: $${position.currentPrice.toFixed(4)}</div>
+                        <div class="font-bold ${position.pnl > 0 ? 'text-green-400' : 'text-red-400'}">PnL: $${position.pnl.toFixed(2)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Fetch Real Trading Data from API
+        async function fetchRealTradingData() {
+            try {
+                // Fetch trades from API (localhost:5000)
+                const tradesResponse = await fetch(`${API_BASE}/api/trades`);
+                const tradesData = await tradesResponse.json();
+
+                if (tradesData.status === 'success') {
+                    trades = (tradesData.data || []).map(t => ({
+                        ...t,
+                        pnl: Number(t.pnl) || 0,
+                        price: t.price === null || t.price === undefined ? null : Number(t.price),
+                        quantity: t.quantity === null || t.quantity === undefined ? null : Number(t.quantity)
+                    }));
+                    updateStats();
+                    updateCharts();
+                    updateTradesTable();
+                }
+
+                // Fetch skipped trades from API
+                const skippedResponse = await fetch(`${API_BASE}/api/skipped-trades`);
+                const skippedData = await skippedResponse.json();
+
+                if (skippedData.status === 'success') {
+                    updateSkippedTradesTable(skippedData.data);
+                }
+
+                // Fetch budget from API
+                const budgetResponse = await fetch(`${API_BASE}/api/budget`);
+                const budgetData = await budgetResponse.json();
+
+                if (budgetData.status === 'success') {
+                    updateBudgetDisplay(budgetData.data);
+                } else {
+                    setBudgetUnavailable();
+                }
+
+                // Fetch positions from API
+                const positionsResponse = await fetch(`${API_BASE}/api/positions`);
+                const positionsData = await positionsResponse.json();
+
+                if (positionsData.status === 'success') {
+                    positions = positionsData.data;
+                    updatePositionsDisplay();
+                }
+
+                // Fetch account info from API
+                const accountResponse = await fetch(`${API_BASE}/api/account`);
+                const accountData = await accountResponse.json();
+
+                if (accountData.status === 'success') {
+                    updateAccountInfo(accountData.data);
+                } else {
+                    setAccountUnavailable();
+                }
+
+            } catch (error) {
+                console.error('❌ Error fetching real data:', error);
+                setAccountUnavailable();
+                setBudgetUnavailable();
+                // No fallback - only real data
+            }
+        }
+
+        // Update account info display
+        function updateAccountInfo(accountData) {
+            try {
+                document.getElementById('totalBalance').textContent = `$${accountData.totalWalletBalance.toFixed(2)}`;
+                document.getElementById('unrealizedPnl').textContent = `$${accountData.totalUnrealizedPnl.toFixed(2)}`;
+                document.getElementById('availableBalance').textContent = `$${accountData.availableBalance.toFixed(2)}`;
+                document.getElementById('marginUsed').textContent = `$${accountData.totalPositionInitialMargin.toFixed(2)}`;
+            } catch (error) {
+                console.error('❌ Error updating account info:', error);
+            }
+        }
+
+        function setAccountUnavailable() {
+            document.getElementById('totalBalance').textContent = 'N/A';
+            document.getElementById('unrealizedPnl').textContent = 'N/A';
+            document.getElementById('availableBalance').textContent = 'N/A';
+            document.getElementById('marginUsed').textContent = 'N/A';
+        }
+
+        // Update budget display
+        function updateBudgetDisplay(budgetData) {
+            try {
+                document.getElementById('budgetTotal').textContent = `$${budgetData.total_balance.toFixed(2)}`;
+                document.getElementById('budgetAvailable').textContent = `$${budgetData.available_balance.toFixed(2)}`;
+                document.getElementById('budgetBuyingPower').textContent = `$${budgetData.buying_power.toFixed(2)}`;
+                document.getElementById('budgetRiskUtil').textContent = `${budgetData.risk_utilization.toFixed(1)}%`;
+                document.getElementById('budgetMarginUsed').textContent = `$${budgetData.margin_used.toFixed(2)}`;
+                document.getElementById('budgetUnrealizedPnl').textContent = `$${budgetData.unrealized_pnl.toFixed(2)}`;
+            } catch (error) {
+                console.error('❌ Error updating budget display:', error);
+            }
+        }
+
+        function setBudgetUnavailable() {
+            document.getElementById('budgetTotal').textContent = 'N/A';
+            document.getElementById('budgetAvailable').textContent = 'N/A';
+            document.getElementById('budgetBuyingPower').textContent = 'N/A';
+            document.getElementById('budgetRiskUtil').textContent = 'N/A';
+            document.getElementById('budgetMarginUsed').textContent = 'N/A';
+            document.getElementById('budgetUnrealizedPnl').textContent = 'N/A';
+        }
+
+        // Format timestamp helper
+        function formatTimestamp(timestamp) {
+            try {
+                if (timestamp === null || timestamp === undefined) return 'N/A';
+
+                // Numeric timestamps (seconds/ms)
+                if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+                    const ts = timestamp < 1000000000000 ? timestamp * 1000 : timestamp;
+                    const d = new Date(ts);
+                    if (Number.isNaN(d.getTime())) return 'N/A';
+                    return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+
+                // Numeric strings
+                if (typeof timestamp === 'string') {
+                    const trimmed = timestamp.trim();
+                    if (/^\d+$/.test(trimmed)) {
+                        const n = Number(trimmed);
+                        const ts = n < 1000000000000 ? n * 1000 : n;
+                        const d = new Date(ts);
+                        if (!Number.isNaN(d.getTime())) {
+                            return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        }
+                    }
+
+                    // ISO datetime (Dynamo)
+                    const d = new Date(trimmed);
+                    if (!Number.isNaN(d.getTime())) {
+                        return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    }
+                }
+
+                return 'N/A';
+            } catch (error) {
+                return 'N/A';
+            }
+        }
+
+        // Update skipped trades table
+        function updateSkippedTradesTable(skippedTrades) {
+            try {
+                const tbody = document.getElementById('skippedTradesTable');
+
+                if (skippedTrades.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-center py-12">
+                                <div class="flex flex-col items-center justify-center space-y-3">
+                                    <div class="text-6xl">⏭️</div>
+                                    <div class="text-gray-400 text-lg">Aucun trade ignoré</div>
+                                    <div class="text-gray-500 text-sm">Le bot n'a pas encore trouvé de raisons d'ignorer des trades</div>
+                                    <div class="flex items-center space-x-2 text-xs text-gray-600">
+                                        <div class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                                        <span>Analyse des signaux en cours</span>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = skippedTrades.map(trade => `
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2">${formatTimestamp(trade.timestamp)}</td>
+                        <td class="py-2">${trade.symbol}</td>
+                        <td class="py-2"><span class="px-2 py-1 rounded text-xs ${trade.type === 'BUY' ? 'bg-green-600' : 'bg-red-600'}">${trade.type}</span></td>
+                        <td class="py-2">${(trade.signal_strength_pct || 0).toFixed(1)}%</td>
+                        <td class="py-2"><span class="px-2 py-1 rounded text-xs bg-yellow-600">${trade.skip_reason || trade.reason}</span></td>
+                        <td class="py-2 text-xs text-gray-400">
+                            BTC: ${trade.btc_trend || 'N/A'} | 
+                            Momentum: ${((trade.momentum_score || 0) * 100).toFixed(1)}%
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                console.error('❌ Error updating skipped trades table:', error);
+            }
+        }
+
+        // Fetch real data every 5 seconds
+        setInterval(fetchRealTradingData, 5000);
+
+
+        // Update last update time
+        function updateLastUpdate() {
+            document.getElementById('lastUpdate').textContent = new Date().toLocaleString();
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function () {
+            connectWebSocket();
+            fetchRealTradingData(); // Use real data instead of simulation
+            updateLastUpdate();
+            setInterval(updateLastUpdate, 1000);
+        });
+    </script>
+</body>
+
+</html>

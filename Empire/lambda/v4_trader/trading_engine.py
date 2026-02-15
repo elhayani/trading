@@ -45,6 +45,8 @@ from risk_manager import RiskManager
 import decision_engine
 from decision_engine import DecisionEngine
 import macro_context
+import claude_analyzer
+from claude_analyzer import ClaudeNewsAnalyzer
 from atomic_persistence import AtomicPersistence
 from anti_spam_helpers import is_in_cooldown, record_trade_timestamp, get_real_binance_positions
 
@@ -342,6 +344,7 @@ class TradingEngine:
         self.risk_manager = RiskManager()
         self.decision_engine = DecisionEngine(risk_manager=self.risk_manager)
         self.news_fetcher = NewsFetcher()
+        self.claude = ClaudeNewsAnalyzer()
         
         # Hydrate RiskManager
         self.risk_manager.load_state(self.persistence.load_risk_state())
@@ -638,6 +641,18 @@ class TradingEngine:
                 logger.warning(f"[SLOT_FULL] {reason}")
                 self.persistence.log_skipped_trade(symbol, reason, asset_class)
                 return {'symbol': symbol, 'status': 'SLOT_FULL', 'reason': reason}
+
+            # 🏛️ EMPIRE V16.7.4: Claude AI Veto (ULTRA FAST)
+            if getattr(TradingConfig, 'USE_CLAUDE_VETO', False):
+                try:
+                    # Fetch minimal history (5 candles) for speed as requested
+                    ohlcv_veto = self.exchange.fetch_ohlcv(symbol, timeframe='1m', limit=5)
+                    if not self.claude.market_veto(symbol, ohlcv_veto, signal_type):
+                        reason = "CLAUDE_VETO: Rejection detected by AI"
+                        self.persistence.log_skipped_trade(symbol, reason, asset_class)
+                        return {'symbol': symbol, 'status': 'VETOED', 'reason': reason}
+                except Exception as veto_err:
+                    logger.error(f"[VETO_ERROR] {veto_err}")
             
             return self._execute_entry(symbol, signal_type, decision, ta_result, asset_class, balance)
             
@@ -679,11 +694,23 @@ class TradingEngine:
         risk_dollars = decision.get('risk_dollars', 0.0)
         
         # Utiliser les TP/SL de analyze_momentum
-        # 🏛️ EMPIRE V16: Recalculer TP/SL basés sur le VRAI prix d'entrée (Anti-Short-Circuit)
-        # On utilise le pourcentage calculé par le scanner (ou 0.25% par défaut)
-        tp_pct = abs(float(ta_result.get('tp_pct', TradingConfig.MIN_TP_PCT * 100))) / 100
-        tp_pct = max(tp_pct, TradingConfig.MIN_TP_PCT) 
-        sl_pct = abs(float(ta_result.get('sl_pct', TradingConfig.SL_MULTIPLIER * 1.5 * (ta_result.get('atr', 0) / real_entry * 100 if real_entry > 0 else 0.5)))) / 100
+        # 🏛️ EMPIRE V16.7.3: Clean TP/SL recalculation (Conflit ATR vs Fixe)
+        atr = float(ta_result.get('atr', 0))
+        
+        # TP: max(ATR * Multiplier, MIN_TP_PCT)
+        tp_dist_atr = atr * TradingConfig.TP_MULTIPLIER
+        tp_dist_min = real_entry * TradingConfig.MIN_TP_PCT
+        final_tp_dist = max(tp_dist_atr, tp_dist_min)
+        tp_pct = final_tp_dist / real_entry
+        
+        # SL: max(ATR * Multiplier, MIN_SL_PCT) - Asymétrie EMPIRE V16.7.5
+        sl_multiplier = TradingConfig.SL_MULTIPLIER if direction == 'LONG' else getattr(TradingConfig, 'SHORT_SL_MULTIPLIER', 0.7)
+        sl_min_pct = TradingConfig.MIN_SL_PCT if direction == 'LONG' else getattr(TradingConfig, 'SHORT_SL_PCT', 0.0030)
+        
+        sl_dist_atr = atr * sl_multiplier
+        sl_dist_min = real_entry * sl_min_pct
+        final_sl_dist = max(sl_dist_atr, sl_dist_min)
+        sl_pct = final_sl_dist / real_entry
         
         # Arrondi selon la précision du marché (Hardware Rules)
         market = self.exchange.get_market_info(symbol)

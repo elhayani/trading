@@ -13,16 +13,20 @@ class TradingConfig:
     LEVERAGE_BASE = 5              # Base leverage (adaptive 2-7)
     MAX_OPEN_TRADES = 3
     MIN_VOLUME_24H = 5_000_000     # $5M minimum
+    ALLOWED_DIRECTIONS = ['LONG', 'SHORT']  # 🏛️ EMPIRE V16.7.4: SHORT re-enabled
     
     # 🏛️ EMPIRE V16.1: Filtres anti-pertes (frais de transaction)
     MIN_NOTIONAL_VALUE = 300      # $300 minimum par trade (Optimisé pour la balance réelle)
-    MIN_TP_PCT = 0.0025            # TP minimum 0.25% (Objectif net)
-    FAST_EXIT_MINUTES = 3          # 3 minutes (Délai de stagnation)
-    FAST_EXIT_PNL_THRESHOLD = 0.0002 # Sortie si stagnant au-dessus de +0.02% (couvre frais BNB)
+    MIN_TP_PCT = 0.0035            # TP 0.35% (Floor)
+    MIN_SL_PCT = 0.0045            # SL 0.45% (Floor for LONG)
+    SHORT_SL_PCT = 0.0030          # 📉 EMPIRE V16.7.5: SL plus serré pour le short
+    FAST_EXIT_MINUTES = 2          # ⏱️ Un short/stagnation doit sortir plus vite
+    FAST_EXIT_PNL_THRESHOLD = 0.0001
     
-    # TP/SL Dynamic (ATR-based)
-    TP_MULTIPLIER = 2.0            # TP = 2 × ATR_1min
-    SL_MULTIPLIER = 1.0            # SL = 1 × ATR_1min
+    TP_MULTIPLIER = 1.0            # TP = 1 × ATR_1min
+    SL_MULTIPLIER = 1.0            # Respiration du prix (LONG)
+    SHORT_SL_MULTIPLIER = 0.7      # 📉 Sortie rapide sur rebond technique (Short)
+    MAX_POSITION_SIZE_USDT = 2500  # 🏛️ EMPIRE V16.7.3: Max 25% of 10k budget
     MAX_HOLD_CANDLES = 10          # Force exit after 10 minutes
     MAX_HOLD_MINUTES = 10          # Explicit time limit
     FORCE_EXIT_AFTER_CANDLES = 10  # Same as MAX_HOLD_CANDLES
@@ -31,7 +35,7 @@ class TradingConfig:
     EMA_FAST = 5
     EMA_SLOW = 13
     VOLUME_SURGE_RATIO = 1.5
-    MIN_MOMENTUM_SCORE = 60
+    MIN_MOMENTUM_SCORE = 80         # Plus sélectif (VETO protection)
     MIN_ATR_PCT_1MIN = 0.25
     
     # Session Boost
@@ -47,6 +51,12 @@ class TradingConfig:
     MAX_LOSS_PER_TRADE_PCT = 2.0  # Jamais plus de 2% du capital sur un seul trade
     COMMISSION_RATE = 0.001  # 0.1% per leg
     SLIPPAGE_BUFFER = 0.001  # 0.1% slippage
+    
+    # 🏛️ EMPIRE V16.7.7: News Blackout Rules
+    # Philosophy: Avoid slippage and HFT shockwaves (High Impact Only)
+    NEWS_PAUSE_MINUTES_BEFORE = 5  # Stop entries 5min before
+    NEWS_PAUSE_MINUTES_AFTER = 10  # Resume entries 10min after
+    DISABLE_DURING_HIGH_IMPACT = True
     
     # ================================================================
     # V16.0 MOMENTUM SCALPING - 1 MINUTE PURE MOMENTUM
@@ -107,13 +117,23 @@ class TradingConfig:
     # V16.0 MOMENTUM SCALPING TARGETS
     # ================================================================
     TARGET_DAILY_RETURN = 0.01      # +1% per day
-    TARGET_TRADES_PER_DAY = 50      # 40-70 range (median)
-    TARGET_WIN_RATE = 0.58          # 58% win rate
+    TARGET_TRADES_PER_DAY = 15      # Quality over Quantity (Recommended)
+    TARGET_WIN_RATE = 0.65          # Target > 65% (Recommended)
     TARGET_AVG_HOLD_TIME = 5        # 5 minutes average
     
     # Legacy compatibility
     LEVERAGE = LEVERAGE_BASE         # Alias for existing code
     
+    # --- BTC Compass Configuration ---
+    BTC_COMPASS_ENABLED = True
+    BTC_TREND_THRESHOLD = 0.001  # Sensibilité BTC accrue
+    BTC_DIRECTION_LOCK = True   # Bloquer trades contre tendance BTC
+    BTC_CORRELATION_MIN = 0.60  # Corrélation minimum avec BTC
+    USE_CLAUDE_VETO = True      # 🔥 EMPIRE V16.7.4: Claude AI Decision Veto
+
+    # --- Safety & Kill Switch ---
+    EMERGENCY_STOP = os.getenv('EMERGENCY_STOP', 'false').lower() == 'true'
+
     # Breakeven win rate
     BREAKEVEN_WIN_RATE = 0.52       # 52% needed for profitability
 

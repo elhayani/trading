@@ -549,9 +549,11 @@ def analyze_market(ohlcv_1min: List, symbol: str = "TEST", asset_class: AssetCla
     if signal == 'LONG':
         tp_price = close_current + (atr_current * TradingConfig.TP_MULTIPLIER)
         sl_price = close_current - (atr_current * TradingConfig.SL_MULTIPLIER)
+        sl_mult = TradingConfig.SL_MULTIPLIER
     else:  # SHORT
         tp_price = close_current - (atr_current * TradingConfig.TP_MULTIPLIER)
-        sl_price = close_current + (atr_current * TradingConfig.SL_MULTIPLIER)
+        sl_mult = getattr(TradingConfig, 'SHORT_SL_MULTIPLIER', 0.7)
+        sl_price = close_current + (atr_current * sl_mult)
     
     # 8. Retourner le résultat
     return {
@@ -563,7 +565,7 @@ def analyze_market(ohlcv_1min: List, symbol: str = "TEST", asset_class: AssetCla
         'tp_price': float(tp_price),
         'sl_price': float(sl_price),
         'tp_pct': atr_pct * TradingConfig.TP_MULTIPLIER,
-        'sl_pct': atr_pct * TradingConfig.SL_MULTIPLIER,
+        'sl_pct': atr_pct * sl_mult,
         'volume_ratio': volume_ratio,
         'ema_fast': float(ema_fast_current),
         'ema_slow': float(ema_slow_current),

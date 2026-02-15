@@ -31,6 +31,9 @@ class DecisionEngine:
         history_context: Optional[Dict] = None,
         intended_direction: Optional[str] = None
     ) -> Tuple[bool, str, float]:
+        if context.get('is_news_blackout'):
+            return False, f"NEWS_BLACKOUT: {context.get('news_reason', 'Major Event')}", 0.0
+
         if not context.get('can_trade', True):
             return False, "MACRO_STOP", 0.0
 
@@ -50,12 +53,15 @@ class DecisionEngine:
         
         # Momentum: Pas besoin de filtre macro_regime - trop lent pour du 1min
         
-        # Vérification score minimum pour momentum
+        # Vérification score minimum avec asymétrie SHORT (EMPIRE V16.7.5)
         score = ta_result.get('score', 0)
         min_score = TradingConfig.MIN_MOMENTUM_SCORE
         
+        if intended_direction == 'SHORT':
+            min_score = max(min_score, 85)
+            
         if score < min_score:
-            return False, f"LOW_MOMENTUM_SCORE_{score} (Min={min_score})", 0.0
+            return False, f"LOW_MOMENTUM_SCORE_{score} (Min={min_score} for {intended_direction})", 0.0
 
         # Corridor check removed - module doesn't exist
         # All markets considered open for trading

@@ -452,13 +452,28 @@ def check_and_close_position(
             pnl_pct = ((current_price - entry_price) / entry_price) * 100
         else:  # SHORT
             pnl_pct = ((entry_price - current_price) / entry_price) * 100
+            
+        # 🏛️ EMPIRE V16.7: Hard Leveraged Targets
+        # Close if Leveraged PnL >= 1.0% (Profit target)
+        # Close if Leveraged PnL <= -2.5% (Max loss target)
+        leverage = float(position.get('leverage', 5))
+        leveraged_pnl = pnl_pct * leverage
         
-        # Check TP hit
+        target_hit = False
+        if leveraged_pnl >= 1.75:
+            logger.info(f"💰 {symbol} - TARGET PnL HIT: {leveraged_pnl:.2f}% (Limit: 1.75%)")
+            target_hit = True
+        elif leveraged_pnl <= -2.25:
+            logger.warning(f"🚨 {symbol} - MAX LOSS HIT: {leveraged_pnl:.2f}% (Limit: -2.25%)")
+            target_hit = True
+
+        # Check TP hit (Standard ATR/Static)
         tp_hit = False
-        if direction == 'LONG' and current_price >= take_profit:
-            tp_hit = True
-        elif direction == 'SHORT' and current_price <= take_profit:
-            tp_hit = True
+        if not target_hit:
+            if direction == 'LONG' and current_price >= take_profit:
+                tp_hit = True
+            elif direction == 'SHORT' and current_price <= take_profit:
+                tp_hit = True
         
         # Check SL hit
         sl_hit = False
@@ -488,11 +503,18 @@ def check_and_close_position(
                  logger.error(f"[ERROR] Emergency check failed: {e}")
 
         # Close if either hit
-        if tp_hit or sl_hit or anti_trend_hit:
-            exit_reason = 'TP_HIT' if tp_hit else ('SL_HIT' if sl_hit else 'ANTI_TREND_BLOCK')
+        if tp_hit or sl_hit or anti_trend_hit or target_hit:
+            exit_reason = 'TARGET_EXIT' if target_hit else ('TP_HIT' if tp_hit else ('SL_HIT' if sl_hit else 'ANTI_TREND_BLOCK'))
             
             logger.info(f"🎯 {symbol} - {exit_reason} at ${current_price:.4f} ({pnl_pct:+.2f}%)")
             
+            # 🏛️ EMPIRE V16.7.2: Cancel pending TP/SL orders FIRST to avoid ReduceOnly conflicts
+            try:
+                exchange.cancel_all_orders(symbol)
+                logger.info(f"🧹 {symbol} - Pending orders cancelled before market close")
+            except Exception as e:
+                logger.warning(f"⚠️ {symbol} - Failed to cancel orders: {e}")
+
             # Execute close order using exchange directly (FAST)
             try:
                 risk = _get_position_risk(exchange, symbol)
@@ -527,6 +549,7 @@ def check_and_close_position(
                     return None
                 if 'Position not found' in msg or 'position not found' in msg:
                     logger.info(f"ℹ️ {symbol} - Skip close: position not found on exchange")
+                    cleanup_ghost_position(symbol, position) # Cleanup as it's not on exchange
                     return None
                 logger.error(f"[ERROR] Order execution failed: {e}")
                 raise
@@ -693,52 +716,27 @@ def update_position_status(
 
 def lambda_handler(event, context):
     """
-    CLOSER LAMBDA - TP/SL/Timeout Logic
-    PURE CLOSING - NO scanning, NO opening positions
+    EMPIRE V16.7.6: Persistent Closer Loop
+    Runs for 13 minutes, executing a check every 7 seconds.
     """
-    
-    # Identify which lambda this is (20s or 40s)
-    lambda_role = 'CLOSER_30S'  # Fixed value to avoid os import issue
-    
-    # ⏱️ STAGGER LOGIC (Architecture 3-Lambda)
-    # EventBridge Scheduler may pass delay_seconds (legacy) or offset_seconds (sub-minute loop)
-    delay_seconds = event.get('delay_seconds', 0)
-    if delay_seconds > 0 and not event.get('manual'):
-        logger.info(f"⏱️ Scheduled execution with {delay_seconds}s delay from EventBridge")
-
-    offset_seconds = event.get('offset_seconds')
-    if isinstance(offset_seconds, int):
-        offset_seconds = [offset_seconds]
-    if not isinstance(offset_seconds, list):
-        offset_seconds = []
-
+    lambda_role = 'CLOSER_PERSISTENT'
     start_time = time.time()
     logger.info("=" * 60)
-    logger.info(f"⚡ {lambda_role} Started")
+    logger.info(f"🚀 {lambda_role} Starting 13-minute session")
     logger.info("=" * 60)
     
-    phases = {}
-    
     try:
-        # Phase 1: INIT
+        # Phase 1: INIT - Common for all cycles
         p1_start = time.time()
         creds = load_binance_credentials()
         live_mode = bool(getattr(TradingConfig, 'LIVE_MODE', False))
         demo_mode = not live_mode
-
-        listen_key = None
-        try:
-            ws_mgr = BinanceWebSocketManager(demo_mode=demo_mode)
-            listen_key = ws_mgr.create_listen_key(api_key=creds['api_key'])
-        except Exception as e:
-            logger.warning(f"[WS] listenKey unavailable, continuing without user stream: {e}")
 
         exchange = ExchangeConnector(
             api_key=creds['api_key'],
             secret=creds['secret_key'],
             live_mode=live_mode
         )
-        phases['init'] = round(time.time() - p1_start, 3)
         
         def remaining_ms() -> int:
             try:
@@ -746,32 +744,53 @@ def lambda_handler(event, context):
             except Exception:
                 return 0
 
-        def run_single_pass(offset: Optional[int] = None) -> Dict:
-            p2_start = time.time()
+        persistent_duration_min = 13
+        tick_interval_seconds = 7
+        session_start = time.time()
+        
+        total_closed = 0
+        cycle_count = 0
+        
+        while True:
+            cycle_start = time.time()
+            cycle_count += 1
             
-            # 🏛️ EMPIRE V16.5: Binance-First Mode
-            # Source of truth is the exchange, not DynamoDB
+            # 🏛️ EMPIRE V16.7.7: Vigilance "Zombie Loop" & Time Tracking
+            rem = remaining_ms()
+            elapsed_total = cycle_start - session_start
+            
+            # Security: Log remainig time frequently
+            if cycle_count % 5 == 1:
+                logger.info(f"🌀 CYCLE {cycle_count} STARTING (Remaining: {rem/1000:.1f}s, Elapsed Session: {elapsed_total:.1f}s)")
+            
+            # Check if we should stop (Safety: 15s margin)
+            if elapsed_total > (persistent_duration_min * 60) - 15:
+                logger.info(f"🏁 Session time limit reached ({elapsed_total:.1f}s). Finishing.")
+                break
+                
+            if rem < 12000: # 12s safety
+                logger.warning(f"⚠️ Low visibility on Lambda time ({rem}ms). Closing session to avoid hard timeout.")
+                break
+
+            # ⚙️ Execute logic
             try:
-                # 1. Fetch REAL active positions from Binance
+                # 1. Source of Truth: Binance
                 live_positions = exchange.exchange.fapiPrivateV2GetPositionRisk()
                 active_on_exchange = {}
                 for p in live_positions:
                     amt = float(p.get('positionAmt', 0))
                     if abs(amt) > 0:
                         symbol = p['symbol']
-                        # Standardize to CCXT-like format for our internal logic
                         if symbol.endswith('USDT'):
                             ccxt_symbol = f"{symbol[:-4]}/USDT:USDT"
                         else:
                             ccxt_symbol = symbol
-                        
                         active_on_exchange[ccxt_symbol] = p
                 
-                # 2. Fetch DynamoDB metadata
                 persistence = get_persistence()
                 memory_positions = persistence.load_positions()
                 
-                # 3. Sync & Update
+                # Sync & Cleanup
                 final_positions = {}
                 for sym, binance_data in active_on_exchange.items():
                     if sym in memory_positions:
@@ -780,160 +799,72 @@ def lambda_handler(event, context):
                         pos['entry_price'] = float(binance_data['entryPrice'])
                         final_positions[sym] = pos
                     else:
+                        # Orphan
                         logger.warning(f"🚨 ORPHAN SYNC: {sym} found on Binance. Mocking SL/TP...")
                         entry = float(binance_data['entryPrice'])
                         side = 'LONG' if float(binance_data['positionAmt']) > 0 else 'SHORT'
-                        
-                        if side == 'LONG':
-                            tp = entry * (1 + TradingConfig.MIN_TP_PCT)
-                            sl = entry * (1 - 0.005)
-                        else:
-                            tp = entry * (1 - TradingConfig.MIN_TP_PCT)
-                            sl = entry * (1 + 0.005)
-                            
+                        tp = entry * (1 + TradingConfig.MIN_TP_PCT) if side == 'LONG' else entry * (1 - TradingConfig.MIN_TP_PCT)
+                        sl = entry * (1 - 0.004) if side == 'LONG' else entry * (1 + 0.004)
                         orphan_pos = {
                             'trade_id': f"ORPHAN-{int(time.time())}",
-                            'symbol': sym,
-                            'status': 'OPEN',
-                            'entry_price': entry,
-                            'quantity': abs(float(binance_data['positionAmt'])),
-                            'direction': side,
-                            'take_profit': tp,
-                            'stop_loss': sl,
-                            'leverage': int(binance_data.get('leverage', 5)),
-                            'asset_class': 'Crypto',
-                            'timestamp': datetime.now(timezone.utc).isoformat(),
-                            'entry_time': datetime.now(timezone.utc).isoformat(),
-                            'notes': 'Automatically Registered Orphan (Binance-First)'
+                            'symbol': sym, 'status': 'OPEN', 'entry_price': entry,
+                            'quantity': abs(float(binance_data['positionAmt'])), 'direction': side,
+                            'take_profit': tp, 'stop_loss': sl, 'leverage': int(binance_data.get('leverage', 5)),
+                            'timestamp': datetime.now(timezone.utc).isoformat()
                         }
                         persistence.save_position(sym, orphan_pos)
                         final_positions[sym] = orphan_pos
 
-                # 4. GHOST CLEANUP
                 for sym in memory_positions:
                     if sym not in active_on_exchange:
-                        logger.info(f"ℹ️ GHOST DETECTED: {sym} cleaned from DynamoDB")
                         persistence.delete_position(sym)
 
+                # 2. Check each position
+                if final_positions:
+                    # 🏛️ EMPIRE V16.7.7: Global News Blackout Protection
+                    import macro_context
+                    macro = macro_context.get_macro_context()
+                    is_blackout = macro.get('is_news_blackout', False)
+                    
+                    mark_prices = fetch_mark_prices_snapshot(demo_mode=demo_mode)
+                    for symbol, position in final_positions.items():
+                        # Safety: skip if time is critical
+                        if remaining_ms() < 3000:
+                            break
+                            
+                        current_price_override = None
+                        if mark_prices:
+                            lookup = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
+                            current_price_override = mark_prices.get(lookup)
+
+                        # Logic: If news blackout, force exit immediately
+                        if is_blackout:
+                            logger.warning(f"🛑 NEWS BLACKOUT EXIT: Closing {symbol} - {macro.get('news_reason')}")
+                            result = exchange.close_position(symbol, position)
+                            if result:
+                                total_closed += 1
+                                persistence.delete_position(symbol)
+                            continue
+
+                        result = check_and_close_position(exchange, symbol, position, current_price_override=current_price_override)
+                        if result and result.get('action') == 'CLOSED':
+                            total_closed += 1
+                            logger.info(f"✅ Closed: {symbol} ({result.get('reason')})")
+
             except Exception as e:
-                logger.error(f"❌同步错误 (Binance-First): {e}")
-                final_positions = get_memory_open_positions()
+                # Global cycle try/except for recovery
+                logger.error(f"⚠️ CYCLE {cycle_count} RECOVERED FROM ERROR: {e}", exc_info=True)
 
-            p2_dur = round(time.time() - p2_start, 3)
-            
-            if not final_positions:
-                return {
-                    'positions_checked': 0,
-                    'positions_closed': 0,
-                    'closed_details': [],
-                    'phases': {'load_positions': p2_dur, 'check_and_close': 0.0}
-                }
+            # Sleep
+            elapsed_cycle = time.time() - cycle_start
+            wait_time = max(0.1, tick_interval_seconds - elapsed_cycle)
+            time.sleep(wait_time)
 
-            # Phase 3: Check and Close
-            p3_start = time.time()
-            mark_prices = fetch_mark_prices_snapshot(demo_mode=demo_mode)
-            closed_positions = []
-            
-            for symbol, position in final_positions.items():
-                if remaining_ms() and remaining_ms() < 1000:
-                    break
-                
-                current_price_override = None
-                if mark_prices:
-                    lookup = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
-                    current_price_override = mark_prices.get(lookup)
-
-                result = check_and_close_position(
-                    exchange, symbol, position, 
-                    current_price_override=current_price_override
-                )
-                if result and result.get('action') == 'CLOSED':
-                    closed_positions.append(result)
-            
-            p3_dur = round(time.time() - p3_start, 3)
-            return {
-                'positions_checked': len(final_positions),
-                'positions_closed': len(closed_positions),
-                'closed_details': closed_positions,
-                'phases': {'load_positions': p2_dur, 'check_and_close': p3_dur}
-            }
-
-        ticks_executed = []
-        aggregated_closed = []
-        aggregated_checked = 0
-
-        # Manual invocations or single_pass should do a single pass (no sub-minute loop)
-        if event.get('manual') or event.get('single_pass') or not offset_seconds:
-            single = run_single_pass()
-            phases.update(single.get('phases', {}))
-            aggregated_checked = single['positions_checked']
-            aggregated_closed.extend(single['closed_details'])
-            ticks_executed.append({'offset_s': None, 'closed': single['positions_closed']})
-        else:
-            offsets_clean = set()
-            for x in offset_seconds:
-                try:
-                    offsets_clean.add(int(float(x)))
-                except Exception:
-                    continue
-            offsets_sorted = sorted(offsets_clean)
-            for target_offset in offsets_sorted:
-                if remaining_ms() and remaining_ms() < 2000:
-                    logger.warning("⏳ Timeout guard: stopping tick loop (low remaining time)")
-                    break
-
-                now = datetime.now(timezone.utc)
-                current_offset = now.second + (now.microsecond / 1_000_000)
-                sleep_s = float(target_offset) - float(current_offset)
-                if sleep_s > 0:
-                    if remaining_ms() and remaining_ms() < int((sleep_s * 1000) + 2500):
-                        logger.warning("⏳ Timeout guard: skipping sleep (not enough remaining time)")
-                        break
-                    time.sleep(sleep_s)
-
-                if remaining_ms() and remaining_ms() < 2000:
-                    logger.warning("⏳ Timeout guard: stopping before running tick (low remaining time)")
-                    break
-
-                logger.info(f"⏱️ Tick at offset {target_offset:02d}s")
-                single = run_single_pass()
-                aggregated_checked = max(aggregated_checked, single['positions_checked'])
-                aggregated_closed.extend(single['closed_details'])
-                ticks_executed.append({'offset_s': int(target_offset), 'closed': single['positions_closed']})
-
-                # Optimization: if there are no open positions, do not keep sleeping for remaining offsets
-                if single.get('positions_checked', 0) == 0:
-                    logger.info("ℹ️ No open positions after tick - exiting remaining offsets")
-                    break
-
-        duration = time.time() - start_time
-        response = {
-            'lambda': lambda_role,
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'duration_seconds': round(duration, 2),
-            'phases': phases,
-            'ticks': ticks_executed,
-            'positions_checked': aggregated_checked,
-            'positions_closed': len(aggregated_closed),
-            'closed_details': aggregated_closed
-        }
-        
-        logger.info("=" * 60)
-        logger.info(f"✅ {lambda_role} Complete: {len(aggregated_closed)} closed")
-        logger.info(f"⏱️  Total Duration: {duration:.2f}s | Check: {phases.get('check_and_close', 0.0)}s")
-        logger.info("=" * 60)
-        
         return {
             'statusCode': 200,
-            'body': json.dumps(response)
+            'body': json.dumps({'status': 'SESSION_COMPLETE', 'cycles': cycle_count, 'closed': total_closed})
         }
         
     except Exception as e:
-        logger.error(f"❌ {lambda_role} FATAL ERROR: {e}", exc_info=True)
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': str(e),
-                'lambda': lambda_role
-            })
-        }
+        logger.error(f"❌ FATAL: {e}", exc_info=True)
+        return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}

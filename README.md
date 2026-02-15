@@ -1,212 +1,114 @@
-# 🏛️ Empire V10.9 — Sniper Agile Mode
+# 🏛️ Empire V16.7.8 — Ensemble Selection & News Blackout
 
-> **Système de trading multi-actifs unifié** : architecture V10 ultra-réactive. Une seule Lambda AWS traite les actifs majeurs avec une précision chirurgicale, une gestion des secrets sécurisée et une analyse technique hautement descriptive.
+> **Système de trading HFT haute performance** : Architecture V16.7.8 conçue pour une réactivité maximale, intégrant un arbitrage par IA (Claude 3 Haiku) et une protection contre les chocs de volatilité macro-économique.
 
 ## 🎯 Statut Production
 
 ```
-✅ DÉPLOYÉ EN PRODUCTION AWS (eu-west-3)
-📅 Dernière MAJ : 2026-02-10 (Audit #V10.9)
+✅ DÉPLOYÉ EN PRODUCTION AWS (ap-northeast-1 — Tokyo)
+📅 Dernière MAJ : 2026-02-15 (Audit #V16.7.8)
 💰 Mode : LIVE (Binance USD-M Futures)
-🏛️ Architecture : V10 Hybrid Sniper
-⏰ Smart Scheduling : 4 règles CRON adaptatives
-🎯 Actifs : 5 (BTC, ETH, SOL, PAXG, SPX)
+🏛️ Architecture : V16.7.8 persistent Ensemble Selection
+⏰ Smart Scheduling : Sessions persistantes de 13 min (Ticks 60s)
+🎯 Actifs : Scan dynamique de ~150 actifs (> $5M vol 24h)
 ```
 
 ---
 
-## 🎯 Actifs Actifs (Sniper Mode)
+## 🏗️ Architecture V16.7.8 — "The Ensemble"
 
-| Classe | Symbole | Description |
-|--------|---------|-------------|
-| **Crypto** | `BTCUSDT` | Bitcoin — Le Roi 👑 |
-| **Crypto** | `ETHUSDT` | Ethereum — Alt-leader 💎 |
-| **Crypto** | `SOLUSDT` | Solana — Turbo Mode ⚡ |
-| **Commodities** | `PAXGUSDT` | Or (via PAX Gold) 🥇 |
-| **Indices** | `SPXUSDT` | S&P 500 📈 |
-
----
-
-## 🏗️ Architecture V7 — Super-Lambda
+Le système fonctionne désormais sur un modèle de **sélection par consensus** entre indicateurs techniques et arbitrage IA qualitatif.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                   AWS CLOUD (eu-west-3)                       │
+│                  AWS CLOUD (ap-northeast-1)                   │
 │                                                               │
-│  [EventBridge — Smart Scheduling]                             │
-│   ├── 🌙 ECO      (00h-06h Paris) → every 20 min             │
-│   ├── 📊 STD AM   (06h-14h Paris) → every 5 min              │
-│   ├── 🔥 TURBO    (14h-16h Paris) → every 1 min              │
-│   └── 📊 STD PM   (16h-00h Paris) → every 5 min              │
+│  [EventBridge — 13m Persistent Invocations]                   │
 │          │                                                    │
 │          ▼                                                    │
-│  [🏛️ V4HybridLiveTrader — Super-Lambda]                      │
-│   └── Boucle séquentielle :                                   │
-│       BTC → ETH → SOL → PAXG → SPX                            │
-│          │                                                    │
-│          ├── 🧠 micro_corridors.py   (Paramètres adaptatifs)  │
-│          ├── 📊 market_analysis.py   (RSI, EMA, SMA200)       │
-│          ├── 🌍 macro_context.py     (DXY, VIX, Yields)       │
-│          ├── 📰 news_fetcher.py      (Yahoo Finance News)     │
-│          └── 🤖 AWS Bedrock (Claude) (Devil's Advocate AI)    │
+│  [🚀 Lambda 1 : Scanner (Session 13 min / Tick 1 min)]        │
+│   ├── 1. 🔍 Scan ultra-rapide (~150 actifs filtrés)           │
+│   ├── 2. 🏆 Calcul "Elite Score" (Momentum, ATR, Vol Surge)    │
+│   ├── 3. 🧠 Arbitrage IA (Claude 3 Haiku)                     │
+│   │    └── Sélection des "Meilleurs parmi les Elites"         │
+│   └── 4. 📰 News Blackout Check (ForexFactory RSS)            │
 │          │                                                    │
 │          ▼                                                    │
-│  [DynamoDB: EmpireTradesHistory]  ←→  [EmpireDashboard]       │
+│  [🛡️ Lambda 2 : Closer (Tick 7s / Protection Choc)]          │
+│   ├── 1. ✅ Exit Management (TP/SL adaptatifs ATR)            │
+│   └── 2. 🛑 News shockwave closure (Vente forcée avant news)  │
 │                                                               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Smart Scheduling (4 CRON Rules)
+---
 
-| Règle | Heures (Paris) | Intervalle | Raison |
-|-------|----------------|------------|--------|
-| 🌙 **ECO** | 00h → 06h | 20 min | Marchés calmes, économie de ressources |
-| 📊 **Standard AM** | 06h → 14h | 5 min | Europe active, volatilité moyenne |
-| 🔥 **Turbo** | 14h → 16h | **1 min** | US Open — volatilité maximale |
-| 📊 **Standard PM** | 16h → 00h | 5 min | Wall Street actif, fin de journée |
+## 🛡️ Les 3 Piliers de Sécurité V16.7.8
+
+Chaque trade doit passer par un entonnoir de sécurité à trois niveaux :
+
+### 1. News Blackout Rule (La Règle d'Or)
+Le bot surveille en temps réel le calendrier économique mondial (RSS ForexFactory).
+- **Entrées bloquées** : 5 minutes avant et 10 minutes après toute news `High Impact`.
+- **Sortie forcée** : Toutes les positions ouvertes sont fermées immédiatement avant une news majeure via le **Closer**.
+
+### 2. Ensemble Selection (Arbitrage IA)
+Au lieu de prendre n'importe quel signal technique, le Scanner présente un "Dashboard Élite" à **Claude 3 Haiku**.
+- **Analyse de structure** : Haiku rejette les bougies verticales isolées (risk of flash-crash).
+- **Sanity Check** : Vérification de la cohérence RSI et diversification du portefeuille.
+
+### 3. Zombie Loop & Persistent Sessions
+- **Cold-start elimination** : Sessions de 13 minutes conservant les connexions d'échange actives.
+- **Time Remaining Guard** : Monitoring constant du temps Lambda (fermeture propre à T-65s).
 
 ---
 
-## 🛡️ Filtres de Sécurité (Pipeline)
-
-Chaque actif passe par **9 filtres** avant exécution :
-
-```
-1. ✅ Exit Management (SL/TP/Trailing)
-2. ✅ Circuit Breaker (BTC -5%/-10%/-20%)
-3. ✅ BTC Crash Filter (-8% horaire)
-4. ✅ Max Exposure (2 positions max)
-5. ✅ Cooldown (4h entre trades)
-6. ✅ VIX Filter (blocage si VIX > 30)
-7. ✅ Volume Confirmation (adaptatif par classe)
-8. ✅ Multi-Timeframe (1h + 4h RSI)
-9. ✅ AI Devil's Advocate (Bedrock Claude)
-```
-
-### Volume Adaptatif V7
-
-| Classe | Seuil Volume | Ratio vs Crypto |
-|--------|-------------|-----------------|
-| Crypto | 1.2x | Référence |
-| Forex | 0.6x | /2x |
-| Indices | 0.24x | /5x |
-| Commodities | 0.12x | /10x |
-
----
-
-## 📁 Structure du Projet
-
-```
-Trading/
-├── 🏛️ Empire/                        ← Moteur de Trading Unifié
-│   ├── lambda/v4_trader/
-│   │   ├── v4_hybrid_lambda.py       ← Super-Lambda (8 actifs)
-│   │   ├── exchange_connector.py     ← Connexion Binance (ccxt)
-│   │   ├── market_analysis.py        ← RSI, indicateurs techniques
-│   │   ├── micro_corridors.py        ← Paramètres par actif/heure
-│   │   ├── macro_context.py          ← DXY, VIX, US10Y
-│   │   ├── news_fetcher.py           ← Actualités marché
-│   │   └── reporter.py               ← Rapports SNS
-│   ├── infrastructure/cdk/           ← Stack AWS (CDK)
-│   └── scripts/deploy.sh             ← Déploiement one-click
-│
-├── 📊 EmpireDashboard/               ← Dashboard Web (S3 + API)
-│   ├── frontend/                     ← HTML/JS (sous-onglets par classe)
-│   └── lambda/                       ← API Lambda
-│
-├── README.md                         ← Ce fichier
-├── QUICK_START.md
-├── CHANGELOG.md
-└── V7_OPTIMIZATIONS.md
-```
-
----
-
-## 🚀 Déploiement
-
-### Pré-requis
-
-```bash
-aws configure          # AWS CLI configuré (eu-west-3)
-python3 --version      # Python 3.12+
-npm install -g aws-cdk # CDK CLI
-```
-
-### Déployer la Super-Lambda
-
-```bash
-cd /Users/zakaria/Trading/Empire && bash scripts/deploy.sh
-```
-
-### Vérification
-
-```bash
-# Test manuel de la Lambda
-aws lambda invoke \
-  --function-name V4HybridLiveTrader \
-  --payload '{"manual": true}' \
-  --cli-binary-format raw-in-base64-out \
-  --region eu-west-3 \
-  /tmp/response.json && cat /tmp/response.json
-
-# Logs en temps réel
-aws logs tail /aws/lambda/V4HybridLiveTrader --follow --region eu-west-3
-
-# Vérifier les CRON rules
-aws events list-rules --region eu-west-3
-```
-
----
-
-## 📊 Stacks AWS Actives
-
-| Stack | Ressources | Status |
-|-------|-----------|--------|
-| `V4TradingStack` | Lambda + 4 CRON + DynamoDB + SNS | ✅ Active |
-| `EmpireDashboardStack` | API Lambda + S3 Frontend | ✅ Active |
-| `CDKToolkit` | Bootstrap CDK | ✅ Active |
-
----
-
-## ⚙️ Configuration Trading
+## ⚙️ Configuration Trading Elite
 
 | Paramètre | Valeur | Description |
 |-----------|--------|-------------|
-| Capital/Trade | $200 | Par position |
-| Max Exposure | 2 | Positions simultanées |
-| Cooldown | 4h | Entre 2 trades même actif |
-| Stop Loss | -3.5% | Protection capital |
-| Take Profit | +8.0% | R/R = 1:2.3 |
-| RSI Buy | **< 35.0** | **V10 Sniper Limit** |
-| RSI Sell | > 78 | Confirmation sortie trailing |
-| VIX Max | 35 | Blocage total au-dessus |
-| Circuit Breaker | -5% / -10% / -20% | L1/L2/L3 BTC |
+| **Région** | ap-northeast-1 | Tokyo (Faible latence Binance) |
+| **Max Open Trades** | 5 | Concentration sur la qualité |
+| **Min Volume 24h** | $5,000,000 | Filtre anti-shitcoins |
+| **TP Multiplier** | 2.5x ATR | Objectif profit dynamique |
+| **SL Multiplier** | 1.8x ATR | Stop Loss adaptatif volatilité |
+| **Min TP Pct** | 0.25% | Seuil de rentabilité scalping |
+| **Blackout News** | -5min / +10min | Protection chocs économiques |
 
 ---
 
-## 📈 Historique des Versions
+## 📈 Historique des Versions (Récents)
 
 | Version | Date | Changement |
 |---------|------|-----------|
-| **V10.9** | 2026-02-10 | 🎯 Sniper Agile : Fix Binance Futures, RSI 35, Skip logs descriptifs |
-| V9.0 | 2026-02-10 | 🏛️ Super-Lambda unifiée, Architecture Level 4, Fail-safe |
-| V6.2 | 2026-02-08 | Fix P&L reporting |
-| V6.1 | 2026-02-08 | Maximum Performance (R/R optimisés) |
-| V6.0 | 2026-02-07 | Trailing Stop universel |
-| V5.1 | 2026-01-15 | Fortress Edition (sécurité) |
-| V5.0 | 2025-12-20 | Bedrock AI Integration |
+| **V16.7.8** | 2026-02-15 | 🧠 **Ensemble Selection** : Arbitrage batch via Haiku. Dashboard Élite. |
+| **V16.7.7** | 2026-02-15 | 🛑 **News Blackout Exit** : Closer ferme tout avant news High Impact. |
+| **V16.7.6** | 2026-02-15 | 🌀 **Zombie Loop Protection** : Session 13 min avec monitoring "Time Remaining". |
+| V16.0 | 2026-02-14 | 🎌 Migration Tokyo & Refonte HFT (Ticks 1 min). |
+| V10.9 | 2026-02-10 | 🎯 Sniper Agile : Fix Binance Futures, RSI 35. |
+
+---
+
+## 🚀 Déploiement & Outils
+
+```bash
+# Déploiement CDK (Tokyo)
+cd infrastructure/cdk && cdk deploy V4TradingStack --app "python3 app.py"
+
+# Logs Scanner (Persistent)
+aws logs tail /aws/lambda/Lambda1Scanner --follow --region ap-northeast-1
+```
 
 ---
 
 ## ⚠️ Disclaimer
 
-**Ce système comporte des risques inhérents au trading.**
+**Ce système est un bot HFT complexe opérant avec un effet de levier.**
 
-- Les performances passées ne garantissent **jamais** les résultats futurs
-- Le trading automatisé peut entraîner des pertes rapides
-- Toujours utiliser un capital que vous pouvez vous permettre de perdre
-- Tester en mode `test` avant d'activer le mode `live`
+- L'utilisation de l'IA (Claude) n'élimine pas les risques de perte.
+- La latence réseau et les glissements (slippage) peuvent impacter les résultats réels.
+- Ne jamais trader avec de l'argent dont vous avez besoin pour vivre.
 
 ---
 
-**© 2026 Empire Trading Systems** — *V7.0 Unified Architecture*
+**© 2026 Empire Trading Systems** — *V16.7.8 Persistent Intelligence Architecture*

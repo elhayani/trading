@@ -326,6 +326,20 @@ def check_technical_health(ticker_data: Dict) -> tuple:
         return True, "OK"
     except: return True, "CHECK_ERROR"
 
+def calculate_rsi(closes, period=14):
+    """Calcul rapide du RSI pour le dashboard AI"""
+    if len(closes) < period + 1:
+        return 50.0
+    delta = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    gain = [d if d > 0 else 0 for d in delta]
+    loss = [abs(d) if d < 0 else 0 for d in delta]
+    avg_gain = sum(gain[-period:]) / period
+    avg_loss = sum(loss[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
 def calculate_elite_score_light(
     symbol: str,
     ohlcv_60: List[list],
@@ -355,6 +369,9 @@ def calculate_elite_score_light(
     components = {}
     signals = []
     
+    # RSI for Dashboard
+    rsi = calculate_rsi(closes)
+    
     # 1. MOMENTUM (25%)
     ema_5 = sum(closes[-5:]) / 5
     ema_13 = sum(closes[-13:]) / 13
@@ -375,6 +392,9 @@ def calculate_elite_score_light(
     
     direction = 'LONG' if ema_5 > ema_13 else 'SHORT'
     components['momentum'] = min(momentum_score, 100)
+    
+    # Store RSI and history for Haiku
+    history_closes = [round(c, 5) for c in closes[-5:]]
     
     # 2. VOLATILITY (25%)
     true_ranges = []
@@ -472,8 +492,8 @@ def calculate_elite_score_light(
     is_elite = (
         elite_score >= 60 and
         atr_pct >= 0.25 and
-        mobility_score > 0 and  # 🆕 MOBILITY OBLIGATOIRE (sinon score=0 de toute façon)
-        direction != 'NEUTRAL'
+        mobility_score > 0 and
+        direction in getattr(TradingConfig, 'ALLOWED_DIRECTIONS', ['LONG', 'SHORT'])
     )
     
     # Si pas élite à cause de mobility, logger la raison précise
@@ -488,7 +508,10 @@ def calculate_elite_score_light(
         'is_elite': is_elite,
         'components': components,
         'signals': signals,
-        'rejection_reason': rejection_reason,  # 🆕 Pour logging
+        'rejection_reason': rejection_reason,
+        'rsi': rsi,
+        'history': history_closes,
+        'vol_surge': vol_ratio,
         'metadata': {
             'direction': direction,
             'atr_pct': atr_pct,
@@ -645,6 +668,45 @@ def detect_night_pump(ohlcv_1min: list) -> tuple[bool, str]:
 
 def lambda_handler(event, context):
     """
+    EMPIRE V16.7.6: Persistent Scanner Loop
+    Runs for 13 minutes, executing a scan every 60 seconds.
+    """
+    logger.info("🚀 EMPIRE V16.7.6: Starting 13-minute persistent session")
+    
+    # Cycles: 13 minutes (to match EventBridge and stay under 15m timeout)
+    max_cycles = 13
+    
+    for cycle in range(max_cycles):
+        cycle_start = time.time()
+        
+        # 🏛️ EMPIRE V16.7.7: Vigilance "Zombie Loop" & Time Tracking
+        remaining_ms = context.get_remaining_time_in_millis() if hasattr(context, 'get_remaining_time_in_millis') else 0
+        logger.info(f"🌀 CYCLE {cycle+1}/{max_cycles} STARTING (Remaining: {remaining_ms/1000:.1f}s)")
+        
+        try:
+            # Perform the actual scan
+            perform_single_scan(event, context)
+        except Exception as e:
+            # Global try/except to survive network spikes or transient errors
+            logger.error(f"⚠️ CYCLE {cycle+1} RECOVERED FROM ERROR: {e}", exc_info=True)
+            
+        elapsed = time.time() - cycle_start
+        wait_time = max(0.1, 60 - elapsed)
+        
+        if cycle < max_cycles - 1:
+            # Safety check: if less than 65s left, don't risk another cycle
+            if remaining_ms > 0 and remaining_ms < 65000:
+                logger.warning(f"🛑 Stopping at cycle {cycle+1} - only {remaining_ms/1000:.1f}s left (need >65s)")
+                break
+            
+            logger.info(f"😴 Cycle {cycle+1} complete. Waiting {wait_time:.1f}s...")
+            time.sleep(wait_time)
+            
+    logger.info(f"🏁 13-minute session finished. Cycles: {cycle+1}")
+    return {'statusCode': 200, 'body': json.dumps({'status': 'SESSION_COMPLETE', 'cycles': cycle+1})}
+
+def perform_single_scan(event, context):
+    """
     ULTRA-FAST Scanner < 15 seconds
     
     Timeline:
@@ -757,33 +819,48 @@ def lambda_handler(event, context):
             )
             
             if result['is_elite']:
-                elite_candidates.append((
-                    symbol,
-                    result['elite_score'],
-                    result['metadata']['direction']
-                ))
+                # ELITE CANDIDATE: store full data for AI selection
+                elite_candidates.append({
+                    'symbol': symbol,
+                    'score': result['elite_score'],
+                    'direction': result['metadata']['direction'],
+                    'rsi': result['rsi'],
+                    'vol_surge': result['vol_surge'],
+                    'history': result['history']
+                })
         
         # Sort by score
-        elite_candidates.sort(key=lambda x: x[1], reverse=True)
-        top_50 = elite_candidates[:50]
+        elite_candidates.sort(key=lambda x: x['score'], reverse=True)
         
-        phase4_time = time.time() - score_start
-        logger.info(f"🏆 Processed {len(symbols_to_scan)} symbols in {phase4_time:.1f}s")
-        logger.info(f"   ✅ {len(elite_candidates)} elites | ❌ {rejected_count} rejected mobility")
-        logger.info(f"   Top 5: {[f'{s} ({sc:.0f})' for s, sc, _ in top_50[:5]]}")
-        
-        # ========== PHASE 5: PROCESS ELITES (8-14s) ==========
-        process_start = time.time()
-        
-        opened_count = 0
-        skipped_count = 0
-        
-        # 🚀 OPTIMIZATION V16: Fetch positions ONCE outside loop
+        # 🏛️ EMPIRE V16.7.8: ENSEMBLE SELECTION
+        # Haiku chooses the best trades to fill available slots
         all_positions = engine.persistence.load_positions()
         current_open_count = len(all_positions)
-        logger.info(f"📊 Processing {len(top_50)} elites. Current open: {current_open_count}/{TradingConfig.MAX_OPEN_TRADES}")
+        empty_slots = max(0, TradingConfig.MAX_OPEN_TRADES - current_open_count)
+        final_picks = []
+        if elite_candidates and empty_slots > 0:
+            logger.info(f"🧠 Asking Haiku to pick {empty_slots} trades among {len(elite_candidates[:12])} elites...")
+            haiku_result = engine.claude.pick_best_trades(elite_candidates[:12], empty_slots)
+            final_picks = haiku_result.get('picks', [])
+            logger.info(f"🏆 Haiku Logic: {haiku_result.get('reasons')}")
+        
+        # Filter the candidates to process only those picked by Haiku
+        to_process = [c for c in elite_candidates if c['symbol'] in final_picks]
+        
+        phase4_time = time.time() - score_start
+        logger.info(f"🏆 Score Phase: {len(symbols_to_scan)} symbols in {phase4_time:.1f}s")
+        logger.info(f"   ✅ {len(elite_candidates)} technical elites | 🧠 {len(final_picks)} AI final picks")
+        
+        # ========== PHASE 5: EXECUTION (8-14s) ==========
+        process_start = time.time()
+        opened_count = 0
+        
+        logger.info(f"📊 Executing {len(to_process)} AI picks. Slots: {empty_slots}")
 
-        for symbol, score, direction in top_50:
+        for cand in to_process:
+            symbol = cand['symbol']
+            score = cand['score']
+            direction = cand['direction']
             if current_open_count >= TradingConfig.MAX_OPEN_TRADES:
                 logger.info("🛑 Max trades reached (Local Counter)")
                 break

@@ -30,6 +30,7 @@ from aws_cdk import (
     aws_scheduler_targets as targets_scheduler,
     aws_logs as logs,
     aws_secretsmanager as secretsmanager,
+    aws_s3 as s3,
     RemovalPolicy,
     CfnOutput
 )
@@ -174,7 +175,7 @@ class V4TradingStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda1_scanner.lambda_handler",
             code=v4_trader_code,
-            timeout=Duration.seconds(90),  # Extended for 415 symbols scan
+            timeout=Duration.minutes(14),  # V16.7.6: Optimized for 13-minute internal loop
             memory_size=1536,  # Optimized for parallel processing
             ephemeral_storage_size=Size.mebibytes(1024),
             environment={
@@ -200,7 +201,7 @@ class V4TradingStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda2_closer.lambda_handler",
             code=v4_trader_code,
-            timeout=Duration.seconds(60),
+            timeout=Duration.minutes(14),  # V16.7.6: Optimized for 13-minute internal loop
             memory_size=256,  # Minimal - just price checks
             environment={
                 **common_env,
@@ -254,7 +255,22 @@ class V4TradingStack(Stack):
         )
         
         # =====================================================================
-        # Reporter Lambda (unchanged)
+        # S3 Bucket (Dashboard Housing)
+        # =====================================================================
+        dashboard_bucket = s3.Bucket(
+            self, "EmpireDashboardBucket",
+            bucket_name=f"empire-dashboard-{self.account}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            cors=[s3.CorsRule(
+                allowed_methods=[s3.HttpMethods.GET],
+                allowed_origins=["*"],
+                allowed_headers=["*"]
+            )]
+        )
+
+        # =====================================================================
+        # Reporter Lambda
         # =====================================================================
         
         reporter_lambda = lambda_.Function(
@@ -272,7 +288,8 @@ class V4TradingStack(Stack):
                 "LOG_LEVEL": "WARNING",  # Production: reduce CloudWatch costs
                 "TRADING_MODE": "dry_run",
                 "HISTORY_TABLE": "EmpireTradesHistory",
-                "SNS_TOPIC_ARN": status_topic.topic_arn
+                "SNS_TOPIC_ARN": status_topic.topic_arn,
+                "DASHBOARD_BUCKET": dashboard_bucket.bucket_name
             },
             log_retention=logs.RetentionDays.ONE_MONTH
         )
@@ -288,10 +305,26 @@ class V4TradingStack(Stack):
             empire_crypto_table.grant_read_write_data(lam)
             binance_secret.grant_read(lam)
 
+        lambda1_scanner.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:Query"],
+                resources=[
+                    unified_trades_table.table_arn,
+                    f"{unified_trades_table.table_arn}/index/status-timestamp-index",
+                    f"{unified_trades_table.table_arn}/index/*",
+                ],
+            )
+        )
+
         lambda2_closer15.grant_invoke(lambda1_scanner)
         
+        # =====================================================================
+        # Reporter permissions
+        # =====================================================================
+
         # Reporter permissions
         status_topic.grant_publish(reporter_lambda)
+        dashboard_bucket.grant_read_write(reporter_lambda)
         unified_trades_table.grant_read_data(reporter_lambda)
         empire_crypto_table.grant_read_data(reporter_lambda)
         empire_forex_table.grant_read_data(reporter_lambda)
@@ -332,8 +365,8 @@ class V4TradingStack(Stack):
             self, "ScannerSchedule",
             rule_name="V16_Scanner_00s",
             description="V16 Scanner: Scan 415 symbols + Open positions (00s every minute)",
-            schedule=events.Schedule.expression("cron(* * * * ? *)"),  # Every minute
-            enabled=True
+            schedule=events.Schedule.expression("cron(0/13 * * * ? *)"),  # Every 13 minutes
+    enabled=True
         )
         scanner_rule.add_target(targets.LambdaFunction(lambda1_scanner))
         
@@ -351,7 +384,7 @@ class V4TradingStack(Stack):
             self, "CloserSubMinuteSchedule",
             name="V16_Closer_SubMinute",
             description="V16 Closer: ticks at 00,08,16,24,32,39,46,53 each minute (sleep inside lambda)",
-            schedule_expression="cron(* * * * ? *)",
+            schedule_expression="cron(0/13 * * * ? *)",
             flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
             target=scheduler.CfnSchedule.TargetProperty(
                 arn=lambda2_closer15.function_arn,
@@ -366,7 +399,7 @@ class V4TradingStack(Stack):
             self, "ReporterSchedule",
             rule_name="V4_Reporter_30min",
             description="Status report every 30 mins",
-            schedule=events.Schedule.cron(minute="0/30", hour="9-21"),
+            schedule=events.Schedule.expression("cron(0/30 * * * ? *)"),
             enabled=True
         )
         reporting_rule.add_target(targets.LambdaFunction(reporter_lambda))

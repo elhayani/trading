@@ -1,0 +1,29 @@
+# 🌐 EMPIRE V16.2: WebSocket Dependencies
+# ===========================================
+
+# WebSocket core
+websockets==12.0
+aiohttp==3.9.1
+
+# Async utilities
+asyncio-throttle==1.0.2
+asyncio-mqtt==0.16.1
+
+# Binance API (fallback)
+python-binance==1.0.19
+ccxt==4.5.38
+
+# AWS Lambda
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Data processing
+pandas==2.3.2
+numpy==2.0.2
+
+# Logging et monitoring
+structlog==23.2.0
+
+# Utilities
+python-dateutil==2.9.0
+pytz==2025.2
