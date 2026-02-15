@@ -41,6 +41,38 @@ dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'ap-no
 secretsmanager = boto3.client('secretsmanager', region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
 
 
+def load_binance_credentials() -> Dict[str, str]:
+    api_key = os.getenv('BINANCE_API_KEY')
+    secret_key = os.getenv('BINANCE_SECRET_KEY')
+    if api_key and secret_key:
+        return {'api_key': api_key, 'secret_key': secret_key}
+
+    secret_name = os.getenv('SECRET_NAME')
+    if not secret_name:
+        raise RuntimeError('Missing BINANCE_API_KEY/BINANCE_SECRET_KEY and SECRET_NAME')
+
+    response = secretsmanager.get_secret_value(SecretId=secret_name)
+    payload = json.loads(response['SecretString'])
+
+    api_key = (
+        payload.get('BINANCE_API_KEY')
+        or payload.get('binance_api_key')
+        or payload.get('api_key')
+        or payload.get('API_KEY')
+    )
+    secret_key = (
+        payload.get('BINANCE_SECRET_KEY')
+        or payload.get('binance_secret_key')
+        or payload.get('secret_key')
+        or payload.get('SECRET_KEY')
+    )
+
+    if not api_key or not secret_key:
+        raise RuntimeError(f"Secret {secret_name} missing Binance keys")
+
+    return {'api_key': api_key, 'secret_key': secret_key}
+
+
 def get_memory_open_positions() -> Dict:
     """🏛️ EMPIRE V16.3: Get open positions from DynamoDB memory (shared state)"""
     try:
@@ -184,12 +216,36 @@ def check_and_close_position(
             
             # Execute close order using exchange directly (FAST)
             try:
+                # Race-condition guard: confirm position still exists on exchange
+                try:
+                    ccxt_symbol = exchange.resolve_symbol(symbol)
+                    live_positions = exchange.fetch_positions([ccxt_symbol])
+                    for p in live_positions or []:
+                        if p.get('symbol') != ccxt_symbol:
+                            continue
+                        contracts = p.get('contracts')
+                        if contracts is None:
+                            contracts = p.get('contractSize')
+                        try:
+                            contracts = float(contracts) if contracts is not None else None
+                        except Exception:
+                            contracts = None
+                        if contracts is not None and abs(contracts) == 0.0:
+                            logger.info(f"ℹ️ {symbol} - Skip close: position already 0 on exchange")
+                            return None
+                except Exception as pos_err:
+                    logger.warning(f"[WARN] {symbol} - Could not verify position on exchange before close: {pos_err}")
+
                 # Direct market order execution
                 if direction == 'LONG':
                     close_result = exchange.create_market_order(symbol, 'sell', position['quantity'])
                 else:
                     close_result = exchange.create_market_order(symbol, 'buy', position['quantity'])
             except Exception as e:
+                msg = str(e)
+                if 'Position not found' in msg or 'position not found' in msg:
+                    logger.info(f"ℹ️ {symbol} - Skip close: position not found on exchange")
+                    return None
                 logger.error(f"[ERROR] Order execution failed: {e}")
                 raise
             
@@ -287,12 +343,16 @@ def lambda_handler(event, context):
     lambda_role = 'CLOSER_30S'  # Fixed value to avoid os import issue
     
     # ⏱️ STAGGER LOGIC (Architecture 3-Lambda)
-    # EventBridge Scheduler handles the timing delay before Lambda invocation
-    # The delay_seconds is just for logging purposes
+    # EventBridge Scheduler may pass delay_seconds (legacy) or offset_seconds (sub-minute loop)
     delay_seconds = event.get('delay_seconds', 0)
     if delay_seconds > 0 and not event.get('manual'):
         logger.info(f"⏱️ Scheduled execution with {delay_seconds}s delay from EventBridge")
-        # No sleep needed - EventBridge already delayed the invocation
+
+    offset_seconds = event.get('offset_seconds')
+    if isinstance(offset_seconds, int):
+        offset_seconds = [offset_seconds]
+    if not isinstance(offset_seconds, list):
+        offset_seconds = []
 
     start_time = time.time()
     logger.info("=" * 60)
@@ -304,70 +364,118 @@ def lambda_handler(event, context):
     try:
         # Phase 1: INIT
         p1_start = time.time()
-        import os
-        api_key = os.getenv('BINANCE_API_KEY', 'iLNzCTdF8k2VDzMNhlzBVm0SzvfAKeVOtG5Be3V4JG7rpNlOYbAvSk6Z0T3GAtdM')
-        secret = os.getenv('BINANCE_SECRET_KEY', '445UuL9z1HP6GrDwf8SGezLy14Nap7CIt67hqx25YuFFlQ6jC4RA15iowF64iRw6')
-        
+        creds = load_binance_credentials()
+        live_mode = bool(getattr(TradingConfig, 'LIVE_MODE', False))
+
         exchange = ExchangeConnector(
-            api_key=api_key,
-            secret=secret,
-            live_mode=False
+            api_key=creds['api_key'],
+            secret=creds['secret_key'],
+            live_mode=live_mode
         )
         phases['init'] = round(time.time() - p1_start, 3)
         
-        # Phase 2: LOAD POSITIONS (From Memory)
-        p2_start = time.time()
-        open_positions = get_memory_open_positions()
-        phases['load_positions'] = round(time.time() - p2_start, 3)
-        
-        if not open_positions:
-            logger.info("  No open positions to check")
+        def remaining_ms() -> int:
+            try:
+                return int(context.get_remaining_time_in_millis())
+            except Exception:
+                return 0
+
+        def run_single_pass() -> Dict:
+            p2_start = time.time()
+            open_positions = get_memory_open_positions()
+            p2_dur = round(time.time() - p2_start, 3)
+
+            if not open_positions:
+                return {
+                    'positions_checked': 0,
+                    'positions_closed': 0,
+                    'closed_details': [],
+                    'phases': {
+                        'load_positions': p2_dur,
+                        'check_and_close': 0.0,
+                    }
+                }
+
+            p3_start = time.time()
+            logger.info(f" Checking {len(open_positions)} open positions...")
+            closed_positions = []
+            for symbol, position in open_positions.items():
+                if remaining_ms() and remaining_ms() < 2000:
+                    logger.warning("⏳ Timeout guard: stopping checks (low remaining time)")
+                    break
+                result = check_and_close_position(exchange, symbol, position)
+                if result:
+                    closed_positions.append(result)
+
+            p3_dur = round(time.time() - p3_start, 3)
             return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': 'No open positions', 
-                    'duration_seconds': round(time.time() - start_time, 2),
-                    'phases': phases
-                })
+                'positions_checked': len(open_positions),
+                'positions_closed': len(closed_positions),
+                'closed_details': closed_positions,
+                'phases': {
+                    'load_positions': p2_dur,
+                    'check_and_close': p3_dur,
+                }
             }
-        
-        # Phase 3: CHECK & CLOSE
-        p3_start = time.time()
-        logger.info(f" Checking {len(open_positions)} open positions...")
-        closed_positions = []
-        
-        # NOTE: For maximum speed with many positions, we could parallelize ticker fetching here
-        for symbol, position in open_positions.items():
-            result = check_and_close_position(exchange, symbol, position)
-            if result:
-                closed_positions.append(result)
-        
-        phases['check_and_close'] = round(time.time() - p3_start, 3)
-        
+
+        ticks_executed = []
+        aggregated_closed = []
+        aggregated_checked = 0
+
+        # Manual invocations or single_pass should do a single pass (no sub-minute loop)
+        if event.get('manual') or event.get('single_pass') or not offset_seconds:
+            single = run_single_pass()
+            phases.update(single.get('phases', {}))
+            aggregated_checked = single['positions_checked']
+            aggregated_closed.extend(single['closed_details'])
+            ticks_executed.append({'offset_s': None, 'closed': single['positions_closed']})
+        else:
+            offsets_clean = set()
+            for x in offset_seconds:
+                try:
+                    offsets_clean.add(int(float(x)))
+                except Exception:
+                    continue
+            offsets_sorted = sorted(offsets_clean)
+            for target_offset in offsets_sorted:
+                if remaining_ms() and remaining_ms() < 2000:
+                    logger.warning("⏳ Timeout guard: stopping tick loop (low remaining time)")
+                    break
+
+                now = datetime.now(timezone.utc)
+                current_offset = now.second + (now.microsecond / 1_000_000)
+                sleep_s = float(target_offset) - float(current_offset)
+                if sleep_s > 0:
+                    if remaining_ms() and remaining_ms() < int((sleep_s * 1000) + 2500):
+                        logger.warning("⏳ Timeout guard: skipping sleep (not enough remaining time)")
+                        break
+                    time.sleep(sleep_s)
+
+                if remaining_ms() and remaining_ms() < 2000:
+                    logger.warning("⏳ Timeout guard: stopping before running tick (low remaining time)")
+                    break
+
+                logger.info(f"⏱️ Tick at offset {target_offset:02d}s")
+                single = run_single_pass()
+                aggregated_checked = max(aggregated_checked, single['positions_checked'])
+                aggregated_closed.extend(single['closed_details'])
+                ticks_executed.append({'offset_s': int(target_offset), 'closed': single['positions_closed']})
+
         duration = time.time() - start_time
         response = {
             'lambda': lambda_role,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'duration_seconds': round(duration, 2),
             'phases': phases,
-            'positions_checked': len(open_positions),
-            'positions_closed': len(closed_positions),
-            'closed_details': closed_positions
+            'ticks': ticks_executed,
+            'positions_checked': aggregated_checked,
+            'positions_closed': len(aggregated_closed),
+            'closed_details': aggregated_closed
         }
         
         logger.info("=" * 60)
-        logger.info(f"✅ {lambda_role} Complete: {len(closed_positions)} closed")
-        logger.info(f"⏱️  Total Duration: {duration:.2f}s | Check: {phases['check_and_close']}s")
-        logger.info("=" * 60)
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps(response)
-        }
-        
-        logger.info("=" * 60)
-        logger.info(f"✅ {lambda_role} Complete: {len(closed_positions)} closed")
-        logger.info(f"⏱️  Duration: {duration:.2f}s")
+        logger.info(f"✅ {lambda_role} Complete: {len(aggregated_closed)} closed")
+        logger.info(f"⏱️  Total Duration: {duration:.2f}s | Check: {phases.get('check_and_close', 0.0)}s")
         logger.info("=" * 60)
         
         return {

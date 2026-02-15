@@ -34,6 +34,8 @@ from config import TradingConfig
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+lambda_client = boto3.client('lambda')
+
 # ================================================================
 # BINANCE REST API - FILTRES SERVER-SIDE
 from config import TradingConfig
@@ -658,6 +660,17 @@ def lambda_handler(event, context):
     logger.info("� LAMBDA 1 - ULTRA-FAST < 15s")
     
     try:
+        closer_function_name = os.getenv('CLOSER_FUNCTION_NAME')
+        if closer_function_name and not event.get('manual'):
+            try:
+                lambda_client.invoke(
+                    FunctionName=closer_function_name,
+                    InvocationType='Event',
+                    Payload=json.dumps({'source': 'scanner_pre', 'manual': False, 'single_pass': True})
+                )
+            except Exception as invoke_err:
+                logger.warning(f"[WARN] Failed to invoke closer pre-scan: {invoke_err}")
+
         # ========== PHASE 1: INIT (0-1s) ==========
         engine = TradingEngine()
         engine.risk_manager.load_state(engine.persistence.load_risk_state())
@@ -836,6 +849,16 @@ def lambda_handler(event, context):
                 skipped_count += 1
         
         phase5_time = time.time() - process_start
+
+        if closer_function_name and not event.get('manual') and opened_count > 0:
+            try:
+                lambda_client.invoke(
+                    FunctionName=closer_function_name,
+                    InvocationType='Event',
+                    Payload=json.dumps({'source': 'scanner_post_open', 'manual': False, 'single_pass': True})
+                )
+            except Exception as invoke_err:
+                logger.warning(f"[WARN] Failed to invoke closer post-open: {invoke_err}")
         
         # ========== PHASE 6: SAVE STATE (14-15s) ==========
         engine.persistence.save_risk_state(engine.risk_manager.get_state())

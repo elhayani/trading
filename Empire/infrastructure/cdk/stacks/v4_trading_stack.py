@@ -45,6 +45,22 @@ class V4TradingStack(Stack):
         base_dir = os.path.dirname(os.path.realpath(__file__))
         lambda_root = os.path.join(base_dir, "../../../lambda")
 
+        v4_trader_code = lambda_.Code.from_asset(
+            os.path.join(lambda_root, "v4_trader"),
+            exclude=[
+                "__pycache__/**",
+                "**/__pycache__/**",
+                "**/tests/**",
+                "numpy/**",
+                "pandas/**",
+                "numpy-*.dist-info/**",
+                "pandas-*.dist-info/**",
+                "python_dateutil-*.dist-info/**",
+                "six-*.dist-info/**",
+                "*.pyc",
+            ],
+        )
+
         # =====================================================================
         # SNS Topic (Notifications)
         # =====================================================================
@@ -157,7 +173,7 @@ class V4TradingStack(Stack):
             function_name="V16_Scanner_00s",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda1_scanner.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            code=v4_trader_code,
             timeout=Duration.seconds(90),  # Extended for 415 symbols scan
             memory_size=1536,  # Optimized for parallel processing
             ephemeral_storage_size=Size.mebibytes(1024),
@@ -168,7 +184,8 @@ class V4TradingStack(Stack):
                 "SYMBOLS": "",  # Dynamic loading from Binance
                 "MAX_SYMBOLS_PER_SCAN": "150",  # Top 150 by volume
                 "LOG_LEVEL": "WARNING",
-                "LAMBDA_ROLE": "SCANNER"
+                "LAMBDA_ROLE": "SCANNER",
+                "CLOSER_FUNCTION_NAME": "V16_Closer_15s"
             },
             log_retention=logs.RetentionDays.ONE_WEEK
         )
@@ -182,8 +199,8 @@ class V4TradingStack(Stack):
             function_name="V16_Closer_15s",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda2_closer.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
-            timeout=Duration.seconds(12),  # 12s (marge 3s)
+            code=v4_trader_code,
+            timeout=Duration.seconds(60),
             memory_size=256,  # Minimal - just price checks
             environment={
                 **common_env,
@@ -203,7 +220,7 @@ class V4TradingStack(Stack):
             function_name="V16_Closer_30s",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda2_closer.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            code=v4_trader_code,
             timeout=Duration.seconds(12),
             memory_size=256,
             environment={
@@ -224,7 +241,7 @@ class V4TradingStack(Stack):
             function_name="V16_Closer_45s",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda2_closer.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            code=v4_trader_code,
             timeout=Duration.seconds(12),
             memory_size=256,
             environment={
@@ -245,7 +262,7 @@ class V4TradingStack(Stack):
             function_name="V4StatusReporter",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="reporter.lambda_handler",
-            code=lambda_.Code.from_asset(os.path.join(lambda_root, "v4_trader")),
+            code=v4_trader_code,
             timeout=Duration.minutes(1),
             memory_size=512,  # Increased memory for Claude processing
             environment={
@@ -270,6 +287,8 @@ class V4TradingStack(Stack):
             skipped_table.grant_read_write_data(lam)
             empire_crypto_table.grant_read_write_data(lam)
             binance_secret.grant_read(lam)
+
+        lambda2_closer15.grant_invoke(lambda1_scanner)
         
         # Reporter permissions
         status_topic.grant_publish(reporter_lambda)
@@ -324,55 +343,24 @@ class V4TradingStack(Stack):
             assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),
             description="Role for EventBridge Scheduler to invoke Lambda closers"
         )
-        lambda2_closer15.grant_invoke(scheduler_role)
-        lambda3_closer30.grant_invoke(scheduler_role)
-        lambda4_closer45.grant_invoke(scheduler_role)
 
-        # Closer #1: 15s after each minute
+        lambda2_closer15.grant_invoke(scheduler_role)
+
+        # Closer: invoke once per minute, then run sub-minute ticks inside lambda.
         scheduler.CfnSchedule(
-            self, "Closer15sSchedule",
-            name="V16_Closer_15s",
-            description="V16 Closer #1: Check TP/SL/MAX_HOLD at 15s",
+            self, "CloserSubMinuteSchedule",
+            name="V16_Closer_SubMinute",
+            description="V16 Closer: ticks at 00,08,16,24,32,39,46,53 each minute (sleep inside lambda)",
             schedule_expression="cron(* * * * ? *)",
             flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
             target=scheduler.CfnSchedule.TargetProperty(
                 arn=lambda2_closer15.function_arn,
                 role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 15}),
+                input=json.dumps({"offset_seconds": [0, 8, 16, 24, 32, 39, 46, 53]}),
                 retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
             )
         )
 
-        # Closer #2: 30s after each minute
-        scheduler.CfnSchedule(
-            self, "Closer30sSchedule",
-            name="V16_Closer_30s",
-            description="V16 Closer #2: Check TP/SL/MAX_HOLD at 30s",
-            schedule_expression="cron(* * * * ? *)",
-            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
-            target=scheduler.CfnSchedule.TargetProperty(
-                arn=lambda3_closer30.function_arn,
-                role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 30}),
-                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
-            )
-        )
-
-        # Closer #3: 45s after each minute
-        scheduler.CfnSchedule(
-            self, "Closer45sSchedule",
-            name="V16_Closer_45s",
-            description="V16 Closer #3: Check TP/SL/MAX_HOLD at 45s",
-            schedule_expression="cron(* * * * ? *)",
-            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
-            target=scheduler.CfnSchedule.TargetProperty(
-                arn=lambda4_closer45.function_arn,
-                role_arn=scheduler_role.role_arn,
-                input=json.dumps({"delay_seconds": 45}),
-                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)
-            )
-        )
-        
         # Reporter: Every 30 minutes during trading hours
         reporting_rule = events.Rule(
             self, "ReporterSchedule",
@@ -382,11 +370,11 @@ class V4TradingStack(Stack):
             enabled=True
         )
         reporting_rule.add_target(targets.LambdaFunction(reporter_lambda))
-        
+
         # =====================================================================
         # Manual Trigger
         # =====================================================================
-        
+
         manual_trigger = lambda_.Function(
             self, "V16ManualTrigger",
             function_name="V16ManualTrigger",
@@ -418,16 +406,16 @@ def lambda_handler(event, context):
             """),
             timeout=Duration.seconds(30)
         )
-        
+
         lambda1_scanner.grant_invoke(manual_trigger)
         lambda2_closer15.grant_invoke(manual_trigger)
         lambda3_closer30.grant_invoke(manual_trigger)
         lambda4_closer45.grant_invoke(manual_trigger)
-        
+
         # =====================================================================
         # Outputs
         # =====================================================================
-        
+
         CfnOutput(self, "Lambda1ScannerArn", value=lambda1_scanner.function_arn, description="V16 Scanner (00s)")
         CfnOutput(self, "Lambda2Closer15Arn", value=lambda2_closer15.function_arn, description="V16 Closer #1 (15s)")
         CfnOutput(self, "Lambda3Closer30Arn", value=lambda3_closer30.function_arn, description="V16 Closer #2 (30s)")
