@@ -229,7 +229,8 @@ CRITÈRES DE SÉLECTION:
 1. Évite le surachat extrême (RSI > 80).
 2. Évite les "bougies verticales" (ex: [10, 10, 10, 10, 15] est suspect, [10, 11, 12, 13, 14] est sain).
 3. Priorise les actifs avec un Vol_Surge important mais pas délirant (1.5x à 4.0x).
-4. Préfère les scores les plus élevés si la structure de prix (historique) est stable.
+4. DIVERSIFICATION: Évite de choisir 3 actifs trop similaires (ex: 3 AI coins, 3 Meme coins). Si les setups sont de qualité égale, diversifie les secteurs.
+5. Préfère les scores les plus élevés si la structure de prix (historique) est stable.
 
 DASHBOARD:
 {dashboard_str}
